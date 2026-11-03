@@ -9,3 +9,5 @@
 - **Revisão:** independente, achados de teste corrigidos e reavaliados; PR #7, sem merge ou deploy.
 
 - **F05 em implementacao:** fallback em laboratorio; GS09 completo depende de canarios e ainda nao foi comprovado.
+
+- **F06/GS09 parciais:** canarios passivos em Chromium no CI 41688461172 (2a73ee8); CSP e outros navegadores pendentes.
