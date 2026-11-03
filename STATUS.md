@@ -11,3 +11,5 @@
 - **F05 em implementacao:** fallback em laboratorio; GS09 completo depende de canarios e ainda nao foi comprovado.
 
 - **F06/GS09 parciais:** canarios passivos em Chromium no CI 41688461172 (2a73ee8); CSP e outros navegadores pendentes.
+
+- **F17/F18 em avalia??o:** decis?o limitada ao laborat?rio e testes GS06 adicionados; CI integrado e revis?o final pendentes. LOW ? configura??o local, n?o classificador; pol?tica versionada ainda n?o ? publica??o imut?vel.

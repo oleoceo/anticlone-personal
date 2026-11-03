@@ -10,8 +10,8 @@ Legenda: **P** = planejada no Personal; **PARCIAL** = parte comprovada, capacida
 | F02 | Múltiplas origens autorizadas, preview/staging e pathnames | 12-MVP-SCOPE, 23-RUNTIME-PROTOCOL | GS01 | P |
 | F03 | Instalação universal HTML/React/Vite/WordPress quando permitido | 12-MVP-SCOPE, 27-COMPATIBILITY-MATRIX | GS01, GS10 | P |
 | F04 | Bootstrap pequeno + Core Runtime | 23-RUNTIME-PROTOCOL | Carregamento e falha em Chromium, tests/gs02.test.ts, CI 41680979048; instalação limitada a laboratório | PARCIAL |
-| F05 | Fallback independente com capacidades limitadas | 23-RUNTIME-PROTOCOL | GS09; observacao em laboratorio, canarios pendentes | PARCIAL |
-| F06 | HTML Canary e CSS Canary best-effort | 23-RUNTIME-PROTOCOL, 02- Observacoes Tecnicas | GS09 parcial em Chromium, PostgreSQL e SMTP de teste; CSP e outros navegadores pendentes | PARCIAL |
+| F05 | Fallback independente com capacidades limitadas | 23-RUNTIME-PROTOCOL | GS09 parcial: fallback e can?rios em Chromium, tests/gs02.test.ts; CSP e outros navegadores pendentes | PARCIAL |
+| F06 | HTML Canary e CSS Canary best-effort | 23-RUNTIME-PROTOCOL, 02- Observacoes Tecnicas | GS09 parcial em Chromium, tests/gs02.test.ts, CI 41688461172; CSP e outros navegadores pendentes | PARCIAL |
 | F07 | Entrega de scripts, rotas públicas e alias persistido/versionado | 24-EDGE-DELIVERY-NETWORK, 02- Observacoes Tecnicas | GS01, GS10 | P |
 | F08 | Verificação de instalação e degradação FULL/PARTIAL/UNSUPPORTED | 27-COMPATIBILITY-MATRIX, 12-MVP-SCOPE | GS10 | P |
 | F09 | Contexto autorizado vs. execução em host não autorizado | 23-RUNTIME-PROTOCOL | Origem alegada comparada no servidor, original e cópia em tests/gs02.test.ts, CI 41680979048; sinais forjáveis | PARCIAL |
@@ -22,8 +22,8 @@ Legenda: **P** = planejada no Personal; **PARCIAL** = parte comprovada, capacida
 | F14 | Modo Invisível/Stealth de observação sem mitigação visível | 20-POLICY-ENGINE, 00- O anticlone | GS05 | P |
 | F15 | Captura de tráfego por PAID, ORGANIC, REFERRAL, DIRECT_UNKNOWN | 20-POLICY-ENGINE, 22-METRIC-DICTIONARY | GS04, GS12 | P |
 | F16 | Dados de UTM/click-ID/referrer e atribuição com incerteza | 21-EVENT-MODEL, 22-METRIC-DICTIONARY | GS12 | P |
-| F17 | Redirecionamento de página para destino aprovado | 20-POLICY-ENGINE, 23-RUNTIME-PROTOCOL | GS06 | P |
-| F18 | Render gate limitado e fail-open em timeout | 23-RUNTIME-PROTOCOL, 28-PERFORMANCE-BUDGETS-BENCHMARKS | GS06, GS10 | P |
+| F17 | Redirecionamento de página para destino aprovado | 20-POLICY-ENGINE, 23-RUNTIME-PROTOCOL | GS06; implementa??o de laborat?rio em avalia??o, integra??o pendente de CI | P |
+| F18 | Render gate limitado e fail-open em timeout | 23-RUNTIME-PROTOCOL, 28-PERFORMANCE-BUDGETS-BENCHMARKS | GS06, GS10; espera limitada sem ocultar a p?gina em avalia??o | P |
 | F19 | Descoberta de vários CTAs/checkout/WhatsApp distintos | 26-CONVERSION-SURFACES-DRIFT, 00- O anticlone | GS03 | P |
 | F20 | Mapeamento de CTA pirateado para destino correto aprovado | 26-CONVERSION-SURFACES-DRIFT | GS03 | P |
 | F21 | Troca local de CTA sem chamada de rede no clique com regra pronta | 23-RUNTIME-PROTOCOL, 02- Observacoes Tecnicas | GS03, GS07 | P |
