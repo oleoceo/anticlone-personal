@@ -4,6 +4,7 @@ import http from 'node:http';
 import { randomBytes, scryptSync, timingSafeEqual, createHash, createHmac } from 'node:crypto';
 import { randomUUID } from 'node:crypto';
 import { configuredOrigin } from './detection.js';
+import { activatePolicy, saveDraft } from './protection-policy.js';
 
 // Laboratory-only: one process, one owner, ephemeral sessions and rate limit.
 export function createAdminServer(passwordRecord: string, totpSecret: string, db: Pool, now: () => number = Date.now) {
@@ -35,6 +36,22 @@ export function createAdminServer(passwordRecord: string, totpSecret: string, db
       if (req.method === 'GET' && projectPath) {
         const table = projectPath[2] === 'observations' ? 'observations' : 'incidents';
         void db.query(`SELECT * FROM ${table} WHERE project_id=$1 ORDER BY id LIMIT 100`, [projectPath[1]]).then(result => res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(result.rows))).catch(() => res.writeHead(503).end()); return;
+      }
+      const policyPath = /^\/admin\/projects\/([a-zA-Z0-9_-]{1,64})\/policy\/(draft|publish|activate)$/.exec(req.url ?? '');
+      if (req.method === 'POST' && policyPath) {
+        if (req.headers['content-type'] !== 'application/json') { res.writeHead(415).end(); return; }
+        let size = 0, rejected = false; const chunks: Buffer[] = [];
+        req.on('data', (chunk: Buffer) => { size += chunk.length; if (size > 4096) { if (!rejected) res.writeHead(413).end(); rejected = true; chunks.length = 0; } else if (!rejected) chunks.push(chunk); });
+        req.on('end', () => {
+          if (rejected) return;
+          let body: unknown;
+          try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { res.writeHead(400).end(); return; }
+          if (!body || typeof body !== 'object' || Array.isArray(body)) { res.writeHead(400).end(); return; }
+          const fields = body as Record<string, unknown>;
+          if (policyPath[2] === 'publish' && Object.keys(fields).length || policyPath[2] === 'activate' && (Object.keys(fields).join(',') !== 'version' || typeof fields.version !== 'number')) { res.writeHead(400).end(); return; }
+          const operation = policyPath[2] === 'draft' ? saveDraft(db,policyPath[1],body).then(() => ({})) : activatePolicy(db,policyPath[1],policyPath[2] === 'activate' ? fields.version as number : undefined).then(version => ({version}));
+          void operation.then(result => res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error: Error & {code?: string}) => res.writeHead(error.code ? 503 : 400).end());
+        }); return;
       }
       if (req.method === 'POST' && req.url === '/admin/projects') {
         if (req.headers['content-type'] !== 'application/json') { res.writeHead(415).end(); return; }
