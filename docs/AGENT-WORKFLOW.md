@@ -13,8 +13,8 @@
 2. **Isolar:** `git switch main; git pull --ff-only` (se existir remote); criar `feat/<capacidade-curta>`; no Poracode, um worktree por agente que escreve.
 3. **Implementar:** código + migração + testes + diagnóstico de falha. Não criar endpoints/menus placebo nem mudar escopo por conveniência.
 4. **Auto-checagem:** testes focados, lint, typecheck, build e verificação de diff/segredos. Se falhar, corrigir até **duas** rodadas justificadas por logs.
-5. **Revisão independente:** Claude revisa PR do Codex, ou inverso, sem alterar a mesma worktree. Para mudanças simples e documentais, revisão local curta basta.
-6. **Se reprovar:** devolver até **duas** rodadas de correção ao autor com bugs reproduzíveis. Se persistir, pedir **um diagnóstico independente** (modelo/agente diferente) e tentar correção só se houver causa testável; se não, registrar `BLOCKED` e parar aquele tema.
+5. **Revisão independente:** outra sessão Codex ou Claude Code revisa o diff, contrato, riscos, regressões e testes, sem escrever na worktree do autor. Se a delegação automática não estiver disponível ou verificada, usar duas threads Codex separadas e transferir o contexto e os achados manualmente; não presumir seleção de perfis ou orquestração operacional.
+6. **Se reprovar:** devolver ao autor correções com bugs reproduzíveis, respeitando o máximo de **duas** rodadas de correção. Se persistir, pedir **um diagnóstico independente** de outro agente, com logs e hipótese; sem solução demonstrada, registrar `BLOCKED` e parar aquele tema.
 7. **GitHub:** push da branch; PR contendo propósito, diffs, testes, riscos, rollback se relevante; CI verde. Não fazer merge se gate falhar. Respeitar proteção de branch e limites de risco abaixo.
 8. **Fechar:** atualizar Fxx para `V` **somente com cenário relevante efetivamente testado**, atualizar `STATUS.md` em poucas linhas, escolher próxima fatia independente.
 
@@ -22,12 +22,12 @@
 
 ```text
 IMPLEMENTAR -> TESTAR
-  ├── PASSOU -> REVISÃO INDEPENDENTE -> CI -> PR -> ACEITE -> PRÓXIMA FATIA
+  ├── PASSOU -> PR -> REVISÃO INDEPENDENTE + CI -> ACEITE -> PRÓXIMA FATIA
   └── FALHOU -> 2 CORREÇÕES NO MÁXIMO
                  ├── PASSOU -> REVISÃO
                  └── FALHOU -> OUTRO AGENTE DIAGNOSTICA UMA VEZ
-                               ├── CAUSA DEMONSTRADA -> PATCH DELIMITADO + TESTE
-                               └── SEM CAUSA / AINDA FALHA -> BLOCKED (não repetir)
+                               ├── SOLUÇÃO DEMONSTRADA -> VALIDAR RESULTADO
+                               └── SEM SOLUÇÃO -> BLOCKED (não repetir)
 ```
 
 ## D. Política Git/GitHub

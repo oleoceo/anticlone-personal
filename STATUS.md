@@ -6,4 +6,5 @@
 - **Próxima capacidade:** bootstrap repo + contratos mínimos; depois primeiro fluxo vertical testável.
 - **Bloqueios:** dependem de acesso aos arquivos de referência e credenciais do ambiente local; ainda não verificados.
 - **Último teste:** somente validação estática do kit; aplicação, banco e VPS NÃO testados.
-- **PR/branch:** ainda não criado.
+- **Orquestração:** revisão independente admite outra sessão Codex ou Claude Code; seleção e delegação devem ser verificadas no ambiente de uso.
+- **PR/branch:** configuração documental em `docs/codex-orquestracao`.

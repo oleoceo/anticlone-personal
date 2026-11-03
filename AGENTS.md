@@ -26,7 +26,7 @@
 ## Protocolo para toda alteração
 - Selecionar **uma capacidade verificável** da matriz; explicar em até 6 linhas: comportamento, arquivos, testes e risco.
 - Usar branch/worktree própria; nunca fazer dois agentes gravarem simultaneamente na mesma worktree/branch.
-- Implementador: código + testes + migrations necessárias + documentação curta. Revisor **independente**: diff, contrato, riscos, regressões e testes relacionados.
+- Implementador: código + testes + migrations necessárias + documentação curta. Revisor **independente**, em outra sessão: diff, contrato, riscos, regressões e testes relacionados; pode ser outro Codex ou Claude Code, sem compartilhar escrita na worktree do autor.
 - Rodar lint, typecheck, unit/integration e E2E relevantes (quando existirem); não chamar docs-only CI de validação do sistema.
 - Corrigir falhas no máximo **duas rodadas**; se persistirem, pedir diagnóstico de **um agente diferente**, com logs e hipótese. Se não resolver, marcar `BLOCKED` em `STATUS.md` e não reiniciar a mesma tentativa em looping. Continuar somente em trabalhos independentes.
 - Concluir: evidências dos testes, mudanças, limitações, estado do PR/CI; atualizar `STATUS.md` em no máximo 8 linhas para o item. Nova capacidade somente após gates verdes ou bloqueio explicitamente isolado.
