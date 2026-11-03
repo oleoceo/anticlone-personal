@@ -45,9 +45,9 @@ const server = http.createServer((req, res) => {
     if (!controlledOrigin || origin !== controlledOrigin || origin === normalizedOrigin || process.env.LAB_CONTROLLED_RISK !== 'LOW') { res.writeHead(200, {'Content-Type': 'application/json'}).end(JSON.stringify({action:'OBSERVE_ONLY'})); return; }
     if (Date.now() - windowStart >= 60_000) { windowStart = Date.now(); count = 0; }
     if (++count > 60) { res.writeHead(429).end(); return; }
-    void pool.query('SELECT version,enabled,approved_destination FROM page_redirect_policies WHERE project_id=$1 ORDER BY version DESC LIMIT 1', [activeProject]).then(result => {
+    void pool.query('SELECT v.version,v.enabled,v.approved_destination FROM active_protection_policies a JOIN protection_policy_versions v ON v.project_id=a.project_id AND v.version=a.version WHERE a.project_id=$1 AND v.stealth=true', [activeProject]).then(result => {
       res.writeHead(200, {'Content-Type': 'application/json'}).end(JSON.stringify(entryDecision(result.rows[0], normalizedOrigin, origin, controlledOrigin, process.env.LAB_CONTROLLED_RISK)));
-    }).catch(() => res.writeHead(503).end()); return;
+    }).catch(() => res.writeHead(200, {'Content-Type': 'application/json'}).end(JSON.stringify({action:'OBSERVE_ONLY'}))); return;
   }
   if (req.method !== 'POST' || req.url !== '/observe' && req.url !== '/observe/fallback') { res.writeHead(404).end(); return; }
   if (Date.now() - windowStart >= 60_000) { windowStart = Date.now(); count = 0; }

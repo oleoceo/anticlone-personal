@@ -1,0 +1,28 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { Pool } from 'pg';
+import { activatePolicy, saveDraft } from '../apps/protection-policy.js';
+
+test('versioned policy publication is immutable, serialized and persistent', async () => {
+  assert.ok(process.env.TEST_DATABASE_URL);
+  const db = new Pool({connectionString:process.env.TEST_DATABASE_URL});
+  for (const file of ['001_initial','002_alerts','003_projects','007_protection_policy']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
+  const project = `policy_${crypto.randomUUID()}`, origin = `http://127.0.0.1:${20000+Math.floor(Math.random()*20000)}`;
+  await db.query('INSERT INTO projects(id,name,origin) VALUES($1,$1,$2)',[project,origin]);
+  const good = {enabled:true,approved_destination:origin+'/approved',stealth:true};
+  await assert.rejects(saveDraft(db,project,{...good,approved_destination:'http://evil.test/'}));
+  await assert.rejects(saveDraft(db,project,{...good,stealth:false}));
+  await assert.rejects(saveDraft(db,project,{...good,anotherRule:true}));
+  await saveDraft(db,project,good);
+  assert.deepEqual((await Promise.all([activatePolicy(db,project),activatePolicy(db,project)])).sort(),[1,2]);
+  await assert.rejects(db.query('UPDATE protection_policy_versions SET enabled=false WHERE project_id=$1',[project]));
+  await assert.rejects(db.query('DELETE FROM protection_policy_versions WHERE project_id=$1',[project]));
+  assert.equal(await activatePolicy(db,project,1),1);
+  await db.end();
+  const reopened = new Pool({connectionString:process.env.TEST_DATABASE_URL});
+  const active = await reopened.query('SELECT version FROM active_protection_policies WHERE project_id=$1',[project]);
+  assert.equal(active.rows[0].version,1);
+  assert.equal((await reopened.query('SELECT version FROM protection_policy_versions WHERE project_id=$1',[project])).rowCount,2);
+  await reopened.end();
+});
