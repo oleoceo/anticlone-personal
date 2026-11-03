@@ -7,3 +7,5 @@
 - **Retenção:** observações 7 dias; incidentes inativos e alertas 30 dias, limpeza durante operação.
 - **Testes locais:** lint, typecheck e build passaram; suíte integrada exige PostgreSQL isolado indisponível localmente.
 - **Revisão:** independente, achados de teste corrigidos e reavaliados; PR #7, sem merge ou deploy.
+
+- **F05 em implementacao:** fallback em laboratorio; GS09 completo depende de canarios e ainda nao foi comprovado.

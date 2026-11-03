@@ -13,7 +13,7 @@ import { createAdminServer } from '../apps/admin-auth.js';
 test('projects: authenticated creation, unique origins and isolated evidence', async () => {
   assert.ok(process.env.TEST_DATABASE_URL);
   const db = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
-  for (const path of ['infra/001_initial.sql', 'infra/002_alerts.sql', 'infra/003_projects.sql']) await db.query(await readFile(path, 'utf8'));
+  for (const path of ['infra/001_initial.sql', 'infra/002_alerts.sql', 'infra/003_projects.sql', 'infra/004_observation_sources.sql']) await db.query(await readFile(path, 'utf8'));
   await db.query('CREATE TABLE IF NOT EXISTS admin_totp_replay (factor_id text PRIMARY KEY, last_counter bigint NOT NULL)');
   await db.query('CREATE TABLE IF NOT EXISTS admin_totp_codes (factor_id text NOT NULL, digest text NOT NULL, valid_until bigint NOT NULL, PRIMARY KEY (factor_id, digest))');
   const secret = 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP', salt = '0123456789abcdef0123456789abcdef';

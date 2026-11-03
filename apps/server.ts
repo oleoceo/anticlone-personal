@@ -19,14 +19,15 @@ const normalizedOrigin = configuredOrigin(projectRow.rows[0].origin);
 if (legacyOrigin && legacyOrigin !== normalizedOrigin) throw new Error('legacy configuration conflicts with project');
 const bootstrap = readFileSync('runtime/bootstrap.js');
 const core = readFileSync('runtime/core.js');
+const fallback = readFileSync('runtime/fallback.js');
 let windowStart = Date.now(), count = 0;
 const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*'); res.setHeader('Cache-Control', 'no-store');
-  if (req.method === 'GET' && (req.url === '/runtime.js' || req.url === '/core.js')) {
+  if (req.method === 'GET' && (req.url === '/runtime.js' || req.url === '/core.js' || req.url === '/fallback.js')) {
     res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
-    res.end(req.url === '/runtime.js' ? bootstrap : core); return;
+    res.end(req.url === '/runtime.js' ? bootstrap : req.url === '/core.js' ? core : fallback); return;
   }
-  if (req.method !== 'POST' || req.url !== '/observe') { res.writeHead(404).end(); return; }
+  if (req.method !== 'POST' || req.url !== '/observe' && req.url !== '/observe/fallback') { res.writeHead(404).end(); return; }
   if (Date.now() - windowStart >= 60_000) { windowStart = Date.now(); count = 0; }
   if (++count > 60) { res.writeHead(429).end(); return; }
   if (!/^text\/plain(?:\s*;|$)/i.test(req.headers['content-type'] ?? '')) { res.writeHead(415).end(); return; }
@@ -42,7 +43,7 @@ const server = http.createServer((req, res) => {
     let origin: string;
     try { origin = configuredOrigin(body); if (!req.headers.origin || origin !== configuredOrigin(req.headers.origin)) throw new Error('origin mismatch'); }
     catch { res.writeHead(400).end(); return; }
-    void observe(pool, activeProject, normalizedOrigin, origin).then(result => res.writeHead(result === 'capacity' ? 429 : 204).end()).catch(() => res.writeHead(503).end());
+    void observe(pool, activeProject, normalizedOrigin, origin, req.url === '/observe/fallback' ? 'fallback' : 'core').then(result => res.writeHead(result === 'capacity' ? 429 : 204).end()).catch(() => res.writeHead(503).end());
   });
 });
 server.requestTimeout = 5000; server.headersTimeout = 6000;
