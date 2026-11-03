@@ -1,7 +1,7 @@
 ﻿import { TOTP, Secret } from 'otpauth';
 import { Pool } from 'pg';
 import http from 'node:http';
-import { randomBytes, scryptSync, timingSafeEqual, createHash } from 'node:crypto';
+import { randomBytes, scryptSync, timingSafeEqual, createHash, createHmac } from 'node:crypto';
 
 // Laboratory-only: one process, one owner, ephemeral sessions and rate limit.
 export function createAdminServer(passwordRecord: string, totpSecret: string, db: Pool, now: () => number = Date.now) {
@@ -44,12 +44,23 @@ export function createAdminServer(passwordRecord: string, totpSecret: string, db
       const delta = totp.validate({ token: code, timestamp, window: 1 });
       if (delta === null) { res.writeHead(401).end(); return; }
       const counter = Math.floor(timestamp / 30000) + delta;
+      const digest = createHmac('sha256', Buffer.from(totpSecret)).update(code).digest('hex');
+      let client;
       try {
-        const result = await db.query(`INSERT INTO admin_totp_replay (factor_id, last_counter) VALUES ($1, $2)
+        client = await db.connect();
+        await client.query('BEGIN');
+        const result = await client.query(`INSERT INTO admin_totp_replay (factor_id, last_counter) VALUES ($1, $2)
           ON CONFLICT (factor_id) DO UPDATE SET last_counter = EXCLUDED.last_counter
           WHERE admin_totp_replay.last_counter < EXCLUDED.last_counter RETURNING last_counter`, [factorId, counter]);
-        if (!result.rowCount) { res.writeHead(401).end(); return; }
-      } catch { res.writeHead(503).end(); return; }
+        if (!result.rowCount) { await client.query('ROLLBACK'); res.writeHead(401).end(); return; }
+        const currentCounter = Math.floor(timestamp / 30000);
+        await client.query('DELETE FROM admin_totp_codes WHERE factor_id = $1 AND valid_until < $2', [factorId, currentCounter]);
+        const used = await client.query(`INSERT INTO admin_totp_codes (factor_id, digest, valid_until) VALUES ($1, $2, $3)
+          ON CONFLICT DO NOTHING RETURNING digest`, [factorId, digest, counter + 1]);
+        if (!used.rowCount) { await client.query('ROLLBACK'); res.writeHead(401).end(); return; }
+        await client.query('COMMIT');
+      } catch { if (client) { try { await client.query('ROLLBACK'); } catch { /* fail closed */ } } res.writeHead(503).end(); return; }
+      finally { client?.release(); }
       const token = randomBytes(32).toString('hex');
       // Only one active session; replacing it bounds storage and revokes previous tokens.
       sessions.clear(); sessions.set(createHash('sha256').update(token).digest('hex'), now() + 15 * 60_000);

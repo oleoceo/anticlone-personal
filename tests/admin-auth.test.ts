@@ -14,7 +14,9 @@ test('laboratory login, denial, expiration, replacement and rate limit', async (
   assert.ok(process.env.TEST_DATABASE_URL);
   const db = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
   await db.query('CREATE TABLE IF NOT EXISTS admin_totp_replay (factor_id text PRIMARY KEY, last_counter bigint NOT NULL)');
+  await db.query('CREATE TABLE IF NOT EXISTS admin_totp_codes (factor_id text NOT NULL, digest text NOT NULL, valid_until bigint NOT NULL, PRIMARY KEY (factor_id, digest))');
   await db.query('DELETE FROM admin_totp_replay');
+  await db.query('DELETE FROM admin_totp_codes');
   const secret = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
   const totp = new TOTP({ secret: Secret.fromBase32(secret) });
   const code = (timestamp = clock) => totp.generate({ timestamp });

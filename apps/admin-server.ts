@@ -5,6 +5,7 @@ const port = Number(process.env.ADMIN_PORT ?? 3001);
 if (!record || !secret || !database || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('invalid laboratory admin configuration');
 const db = new Pool({ connectionString: database });
 await db.query('CREATE TABLE IF NOT EXISTS admin_totp_replay (factor_id text PRIMARY KEY, last_counter bigint NOT NULL)');
+  await db.query('CREATE TABLE IF NOT EXISTS admin_totp_codes (factor_id text NOT NULL, digest text NOT NULL, valid_until bigint NOT NULL, PRIMARY KEY (factor_id, digest))');
 const server = createAdminServer(record, secret, db);
 server.requestTimeout = 5000; server.headersTimeout = 6000;
 server.listen(port, '127.0.0.1');
