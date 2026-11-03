@@ -1,8 +1,8 @@
-﻿# STATUS — AntiClone Personal
+# STATUS ? AntiClone Personal
 
-- **Estado:** Entrega A iniciada; protótipo local de observações e incidentes não verificados.
-- **Escopo:** F11/F12 parciais; ainda não marcar capacidades como validadas.
-- **Limites:** sem alerta, painel, autenticação, retenção ou proteção de gateway; não publicar.
-- **Teste:** lint, typecheck e build locais; integração PostgreSQL depende de banco de teste real.
-- **Próximo gate:** revisão independente, integração PostgreSQL e cenário real em navegador.
-- **Branch:** feat/deteccao-inicial; PR e CI consultáveis no GitHub.
+- **Estado:** Entrega A em constru??o; prot?tipo restrito a localhost com incidentes n?o verificados e outbox SMTP de teste.
+- **Escopo:** F11/F12/F26 parciais; GS02 depende de evid?ncia do CI com navegador, PostgreSQL e SMTP.
+- **Limites:** sem painel, autentica??o administrativa ou prote??o p?blica; n?o publicar.
+- **Reten??o:** observa??es 7 dias; incidentes inativos e alertas 30 dias, com limpeza durante opera??o.
+- **Teste:** lint, typecheck e build locais; integra??o e navegador dependem dos servi?os isolados no CI.
+- **Branch:** feat/deteccao-inicial; PR #3 em revis?o.
