@@ -17,7 +17,11 @@ async function until(fn: () => Promise<boolean>, label: string) {
   while (Date.now() < end) { if (await fn()) return; await new Promise(resolve => setTimeout(resolve, 100)); }
   throw Error('timeout: ' + label);
 }
-async function stop(child: ChildProcess) { if (child.exitCode !== null || child.signalCode !== null) return; child.kill('SIGTERM'); await once(child, 'exit'); }
+async function stop(child: ChildProcess) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const timer = setTimeout(() => child.kill('SIGKILL'), 4000);
+  try { child.kill('SIGTERM'); await once(child, 'exit'); } finally { clearTimeout(timer); }
+}
 
 test('GS02: browser visits, durable incident and test SMTP alert after restart', { timeout: 90000 }, async () => {
   assert.ok(process.env.TEST_DATABASE_URL, 'TEST_DATABASE_URL required');
@@ -33,16 +37,20 @@ test('GS02: browser visits, durable incident and test SMTP alert after restart',
   const reserve = createServer(); const smtpPort = await listen(reserve); await new Promise<void>(resolve => reserve.close(() => resolve()));
   const apiPort = 3000;
   const original = 'http://127.0.0.1:' + fixturePort, clone = 'http://localhost:' + fixturePort;
-  const start = () => spawn(process.execPath, ['dist/apps/server.js'], { env: {...process.env, DATABASE_URL: process.env.TEST_DATABASE_URL, PROJECT_ID: project, ALLOWED_ORIGIN: original, SMTP_PORT: String(smtpPort), PORT: String(apiPort)}, stdio:'ignore' });
+  const start = () => spawn(process.execPath, ['dist/apps/server.js'], { env: {...process.env, DATABASE_URL: process.env.TEST_DATABASE_URL, PROJECT_ID: project, ALLOWED_ORIGIN: original, SMTP_PORT: String(smtpPort), PORT: String(apiPort)}, stdio:['ignore','ignore','inherit'] });
   let app = start();
   const messages: string[] = [];
   let smtp: SMTPServer | undefined;
-  const browser = await chromium.launch({headless:true, args:['--host-resolver-rules=MAP localhost 127.0.0.1']});
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
   try {
+    process.stderr.write('GS02: launching browser\n');
+    browser = await chromium.launch({headless:true, args:['--host-resolver-rules=MAP localhost 127.0.0.1']});
+    process.stderr.write('GS02: waiting for server\n');
     await until(async () => { try { return (await fetch('http://127.0.0.1:3000/runtime.js')).ok; } catch { return false; } }, 'server');
     const page = await browser.newPage();
     await page.goto(original + '/original'); await page.waitForTimeout(300);
     assert.equal((await db.query('SELECT id FROM incidents WHERE project_id=$1',[project])).rowCount, 0);
+    process.stderr.write('GS02: opening clone\n');
     await page.goto(clone + '/clone');
     await until(async () => (await db.query('SELECT id FROM incidents WHERE project_id=$1',[project])).rowCount === 1, 'incident');
     await until(async () => (await db.query('SELECT attempts FROM alert_outbox a JOIN incidents i ON i.id=a.incident_id WHERE i.project_id=$1 AND attempts>0',[project])).rowCount === 1, 'SMTP failure');
@@ -50,6 +58,7 @@ test('GS02: browser visits, durable incident and test SMTP alert after restart',
     const before = await db.query('SELECT i.host,i.status,a.sent_at FROM incidents i JOIN alert_outbox a ON a.incident_id=i.id WHERE i.project_id=$1',[project]);
     assert.equal(before.rowCount,1); assert.equal(before.rows[0].host,'localhost'); assert.equal(before.rows[0].status,'unverified'); assert.equal(before.rows[0].sent_at,null);
     assert.equal((await db.query('SELECT id FROM observations WHERE project_id=$1',[project])).rowCount,1);
+    process.stderr.write('GS02: restarting after SMTP failure\n');
     await stop(app); await db.end();
     const reconnected = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
     try {
@@ -59,6 +68,7 @@ test('GS02: browser visits, durable incident and test SMTP alert after restart',
       app = start();
       await until(async () => { try { return (await fetch('http://127.0.0.1:3000/runtime.js')).ok; } catch { return false; } }, 'restart');
       await until(async () => messages.length === 1 && (await reconnected.query('SELECT a.sent_at FROM alert_outbox a JOIN incidents i ON i.id=a.incident_id WHERE i.project_id=$1 AND a.sent_at IS NOT NULL',[project])).rowCount === 1, 'email retry');
+      process.stderr.write('GS02: restarting after delivery\n');
       await stop(app); app = start();
       await until(async () => { try { return (await fetch('http://127.0.0.1:3000/runtime.js')).ok; } catch { return false; } }, 'restart after delivery');
       await page.reload(); await page.waitForTimeout(1400);
@@ -87,7 +97,7 @@ test('GS02: browser visits, durable incident and test SMTP alert after restart',
       await reconnected.end();
     }
   } finally {
-    await browser.close(); await stop(app); if (smtp) await new Promise<void>(resolve => smtp!.close(() => resolve()));
+    if (browser) await browser.close(); await stop(app); if (smtp) await new Promise<void>(resolve => smtp!.close(() => resolve()));
     await new Promise<void>(resolve => fixture.close(() => resolve()));
     if (!db.ended) await db.end();
   }
