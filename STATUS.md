@@ -5,5 +5,6 @@
 - **F04/F05/F06/F09 parciais:** Core, fallback e canários testados em laboratório; compatibilidade e GS09 completo pendentes.
 - **F17/F18 parciais:** GS06 comprovou destino aprovado e LOW local; espera limitada e fail-open testados, sem gate visual completo.
 - **F43 parcial:** publicação autenticada, versões imutáveis e ativação transacional testadas em laboratório; motor geral de precedência, fases de interação, demais cenários de GS19 e classificador pendentes. Políticas legadas exigem republicação.
+- **F15/F16 parciais:** classificação declarada em laboratório, com fonte e incerteza; presença diária, sem corroboração nem GS04 completo.
 - **Retenção:** observações 7 dias; incidentes inativos e alertas 30 dias.
-- **Revisão:** segurança independente concluída para laboratório; CI 41697907777 aprovado no commit fc6a80b. Credencial privilegiada PostgreSQL permanece confiável.
+- **Revisão e CI:** revisão independente sem P0/P1 para laboratório; CI 41701844907 aprovado no commit e906105; credencial privilegiada PostgreSQL permanece confiável.

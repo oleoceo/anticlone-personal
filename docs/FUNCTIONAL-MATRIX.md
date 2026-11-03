@@ -20,8 +20,8 @@ Legenda: **P** = planejada no Personal; **PARCIAL** = parte comprovada, capacida
 | F12 | Incidente por host/projeto, lifecycle e falso positivo | 25-INCIDENT-EVIDENCE-MODEL | GS02, GS12 | P |
 | F13 | Avaliação probabilística do provável operador e sinal de confiança | 25-INCIDENT-EVIDENCE-MODEL, 01- Decisoes Tecnicas | GS05, GS12 | P |
 | F14 | Modo Invisível/Stealth de observação sem mitigação visível | 20-POLICY-ENGINE, 00- O anticlone | GS05 | P |
-| F15 | Captura de tráfego por PAID, ORGANIC, REFERRAL, DIRECT_UNKNOWN | 20-POLICY-ENGINE, 22-METRIC-DICTIONARY | GS04, GS12 | P |
-| F16 | Dados de UTM/click-ID/referrer e atribuição com incerteza | 21-EVENT-MODEL, 22-METRIC-DICTIONARY | GS12 | P |
+| F15 | Captura de tráfego por PAID, ORGANIC, REFERRAL, DIRECT_UNKNOWN | 20-POLICY-ENGINE, 22-METRIC-DICTIONARY | Presença diária declarada em laboratório: tests/traffic.test.ts e tests/gs02.test.ts; GS04 pendente | PARCIAL |
+| F16 | Dados de UTM/click-ID/referrer e atribuição com incerteza | 21-EVENT-MODEL, 22-METRIC-DICTIONARY | Sinais mínimos validados e fonte sem valores brutos: tests/traffic.test.ts e tests/gs02.test.ts; GS12 pendente | PARCIAL |
 | F17 | Redirecionamento de página para destino aprovado | 20-POLICY-ENGINE, 23-RUNTIME-PROTOCOL | GS06 integrado em Chromium: destino aprovado e LOW controlado, CI 41691788658; LOW é configuração de laboratório, não classificador real | PARCIAL |
 | F18 | Render gate limitado e fail-open em timeout | 23-RUNTIME-PROTOCOL, 28-PERFORMANCE-BUDGETS-BENCHMARKS | GS06: espera limitada e fail-open testados; página não é ocultada, render gate visual completo pendente | PARCIAL |
 | F19 | Descoberta de vários CTAs/checkout/WhatsApp distintos | 26-CONVERSION-SURFACES-DRIFT, 00- O anticlone | GS03 | P |
