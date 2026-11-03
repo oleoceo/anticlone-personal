@@ -1,0 +1,83 @@
+﻿import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { createHash, scryptSync } from 'node:crypto';
+import { once } from 'node:events';
+import type { AddressInfo } from 'node:net';
+import { Pool } from 'pg';
+import { TOTP, Secret } from 'otpauth';
+import { createAdminServer } from '../apps/admin-auth.js';
+import { cleanupCta } from '../apps/cta-inventory.js';
+
+test('authenticated inventory and offer-scoped mappings persist and isolate projects', async () => {
+  assert.ok(process.env.TEST_DATABASE_URL);
+  const db=new Pool({connectionString:process.env.TEST_DATABASE_URL});
+  for (const file of ['001_initial','002_alerts','003_projects','011_cta_inventory']) await db.query((await readFile(`infra/${file}.sql`,'utf8')).replace(/^\uFEFF/,''));
+  await db.query('CREATE TABLE IF NOT EXISTS admin_totp_replay (factor_id text PRIMARY KEY, last_counter bigint NOT NULL)');
+  await db.query('CREATE TABLE IF NOT EXISTS admin_totp_codes (factor_id text NOT NULL, digest text NOT NULL, valid_until bigint NOT NULL, PRIMARY KEY (factor_id, digest))');
+  const secret='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',salt='0123456789abcdef0123456789abcdef', factor=createHash('sha256').update(secret).digest('hex');
+  await db.query('DELETE FROM admin_totp_replay WHERE factor_id=$1',[factor]); await db.query('DELETE FROM admin_totp_codes WHERE factor_id=$1',[factor]);
+  const record=`scrypt$${salt}$${scryptSync('password',Buffer.from(salt,'hex'),64).toString('hex')}`;
+  const server=createAdminServer(record,secret,db).listen(0,'127.0.0.1'); await once(server,'listening');
+  const base=`http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const p='cta_'+crypto.randomUUID(),q='cta_'+crypto.randomUUID(),port=20000+Math.floor(Math.random()*10000), origin=`http://localhost:${port}`;
+  await db.query('INSERT INTO projects(id,name,origin) VALUES($1,$1,$2),($3,$3,$4)',[p,origin,q,`http://localhost:${port+10000}`]);
+  const post=(project:string,part:string,body:object,token?:string)=>fetch(`${base}/admin/projects/${project}/cta/${part}`,{method:'POST',headers:{'content-type':'application/json',...(token?{authorization:`Bearer ${token}`}:{})},body:JSON.stringify(body)});
+  const get=(project:string,token:string)=>fetch(`${base}/admin/projects/${project}/cta`,{headers:{authorization:`Bearer ${token}`}});
+  try {
+    assert.equal((await post(p,'inventory',{surface:'landing',candidates:[]})).status,401);
+    const login=await fetch(`${base}/admin/login`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:'password',code:new TOTP({secret:Secret.fromBase32(secret)}).generate()})});
+    assert.equal(login.status,200); const {token}=await login.json() as {token:string};
+    const candidates=['basic001','premium1','whatsapp'].map((marker,i)=>({marker,kind:'a',parent:'section',ordinal:i+1,url:`${origin}/${i}`}));
+    candidates.push({marker:'duplicate',kind:'a',parent:'div',ordinal:4,url:`${origin}/same`},{marker:'duplicate',kind:'a',parent:'div',ordinal:5,url:`${origin}/same`});
+    assert.equal((await post(p,'inventory',{surface:'landing',candidates},token)).status,200);
+    type Row={id:string;surface:string;marker:string|null;confidence:string;destination_id:string|null;approved_url:string|null;review_required:boolean;structural_candidates:string[]};
+    const rows=await (await get(p,token)).json() as Row[];
+    assert.equal(rows.length,5); assert.ok(rows.filter(x=>x.confidence==='LOW').every(x=>x.structural_candidates.length===1)); assert.equal(rows.filter(x=>x.confidence==='LOW').length,2); assert.ok(rows.every(x=>x.destination_id===null));
+    const ids=rows.filter(x=>x.marker).map(x=>x.id).sort();
+    assert.equal((await post(p,'inventory',{surface:'landing',candidates:candidates.slice(0,3)},token)).status,200);
+    assert.deepEqual((await (await get(p,token)).json() as Row[]).filter(x=>x.marker).map(x=>x.id).sort(),ids);
+    assert.equal((await post(p,'inventory',{surface:'landing',candidates:[{...candidates[0],marker:null}]},token)).status,200);
+    const candidateRows=await (await get(p,token)).json() as Row[];
+    const unmarked=candidateRows.find(x=>x.confidence==='LOW' && x.structural_candidates.includes(rows.find(y=>y.marker==='basic001')!.id));
+    assert.ok(unmarked); assert.equal(unmarked.destination_id,null);
+    assert.equal((await post(p,'destinations',{offer:'basic',url:'malformed'},token)).status,400);
+    assert.equal((await post(p,'destinations',{offer:'basic',url:'javascript:alert(1)'},token)).status,400);
+    assert.equal((await post(p,'destinations',{offer:'basic',url:'https://evil.example/path'},token)).status,400);
+    const dest=await (await post(p,'destinations',{offer:'basic',url:origin+'/official-basic'},token)).json() as {id:string};
+    const point=rows.find(x=>x.marker==='basic001')!.id;
+    assert.equal((await post(p,'mappings',{pointId:point,offer:'premium',destinationId:dest.id},token)).status,400);
+    assert.equal((await post(q,'mappings',{pointId:point,offer:'basic',destinationId:dest.id},token)).status,400);
+    assert.equal((await post(p,'mappings',{pointId:point,offer:'basic',destinationId:dest.id},token)).status,200);
+    for (const [marker,offer] of [['premium1','premium'],['whatsapp','whatsapp']] as const) {
+      const approved=await (await post(p,'destinations',{offer,url:origin+'/official-'+offer},token)).json() as {id:string};
+      assert.equal((await post(p,'mappings',{pointId:rows.find(x=>x.marker===marker)!.id,offer,destinationId:approved.id},token)).status,200);
+    }
+    const persisted=await (await get(p,token)).json() as Row[];
+    assert.equal(persisted.find(x=>x.id===point)?.approved_url,origin+'/official-basic');
+    assert.equal((await (await fetch(`${base}/admin/projects/${p}/cta/destinations`,{headers:{authorization:`Bearer ${token}`}})).json() as unknown[]).length,3);
+    assert.equal((await post(p,'inventory',{surface:'popup',candidates:[candidates[0]]},token)).status,200);
+    const popup=(await (await get(p,token)).json() as Row[]).find(x=>x.surface==='popup')!;
+    assert.notEqual(popup.id,point);
+    const special=await (await post(p,'destinations',{offer:'premium15',url:origin+'/official-premium15'},token)).json() as {id:string};
+    assert.equal((await post(p,'mappings',{pointId:popup.id,offer:'premium15',destinationId:special.id},token)).status,200);
+    assert.equal((await post(p,'inventory',{surface:'landing',candidates:[candidates[0],candidates[0]]},token)).status,200);
+    assert.equal((await (await get(p,token)).json() as Row[]).find(x=>x.id===point)?.review_required,true);
+    assert.equal((await post(p,'mappings',{pointId:point,offer:'basic',destinationId:dest.id},token)).status,400);
+    assert.equal((await (await get(p,token)).json() as Row[]).find(x=>x.id===point)?.destination_id,dest.id);
+    assert.equal((await (await get(q,token)).json() as Row[]).length,0);
+    await db.query("UPDATE cta_observations SET observed_at=now()-interval '8 days' WHERE project_id=$1",[p]);
+    await cleanupCta(db);
+    assert.equal((await (await get(p,token)).json() as Row[]).find(x=>x.id===point)?.destination_id,dest.id);
+    server.close(); await once(server,'close');
+    const later=Date.now()+30000;
+    const restarted=createAdminServer(record,secret,db,()=>later).listen(0,'127.0.0.1'); await once(restarted,'listening');
+    try {
+      const restartedBase=`http://127.0.0.1:${(restarted.address() as AddressInfo).port}`;
+      const secondLogin=await fetch(`${restartedBase}/admin/login`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:'password',code:new TOTP({secret:Secret.fromBase32(secret)}).generate({timestamp:later})})});
+      assert.equal(secondLogin.status,200); const second=await secondLogin.json() as {token:string};
+      const afterRestart=await (await fetch(`${restartedBase}/admin/projects/${p}/cta`,{headers:{authorization:`Bearer ${second.token}`}})).json() as Row[];
+      assert.equal(afterRestart.find(x=>x.id===point)?.approved_url,origin+'/official-basic');
+    } finally { restarted.close(); await once(restarted,'close'); }
+  } finally { if (server.listening) {server.close(); await once(server,'close');} await db.end(); }
+});
