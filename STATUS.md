@@ -8,6 +8,6 @@
 - **F15/F16 parciais:** classificação declarada em laboratório, com fonte e incerteza; presença diária, sem corroboração nem GS04 completo.
 - **F23/F24 parciais:** PAGE_REDIRECT e sessao efemera testados em laboratorio; GS04 completo e outras acoes pendentes.
 - **Retenção:** observações 7 dias; incidentes inativos e alertas 30 dias.
-- **Revisao e CI:** revisao independente sem bloqueio para laboratorio; CI da fatia pendente.
+- **Revisão e CI:** revisão independente sem bloqueio para laboratório; CI 41719646208 aprovado no commit 258fa28.
 
-- **F13/F14 em desenvolvimento:** avaliador conservador de laboratorio e OBSERVE_ONLY; GS05 integral e classificador operacional pendentes. Revisao independente sem P0/P1 para laboratorio, condicionada ao CI verde; conferir checks do PR no commit final.
+- **F13/F14 em desenvolvimento:** avaliador conservador de laboratório e OBSERVE_ONLY; GS05 integral e classificador operacional pendentes.
