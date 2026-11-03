@@ -39,11 +39,15 @@
 - Não pedir ao dono que reconfirme dados já documentados. Solicitar intervenção apenas quando faltar credencial/permissão, decisão de negócio, alteração de custos, incidente de segurança ou risco irreversível.
 - Encerrar um bloqueio com relatório objetivo (erro, comandos, hipótese, o que tentou, proposta), não com tentativas infinitas.
 
-## Economia de tokens e ferramentas
-- Ler somente documentos relevantes ao item; não carregar o arquivo RAR completo em cada sessão.
+## Política de seleção de agentes e economia de uso
+- Tarefas simples e documentais: um Codex, com o menor esforço adequado; não delegar tarefas triviais. Respeitar a revisão independente exigida pelo protocolo quando aplicável.
+- Implementações comuns: esforço médio, quando disponível, e testes automatizados relevantes.
+- Motor de proteção, autenticação, segurança, políticas e dados sensíveis: esforço alto quando necessário e disponível, com revisão independente.
+- Esforço máximo é excepcional e exige justificativa técnica objetiva. Adaptar os níveis às opções existentes na instalação, sem presumir modelos ou esforços disponíveis.
+- Não executar agentes simultâneos sem necessidade nem escalar automaticamente após uma falha.
+- Não carregar repetidamente toda a documentação SaaS ou o RAR; consultar somente as partes pertinentes. Não repetir auditorias completas ou revisões aprovadas sem alteração material.
 - Preferir ferramentas locais `git`, `gh`, testes e logs a perguntas longas e especulação.
 - Usar skills de `.agents/skills/` (Codex) e wrappers em `.claude/skills/` (Claude) quando pertinentes; não instalar skills/plugins desconhecidos automaticamente.
-- Evitar múltiplos agentes para tarefas triviais; revisão independente é mandatória para runtime, autenticação, políticas, dados e segurança.
 - Não alterar `CLAUDE.md` além da importação `@AGENTS.md`.
 
 ## Checkpoints e comandos

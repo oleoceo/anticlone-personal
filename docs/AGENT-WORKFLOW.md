@@ -5,7 +5,7 @@
 1. Confirmar que `AGENTS.md`, Blueprint, matriz e referências estão acessíveis.
 2. Conferir a matriz com a documentação temática (somente partes operacionais) e produzir **diff pequeno** + decisões conflitantes. Esta auditoria é única, não se repete a cada item.
 3. Validar escopo: nenhum requisito SaaS comercial adicionado; nenhuma função operacional apagada.
-4. Criar infraestrutura mínima da primeira entrega. Não começar UI completa antes do primeiro cenário E2E.
+4. Encerrar e relatar a auditoria. A infraestrutura da primeira entrega é atividade posterior, iniciada quando solicitada; não começar UI completa antes do primeiro cenário E2E.
 
 ## B. Uma fatia = um resultado comprovável
 
