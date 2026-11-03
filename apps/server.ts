@@ -1,10 +1,9 @@
 import http from 'node:http';
 import { Pool } from 'pg';
-import { hostFromUrl, observe } from './detection.js';
+import { configuredOrigin, hostFromUrl, observe } from './detection.js';
 const connectionString = process.env.DATABASE_URL, allowedOrigin = process.env.ALLOWED_ORIGIN, project = process.env.PROJECT_ID;
 if (!connectionString || !allowedOrigin || !project || !/^[a-zA-Z0-9_-]{1,64}$/.test(project)) throw new Error('DATABASE_URL, ALLOWED_ORIGIN and PROJECT_ID required');
-hostFromUrl(allowedOrigin);
-const normalizedOrigin = new URL(allowedOrigin).origin, pool = new Pool({ connectionString });
+const normalizedOrigin = configuredOrigin(allowedOrigin), pool = new Pool({ connectionString });
 let windowStart = Date.now(), count = 0;
 // Local test prototype only. Browser location is an untrusted claim.
 const server = http.createServer(async (req, res) => {

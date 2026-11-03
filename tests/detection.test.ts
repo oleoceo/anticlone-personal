@@ -2,9 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { Pool } from 'pg';
-import { hostFromUrl, observe } from '../apps/detection.js';
+import { configuredOrigin, hostFromUrl, observe } from '../apps/detection.js';
 test('validates URLs and stores only normalized hostname', () => {
   assert.equal(hostFromUrl('https://EXAMPLE.test/private?q=secret'), 'example.test');
+  assert.equal(configuredOrigin('https://example.test:8443/'), 'https://example.test:8443');
+  assert.throws(() => configuredOrigin('https://example.test/path'));
   for (const value of ['file:///tmp/a', 'https://user:pass@example.test', 'invalid']) assert.throws(() => hostFromUrl(value));
 });
 test('real postgres: original, repeated simulated clone and reconnect', async () => {

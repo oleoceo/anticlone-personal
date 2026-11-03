@@ -5,6 +5,12 @@ export function hostFromUrl(input: string): string {
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('invalid URL');
   return url.hostname.toLowerCase().replace(/\.$/, '');
 }
+export function configuredOrigin(input: string): string {
+  hostFromUrl(input);
+  const url = new URL(input);
+  if (url.pathname !== '/' || url.search || url.hash) throw new Error('ALLOWED_ORIGIN must not include path, query or fragment');
+  return url.origin;
+}
 export async function observe(pool: Pool, project: string, allowedOrigin: string, input: string): Promise<'authorized' | 'observed'> {
   const host = hostFromUrl(input);
   if (new URL(input).origin === allowedOrigin) return 'authorized';
