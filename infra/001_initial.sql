@@ -1,0 +1,2 @@
+CREATE TABLE IF NOT EXISTS observations (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, project_id text NOT NULL, host text NOT NULL, source text NOT NULL DEFAULT 'browser_claim', observed_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS incidents (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, project_id text NOT NULL, host text NOT NULL, first_seen timestamptz NOT NULL DEFAULT now(), last_seen timestamptz NOT NULL DEFAULT now(), status text NOT NULL DEFAULT 'unverified', UNIQUE(project_id, host));
