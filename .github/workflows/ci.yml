@@ -1,0 +1,31 @@
+name: AntiClone checks
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  validate:
+    name: validate-repo
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validar estrutura documental e exigir scripts quando houver codigo
+        run: python3 scripts/validate_repo.py
+      - name: Configurar Node para testes reais
+        if: ${{ hashFiles('package.json') != '' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Testes reais de codigo (quando projeto Node for criado)
+        if: ${{ hashFiles('package.json') != '' }}
+        run: |
+          npm ci
+          npm run lint
+          npm run typecheck
+          npm run test
+          npm run build
+      - name: Aviso de bootstrap sem codigo
+        if: ${{ hashFiles('package.json') == '' }}
+        run: echo 'Somente bootstrap documental. Nao representa protecao implementada.'

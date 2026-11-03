@@ -1,0 +1,40 @@
+# Segredos e configuração por máquina
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+CLAUDE.local.md
+.claude/settings.local.json
+.claude/worktrees/
+
+# Dados operacionais / evidências / bancos
+*.sqlite
+*.sqlite3
+*.db
+*.log
+logs/
+backups/
+backups-*/
+evidence-exports/
+*.rar
+*.7z
+*.zip
+# Referências históricas devem permanecer fora do repo
+docs/references/saas/
+
+# Build / caches
+node_modules/
+dist/
+build/
+coverage/
+.cache/
+.vite/
+.playwright/
+test-results/
+playwright-report/
+*.tsbuildinfo
+.DS_Store
+Thumbs.db
