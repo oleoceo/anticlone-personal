@@ -6,7 +6,8 @@
 - **F17/F18 parciais:** GS06 comprovou destino aprovado e LOW local; espera limitada e fail-open testados, sem gate visual completo.
 - **F43 parcial:** publicação autenticada, versões imutáveis e ativação transacional testadas em laboratório; motor geral de precedência, fases de interação, demais cenários de GS19 e classificador pendentes. Políticas legadas exigem republicação.
 - **F15/F16 parciais:** classificação declarada em laboratório, com fonte e incerteza; presença diária, sem corroboração nem GS04 completo.
+- **F23/F24 parciais:** PAGE_REDIRECT e sessao efemera testados em laboratorio; GS04 completo e outras acoes pendentes.
 - **Retenção:** observações 7 dias; incidentes inativos e alertas 30 dias.
-- **Revisão e CI:** revisão independente sem P0/P1 para laboratório; PR #12: CI 41702201540 aprovado no commit do PR; merge 92f38c0; credencial privilegiada PostgreSQL permanece confiável.
+- **Revisao e CI:** revisao independente sem bloqueio para laboratorio; CI da fatia pendente.
 
 - **F13/F14 em desenvolvimento:** avaliador conservador de laboratorio e OBSERVE_ONLY; GS05 integral e classificador operacional pendentes. Revisao independente sem P0/P1 para laboratorio, condicionada ao CI verde; conferir checks do PR no commit final.

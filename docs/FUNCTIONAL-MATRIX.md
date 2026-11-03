@@ -28,8 +28,8 @@ Legenda: **P** = planejada no Personal; **PARCIAL** = parte comprovada, capacida
 | F20 | Mapeamento de CTA pirateado para destino correto aprovado | 26-CONVERSION-SURFACES-DRIFT | GS03 | P |
 | F21 | Troca local de CTA sem chamada de rede no clique com regra pronta | 23-RUNTIME-PROTOCOL, 02- Observacoes Tecnicas | GS03, GS07 | P |
 | F22 | DOM dinâmico, SPA, links/formulários dentro da compatibilidade | 26-CONVERSION-SURFACES-DRIFT, 27-COMPATIBILITY-MATRIX | GS07, GS10 | P |
-| F23 | Percentuais 0–100 em passos de 10 por classe e ação | 20-POLICY-ENGINE, 12-MVP-SCOPE | GS04 | P |
-| F24 | Bucketing estável por sessão/regra/versão | 20-POLICY-ENGINE | GS04 | P |
+| F23 | Percentuais 0-100 em passos de 10 por classe e acao | 20-POLICY-ENGINE, 12-MVP-SCOPE | PAGE_REDIRECT em laboratorio: tests/allocation.test.ts e tests/gs06.test.ts; outras acoes e GS04 completo pendentes | PARCIAL |
+| F24 | Bucketing estavel por sessao/regra/versao | 20-POLICY-ENGINE | Laboratorio: tests/allocation.test.ts e tests/gs06.test.ts; identidade manipulavel, GS04 completo pendente | PARCIAL |
 | F25 | Mudança material de checkout e REVIEW_REQUIRED somente no ponto | 26-CONVERSION-SURFACES-DRIFT | GS08 | P |
 | F26 | Alerta de clone por host, deduplicação e histórico | 31-NOTIFICATIONS-EMAIL-TEMPLATES, 00- O anticlone | GS02, GS13 | P |
 | F27 | Alerta de mudança de CTA, deduplicação e retry | 31-NOTIFICATIONS-EMAIL-TEMPLATES | GS08, GS13 | P |

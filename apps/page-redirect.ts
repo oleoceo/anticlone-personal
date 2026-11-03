@@ -1,4 +1,5 @@
-﻿import { configuredOrigin } from './detection.js';
+﻿import { selected, validateAllocation } from './allocation.js';
+import { configuredOrigin } from './detection.js';
 
 // The destination is pre-approved by the owner and constrained to the project origin.
 export function approvedDestination(value: string, projectOrigin: string): string {
@@ -9,8 +10,8 @@ export function approvedDestination(value: string, projectOrigin: string): strin
   return url.href;
 }
 
-export function entryDecision(policy: {version: number; enabled: boolean; approved_destination: string} | undefined, original: string, origin: string, controlledOrigin: string | undefined, risk: string | undefined) {
+export function entryDecision(policy: {version: number; enabled: boolean; approved_destination: string; allocation: unknown} | undefined, original: string, origin: string, controlledOrigin: string | undefined, risk: string | undefined, session: unknown, trafficClass: string) {
   if (origin === original || !controlledOrigin || origin !== controlledOrigin || risk !== 'LOW' || !policy || policy.enabled !== true || !Number.isSafeInteger(policy.version) || policy.version < 1) return { action: 'OBSERVE_ONLY' };
-  try { return { action: 'PAGE_REDIRECT', version: policy.version, destination: approvedDestination(policy.approved_destination, original) }; }
+  try { if (!selected(session, 'PAGE_REDIRECT', policy.version, validateAllocation(policy.allocation), trafficClass)) return { action: 'OBSERVE_ONLY' }; return { action: 'PAGE_REDIRECT', version: policy.version, destination: approvedDestination(policy.approved_destination, original) }; }
   catch { return { action: 'OBSERVE_ONLY' }; }
 }
