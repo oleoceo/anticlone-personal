@@ -18,7 +18,7 @@ test('F21: approved static anchors, entry precedence and fail-open in Chromium',
   for(const f of ['001_initial','002_alerts','003_projects','004_observation_sources','005_canaries','006_page_redirect','007_protection_policy','008_traffic_observations','009_risk_assessments','010_policy_allocation','011_cta_inventory','012_cta_policy']) await db.query(await readFile(`infra/${f}.sql`,'utf8'));
   const project='f21_'+crypto.randomUUID();
   const html=`<a data-anticlone-point="basic001" href="/clone-basic">Comprar</a><a data-anticlone-point="premium1" href="/clone-premium">Comprar</a><a data-anticlone-point="whatsapp" href="/whatsapp">WhatsApp</a><a data-anticlone-point="review01" href="/review">Review</a><a href="/unmarked">Comprar</a><script src="http://127.0.0.1:3000/runtime.js"></script>`;
-  const fixture=createServer((_req,res)=>res.writeHead(200,{'content-type':'text/html'}).end(html)).listen(0,'127.0.0.1'); await once(fixture,'listening');
+  const fixture=createServer((req,res)=>res.writeHead(200,{'content-type':'text/html'}).end(req.url === '/clone' ? html : '<h1>destination</h1>')).listen(0,'127.0.0.1'); await once(fixture,'listening');
   const port=(fixture.address() as AddressInfo).port, original=`http://127.0.0.1:${port}`,clone=`http://localhost:${port}`;
   await db.query('INSERT INTO projects(id,name,origin) VALUES($1,$1,$2)',[project,original]);
   const candidates=['basic001','premium1','review01'].map((marker,i)=>({marker,kind:'a',parent:'body',ordinal:i+1,url:clone+'/x'}));
