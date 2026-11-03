@@ -3,13 +3,49 @@
     const source = document.currentScript && document.currentScript.src;
     if (!source) return;
     const deadline = performance.now() + 150;
-    let pending = true;
-    const cancel = () => { pending = false; };
-    setTimeout(cancel, 150);
+    let pending = true, interacted = false;
+    const cancel = () => { pending = false; interacted = true; };
+    setTimeout(() => { pending = false; }, 150);
     addEventListener('pagehide', cancel, {once:true});
     addEventListener('beforeunload', cancel, {once:true});
     addEventListener('pointerdown', cancel, {once:true, capture:true});
     addEventListener('keydown', cancel, {once:true, capture:true});
+    // Snapshot only anchors present when the initial document is ready. Revalidate uniqueness at activation.
+    const prepareCtas = decision => {
+      try {
+        if (!Number.isSafeInteger(decision.version) || decision.version < 1 || location.pathname !== decision.pathname || !Array.isArray(decision.mappings) || decision.mappings.length > 100) return;
+        const original = new URL(decision.original);
+        if (!['http:', 'https:'].includes(original.protocol) || original.origin !== decision.original || original.origin === location.origin || !['localhost','127.0.0.1'].includes(original.hostname) || !['localhost','127.0.0.1'].includes(location.hostname)) return;
+        const mappings = new Map();
+        for (const row of decision.mappings) {
+          if (!row || typeof row.marker !== 'string' || !/^[a-zA-Z0-9_-]{8,64}$/.test(row.marker) || mappings.has(row.marker) || typeof row.destination !== 'string') return;
+          const target = new URL(row.destination);
+          if (target.origin !== original.origin || target.username || target.password || target.hash || !['http:', 'https:'].includes(target.protocol)) return;
+          mappings.set(row.marker, target.href);
+        }
+        const install = () => {
+          if (interacted || location.pathname !== decision.pathname) return;
+          const nodes = Array.from(document.querySelectorAll('[data-anticlone-point]'));
+          if (nodes.length > 1000) return;
+          const counts = new Map();
+          for (const node of nodes) { const marker = node.getAttribute('data-anticlone-point'); counts.set(marker, (counts.get(marker) || 0) + 1); }
+          for (const node of nodes) {
+            const marker = node.getAttribute('data-anticlone-point');
+            if (node.tagName !== 'A' || !node.hasAttribute('href') || counts.get(marker) !== 1 || !mappings.has(marker)) continue;
+            node.addEventListener('click', () => {
+              if (location.pathname !== decision.pathname || !node.isConnected || node.getAttribute('data-anticlone-point') !== marker || !node.hasAttribute('href')) return;
+              const current = Array.from(document.querySelectorAll('[data-anticlone-point]'));
+              if (current.length > 1000 || current.filter(item => item.getAttribute('data-anticlone-point') === marker).length !== 1) return;
+              const previous = node.getAttribute('href');
+              const replacement = mappings.get(marker);
+              node.setAttribute('href', replacement);
+              setTimeout(() => { if (node.getAttribute('href') === replacement) node.setAttribute('href', previous); }, 0);
+            }, {capture:true});
+          }
+        };
+        if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', install, {once:true}); else install();
+      } catch (_) { /* Keep original links. */ }
+    };
     const core = document.createElement('script');
     core.src = new URL('/core.js', source).href;
     core.async = true;
@@ -36,6 +72,7 @@
           .then(decision => {
             if (!pending || performance.now() >= deadline) return;
             pending = false;
+            if (decision.action === 'REPLACE_CONVERSION') { prepareCtas(decision); return; }
             if (decision.action !== 'PAGE_REDIRECT' || !Number.isSafeInteger(decision.version) || decision.version < 1 || typeof decision.destination !== 'string') return;
             const target = new URL(decision.destination);
             if (!['http:', 'https:'].includes(target.protocol) || target.username || target.password || target.hash || target.href === location.href || target.origin === location.origin) return;

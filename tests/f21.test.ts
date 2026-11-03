@@ -1,0 +1,74 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import { once } from 'node:events';
+import { spawn } from 'node:child_process';
+import type { AddressInfo } from 'node:net';
+import { Pool } from 'pg';
+import { chromium } from 'playwright';
+import { importInventory, approveDestination, mapPoint } from '../apps/cta-inventory.js';
+import { publishCtaPolicy, ctaDecision } from '../apps/cta-policy.js';
+import { saveDraft, activatePolicy } from '../apps/protection-policy.js';
+
+const allocation={PAID_ATTRIBUTED:100,ORGANIC:100,REFERRAL:100,DIRECT_UNKNOWN:100};
+test('F21: approved static anchors, entry precedence and fail-open in Chromium', {timeout:60000}, async () => {
+  assert.ok(process.env.TEST_DATABASE_URL);
+  const db=new Pool({connectionString:process.env.TEST_DATABASE_URL});
+  for(const f of ['001_initial','002_alerts','003_projects','004_observation_sources','005_canaries','006_page_redirect','007_protection_policy','008_traffic_observations','009_risk_assessments','010_policy_allocation','011_cta_inventory','012_cta_policy']) await db.query(await readFile(`infra/${f}.sql`,'utf8'));
+  const project='f21_'+crypto.randomUUID();
+  const html=`<a data-anticlone-point="basic001" href="/clone-basic">Comprar</a><a data-anticlone-point="premium1" href="/clone-premium">Comprar</a><a data-anticlone-point="whatsapp" href="/whatsapp">WhatsApp</a><a data-anticlone-point="review01" href="/review">Review</a><a href="/unmarked">Comprar</a><script src="http://127.0.0.1:3000/runtime.js"></script>`;
+  const fixture=createServer((req,res)=>res.writeHead(200,{'content-type':'text/html'}).end(req.url === '/clone' ? html : '<h1>destination</h1>')).listen(0,'127.0.0.1'); await once(fixture,'listening');
+  const port=(fixture.address() as AddressInfo).port, original=`http://127.0.0.1:${port}`,clone=`http://localhost:${port}`;
+  await db.query('INSERT INTO projects(id,name,origin) VALUES($1,$1,$2)',[project,original]);
+  const candidates=['basic001','premium1','review01'].map((marker,i)=>({marker,kind:'a',parent:'body',ordinal:i+1,url:clone+'/x'}));
+  await importInventory(db,project,{surface:'landing',candidates});
+  const rows=await db.query('SELECT id,marker FROM cta_points WHERE project_id=$1',[project]);
+  for(const [marker,offer] of [['basic001','basic'],['premium1','premium'],['review01','review']] as const) {
+    const destination=await approveDestination(db,project,{offer,url:original+'/official-'+offer});
+    await mapPoint(db,project,{pointId:rows.rows.find(x=>x.marker===marker).id,offer,destinationId:destination.id});
+  }
+  await db.query("UPDATE cta_points SET review_required=true WHERE project_id=$1 AND marker='review01'",[project]);
+  const session='0'.repeat(32);
+  assert.equal((await ctaDecision(db,project,original,clone,clone,'LOW',session,'DIRECT_UNKNOWN')).action,'OBSERVE_ONLY');
+  await publishCtaPolicy(db,project,{enabled:false,surface:'landing',pathname:'/clone',allocation});
+  assert.equal((await ctaDecision(db,project,original,clone,clone,'LOW',session,'DIRECT_UNKNOWN')).action,'OBSERVE_ONLY');
+  await publishCtaPolicy(db,project,{enabled:true,surface:'landing',pathname:'/clone',allocation});
+  assert.equal((await ctaDecision(db,project,original,clone,clone,'LOW','invalid','DIRECT_UNKNOWN')).action,'OBSERVE_ONLY');
+  assert.equal((await ctaDecision(db,project,original,original,clone,'LOW',session,'DIRECT_UNKNOWN')).action,'OBSERVE_ONLY');
+  await db.query("UPDATE cta_destinations SET url='javascript:alert(1)' WHERE project_id=$1 AND offer='basic'",[project]);
+  assert.equal((await ctaDecision(db,project,original,clone,clone,'LOW',session,'DIRECT_UNKNOWN')).action,'OBSERVE_ONLY');
+  await db.query("UPDATE cta_destinations SET url=$2 WHERE project_id=$1 AND offer='basic'",[project,original+'/official-basic']);
+  assert.equal((await ctaDecision(db,project,original,clone,clone,'HIGH','0'.repeat(32),'DIRECT_UNKNOWN')).action,'OBSERVE_ONLY');
+  assert.equal((await ctaDecision(db,project,original,clone,clone,'UNCERTAIN','0'.repeat(32),'DIRECT_UNKNOWN')).action,'OBSERVE_ONLY');
+  const app=spawn(process.execPath,['dist/apps/server.js'],{env:{...process.env,DATABASE_URL:process.env.TEST_DATABASE_URL,PROJECT_ID:project,SMTP_PORT:'25252',PORT:'3000',LAB_CONTROLLED_ORIGIN:clone,LAB_CONTROLLED_RISK:'LOW'},stdio:['ignore','ignore','inherit']});
+  let browser:Awaited<ReturnType<typeof chromium.launch>>|undefined;
+  try {
+    let ready=false; for(let i=0;i<100;i++){try{if((await fetch('http://127.0.0.1:3000/runtime.js')).ok){ready=true;break;}}catch{} await new Promise(r=>setTimeout(r,100));} assert.ok(ready);
+    browser=await chromium.launch({headless:true,args:['--host-resolver-rules=MAP localhost 127.0.0.1']});
+    const page=await browser.newPage();
+    const decisions:string[]=[]; page.on('request',r=>{if(r.url().endsWith('/entry-decision')) decisions.push(r.url());});
+    const check=async (selector:string,expected:string) => { await page.goto(clone+'/clone'); await page.waitForTimeout(300); const before=decisions.length; await page.locator(selector).click(); await page.waitForURL(expected); assert.equal(decisions.length,before); };
+    await check('[data-anticlone-point="basic001"]',original+'/official-basic');
+    await check('[data-anticlone-point="premium1"]',original+'/official-premium');
+    await check('[data-anticlone-point="whatsapp"]',clone+'/whatsapp');
+    await check('[data-anticlone-point="review01"]',clone+'/review');
+    await check('a:not([data-anticlone-point])',clone+'/unmarked');
+    await page.goto(clone+'/clone'); await page.waitForTimeout(300);
+    await page.locator('body').evaluate(el=>{const a=document.createElement('a'); a.setAttribute('data-anticlone-point','basic001'); a.href='/other'; el.appendChild(a);});
+    await page.locator('[data-anticlone-point="basic001"]').first().click(); await page.waitForURL(clone+'/clone-basic');
+    await page.goto(original+'/clone'); await page.waitForTimeout(300); await page.locator('[data-anticlone-point="basic001"]').click(); await page.waitForURL(original+'/clone-basic');
+    await page.route('**/entry-decision',route=>route.abort()); await check('[data-anticlone-point="basic001"]',clone+'/clone-basic'); await page.unroute('**/entry-decision');
+    await page.route('**/entry-decision',async route=>{await new Promise(r=>setTimeout(r,500)); await route.abort().catch(()=>{});});
+    await check('[data-anticlone-point="basic001"]',clone+'/clone-basic'); await page.unroute('**/entry-decision');
+    await db.query("INSERT INTO protection_policy_versions(project_id,version,enabled,approved_destination,stealth,allocation) VALUES($1,1,true,$2,true,'{}')",[project,original+'/page']);
+    await db.query('INSERT INTO active_protection_policies VALUES($1,1)',[project]);
+    await check('[data-anticlone-point="basic001"]',clone+'/clone-basic');
+    await db.query('DELETE FROM active_protection_policies WHERE project_id=$1',[project]);
+    await saveDraft(db,project,{enabled:true,approved_destination:original+'/page',stealth:true,allocation}); await activatePolicy(db,project);
+    await page.goto(clone+'/clone'); await page.waitForURL(original+'/page');
+  } finally {
+    if(browser) await browser.close(); app.kill('SIGTERM'); if(app.exitCode===null && app.signalCode===null) await once(app,'exit');
+    await db.end(); await new Promise<void>(r=>fixture.close(()=>r()));
+  }
+});
