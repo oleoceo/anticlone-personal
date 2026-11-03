@@ -9,6 +9,7 @@ export function configuredOrigin(input: string): string {
   hostFromUrl(input);
   const url = new URL(input);
   if (url.pathname !== '/' || url.search || url.hash) throw new Error('origin must not include path, query or fragment');
+  url.hostname = url.hostname.replace(/\.$/, '');
   return url.origin;
 }
 export async function cleanup(pool: Pool, project: string): Promise<void> {

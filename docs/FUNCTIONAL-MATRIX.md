@@ -6,7 +6,7 @@ Legenda: **P** = planejada no Personal; **PARCIAL** = parte comprovada, capacida
 
 | ID | Capacidade operacional preservada | Fonte SaaS (arquivo ou texto) | Prova mínima / cenário | Sit. |
 |---|---|---|---|---|
-| F01 | Vários projetos próprios e identidade estável independente da URL | 12-MVP-SCOPE, 14-DOMAIN-MODEL | GS16, GS01 | P |
+| F01 | Vários projetos próprios e identidade estável independente da URL | 12-MVP-SCOPE, 14-DOMAIN-MODEL | GS16, GS01; cadastro e isolamento local em tests/projects.test.ts, CI 41677878620 | PARCIAL |
 | F02 | Múltiplas origens autorizadas, preview/staging e pathnames | 12-MVP-SCOPE, 23-RUNTIME-PROTOCOL | GS01 | P |
 | F03 | Instalação universal HTML/React/Vite/WordPress quando permitido | 12-MVP-SCOPE, 27-COMPATIBILITY-MATRIX | GS01, GS10 | P |
 | F04 | Bootstrap pequeno + Core Runtime | 23-RUNTIME-PROTOCOL | GS01, GS02 | P |

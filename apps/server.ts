@@ -2,11 +2,20 @@
 import { Pool } from 'pg';
 import { configuredOrigin, cleanup, observe } from './detection.js';
 import { deliverOne } from './alerts.js';
-const connectionString = process.env.DATABASE_URL, allowedOrigin = process.env.ALLOWED_ORIGIN, project = process.env.PROJECT_ID;
+const connectionString = process.env.DATABASE_URL, project = process.env.PROJECT_ID;
 const smtpPort = Number(process.env.SMTP_PORT), port = Number(process.env.PORT ?? 3000);
-if (!connectionString || !allowedOrigin || !project || !/^[a-zA-Z0-9_-]{1,64}$/.test(project) || !Number.isInteger(smtpPort) || smtpPort < 1 || smtpPort > 65535 || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('invalid local test configuration');
+if (!connectionString || !project || !/^[a-zA-Z0-9_-]{1,64}$/.test(project) || !Number.isInteger(smtpPort) || smtpPort < 1 || smtpPort > 65535 || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('invalid local test configuration');
 const activeProject: string = project;
-const normalizedOrigin = configuredOrigin(allowedOrigin), pool = new Pool({ connectionString });
+const pool = new Pool({ connectionString });
+// One-time legacy import is driven solely by the local operator's old configuration.
+const legacyOrigin = process.env.ALLOWED_ORIGIN && configuredOrigin(process.env.ALLOWED_ORIGIN);
+if (legacyOrigin) {
+  await pool.query('INSERT INTO projects(id,name,origin) VALUES($1,$1,$2) ON CONFLICT (id) DO NOTHING', [activeProject, legacyOrigin]);
+}
+const projectRow = await pool.query('SELECT origin FROM projects WHERE id=$1', [activeProject]);
+if (projectRow.rowCount !== 1) throw new Error('unknown project');
+const normalizedOrigin = configuredOrigin(projectRow.rows[0].origin);
+if (legacyOrigin && legacyOrigin !== normalizedOrigin) throw new Error('legacy configuration conflicts with project');
 let windowStart = Date.now(), count = 0;
 const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*'); res.setHeader('Cache-Control', 'no-store');
@@ -28,7 +37,7 @@ const server = http.createServer((req, res) => {
     if (rejected) return;
     const body = Buffer.concat(chunks).toString('utf8');
     let origin: string;
-    try { origin = configuredOrigin(body); if (origin !== req.headers.origin) throw new Error('origin mismatch'); }
+    try { origin = configuredOrigin(body); if (!req.headers.origin || origin !== configuredOrigin(req.headers.origin)) throw new Error('origin mismatch'); }
     catch { res.writeHead(400).end(); return; }
     void observe(pool, activeProject, normalizedOrigin, origin).then(result => res.writeHead(result === 'capacity' ? 429 : 204).end()).catch(() => res.writeHead(503).end());
   });
