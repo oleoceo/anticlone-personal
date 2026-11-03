@@ -9,12 +9,12 @@ Legenda: **P** = planejada no Personal; **PARCIAL** = parte comprovada, capacida
 | F01 | Vários projetos próprios e identidade estável independente da URL | 12-MVP-SCOPE, 14-DOMAIN-MODEL | GS16, GS01; cadastro e isolamento local em tests/projects.test.ts, CI 41677878620 | PARCIAL |
 | F02 | Múltiplas origens autorizadas, preview/staging e pathnames | 12-MVP-SCOPE, 23-RUNTIME-PROTOCOL | GS01 | P |
 | F03 | Instalação universal HTML/React/Vite/WordPress quando permitido | 12-MVP-SCOPE, 27-COMPATIBILITY-MATRIX | GS01, GS10 | P |
-| F04 | Bootstrap pequeno + Core Runtime | 23-RUNTIME-PROTOCOL | GS01, GS02 | P |
+| F04 | Bootstrap pequeno + Core Runtime | 23-RUNTIME-PROTOCOL | Carregamento e falha em Chromium, tests/gs02.test.ts, CI 41680979048; instalação limitada a laboratório | PARCIAL |
 | F05 | Fallback independente com capacidades limitadas | 23-RUNTIME-PROTOCOL | GS09 | P |
 | F06 | HTML Canary e CSS Canary best-effort | 23-RUNTIME-PROTOCOL, 02- Observacoes Tecnicas | GS09, GS10 | P |
 | F07 | Entrega de scripts, rotas públicas e alias persistido/versionado | 24-EDGE-DELIVERY-NETWORK, 02- Observacoes Tecnicas | GS01, GS10 | P |
 | F08 | Verificação de instalação e degradação FULL/PARTIAL/UNSUPPORTED | 27-COMPATIBILITY-MATRIX, 12-MVP-SCOPE | GS10 | P |
-| F09 | Contexto autorizado vs. execução em host não autorizado | 23-RUNTIME-PROTOCOL | GS01, GS02 | P |
+| F09 | Contexto autorizado vs. execução em host não autorizado | 23-RUNTIME-PROTOCOL | Origem alegada comparada no servidor, original e cópia em tests/gs02.test.ts, CI 41680979048; sinais forjáveis | PARCIAL |
 | F10 | Contextos `file://`, iframe/sandbox quando possível, sem garantia | 23-RUNTIME-PROTOCOL | GS10 | P |
 | F11 | Observações duráveis com fonte e timestamps | 21-EVENT-MODEL, 25-INCIDENT-EVIDENCE-MODEL | GS02, GS12 | P |
 | F12 | Incidente por host/projeto, lifecycle e falso positivo | 25-INCIDENT-EVIDENCE-MODEL | GS02, GS12 | P |
