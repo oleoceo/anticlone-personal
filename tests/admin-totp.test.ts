@@ -46,6 +46,6 @@ test('the same six digits cannot be reused when adjacent counters collide', asyn
   assert.equal(code, generator.generate({ timestamp: clock + 30000 }));
   const server = createAdminServer(record, secret, db, () => clock).listen(0, '127.0.0.1'); await once(server, 'listening');
   const login = () => fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/admin/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: 'password', code }) });
-  try { assert.equal((await login()).status, 200); clock += 30000; assert.equal((await login()).status, 401); }
+  try { assert.equal((await login()).status, 200); clock += 30000; assert.equal((await login()).status, 401); clock += 30000; assert.equal((await login()).status, 401); }
   finally { server.close(); await once(server, 'close'); await db.end(); }
 });

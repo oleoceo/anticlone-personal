@@ -56,7 +56,7 @@ export function createAdminServer(passwordRecord: string, totpSecret: string, db
         const currentCounter = Math.floor(timestamp / 30000);
         await client.query('DELETE FROM admin_totp_codes WHERE factor_id = $1 AND valid_until < $2', [factorId, currentCounter]);
         const used = await client.query(`INSERT INTO admin_totp_codes (factor_id, digest, valid_until) VALUES ($1, $2, $3)
-          ON CONFLICT DO NOTHING RETURNING digest`, [factorId, digest, counter + 1]);
+          ON CONFLICT DO NOTHING RETURNING digest`, [factorId, digest, currentCounter + 2]);
         if (!used.rowCount) { await client.query('ROLLBACK'); res.writeHead(401).end(); return; }
         await client.query('COMMIT');
       } catch { if (client) { try { await client.query('ROLLBACK'); } catch { /* fail closed */ } } res.writeHead(503).end(); return; }
