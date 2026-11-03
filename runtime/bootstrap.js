@@ -10,7 +10,7 @@
     addEventListener('beforeunload', cancel, {once:true});
     addEventListener('pointerdown', cancel, {once:true, capture:true});
     addEventListener('keydown', cancel, {once:true, capture:true});
-    // Snapshot only anchors present when the initial document is ready. Revalidate uniqueness at activation.
+    // Delegate clicks so approved markers can appear after the initial document load.
     const prepareCtas = decision => {
       try {
         if (!Number.isSafeInteger(decision.version) || decision.version < 1 || location.pathname !== decision.pathname || !Array.isArray(decision.mappings) || decision.mappings.length > 100) return;
@@ -25,23 +25,29 @@
         }
         const install = () => {
           if (interacted || location.pathname !== decision.pathname) return;
-          const nodes = Array.from(document.querySelectorAll('[data-anticlone-point]'));
-          if (nodes.length > 1000) return;
-          const counts = new Map();
-          for (const node of nodes) { const marker = node.getAttribute('data-anticlone-point'); counts.set(marker, (counts.get(marker) || 0) + 1); }
-          for (const node of nodes) {
-            const marker = node.getAttribute('data-anticlone-point');
-            if (node.tagName !== 'A' || !node.hasAttribute('href') || counts.get(marker) !== 1 || !mappings.has(marker)) continue;
-            node.addEventListener('click', () => {
-              if (location.pathname !== decision.pathname || !node.isConnected || node.getAttribute('data-anticlone-point') !== marker || !node.hasAttribute('href')) return;
-              const current = Array.from(document.querySelectorAll('[data-anticlone-point]'));
-              if (current.length > 1000 || current.filter(item => item.getAttribute('data-anticlone-point') === marker).length !== 1) return;
-              const previous = node.getAttribute('href');
-              const replacement = mappings.get(marker);
-              node.setAttribute('href', replacement);
-              setTimeout(() => { if (node.getAttribute('href') === replacement) node.setAttribute('href', previous); }, 0);
-            }, {capture:true});
-          }
+          document.addEventListener('click', event => {
+            try {
+              if (!(event.target instanceof Element)) return;
+              const node = event.target.closest('a[data-anticlone-point][href]');
+              if (!node || !node.isConnected) return;
+              const activate = currentEvent => {
+                if (currentEvent !== event) return;
+                try {
+                  if (event.defaultPrevented || location.pathname !== decision.pathname || !node.isConnected || !node.hasAttribute('href')) return;
+                  const marker = node.getAttribute('data-anticlone-point');
+                  if (!mappings.has(marker)) return;
+                  const current = Array.from(document.querySelectorAll('[data-anticlone-point]'));
+                  if (current.length > 1000 || current.filter(item => item.getAttribute('data-anticlone-point') === marker).length !== 1) return;
+                  const previous = node.getAttribute('href');
+                  const replacement = mappings.get(marker);
+                  node.setAttribute('href', replacement);
+                  setTimeout(() => { if (node.getAttribute('href') === replacement) node.setAttribute('href', previous); }, 0);
+                } catch (_) { /* Preserve the page on incompatible DOM implementations. */ }
+              };
+              node.addEventListener('click', activate, {capture:true, once:true});
+              setTimeout(() => node.removeEventListener('click', activate, true), 0);
+            } catch (_) { /* Preserve the page on incompatible DOM implementations. */ }
+          }, {capture:true});
         };
         if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', install, {once:true}); else install();
       } catch (_) { /* Keep original links. */ }
