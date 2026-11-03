@@ -11,3 +11,5 @@
 - **Revisão e CI:** revisão independente sem bloqueio para laboratório; CI 41719646208 aprovado no commit 258fa28.
 
 - **F13/F14 em desenvolvimento:** avaliador conservador de laboratório e OBSERVE_ONLY; GS05 integral e classificador operacional pendentes.
+
+- **F19/F20/F41 em construção:** inventário passivo e mapeamento manual restritos a laboratório; evidência de navegador, PostgreSQL e CI ainda em verificação. GS03/GS17 integrais e descoberta dinâmica permanecem pendentes.
