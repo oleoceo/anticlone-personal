@@ -35,7 +35,7 @@ export async function observe(pool: Pool, project: string, allowedOrigin: string
     const incident = await client.query(`INSERT INTO incidents (project_id, host) VALUES ($1, $2)
       ON CONFLICT (project_id, host) DO UPDATE SET last_seen = now() RETURNING id`, [project, host]);
     const day = await client.query(`INSERT INTO observation_source_days(project_id,host,day,source) VALUES($1,$2,(now() AT TIME ZONE 'UTC')::date,$3)
-      ON CONFLICT DO NOTHING RETURNING host`, [project, host]);
+      ON CONFLICT DO NOTHING RETURNING host`, [project, host, source]);
     if (day.rowCount) await client.query('INSERT INTO observations (project_id, host, source) VALUES ($1, $2, $3)', [project, host, source]);
     await client.query('INSERT INTO alert_outbox(incident_id) VALUES ($1) ON CONFLICT DO NOTHING', [incident.rows[0].id]);
     await client.query('COMMIT'); return 'observed';
