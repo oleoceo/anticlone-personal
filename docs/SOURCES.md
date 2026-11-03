@@ -9,7 +9,7 @@
 
 ## Caminho local esperado
 
-`C:\projetos\anticlone-saas-referencias\projetosaas-anticlone\`
+`C:\Projetos\anticlone-saas-referencias\` — documentos extraídos diretamente nesta pasta; o subdiretório `projetosaas-anticlone` esperado não existe nesta cópia.
 
 Se for diferente, localizar explicitamente; não presumir o conteúdo. **Não adicionar ao GitHub**.
 

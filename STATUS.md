@@ -1,10 +1,10 @@
 # STATUS — AntiClone Personal
 
 - **Estado:** bootstrap documental; implementação NÃO iniciada neste kit.
-- **Escopo:** matriz v0.1 e Blueprint; conferir com as referências SaaS antes da primeira feature.
+- **Escopo:** auditoria documental da matriz e Blueprint frente às referências históricas disponíveis; F01–F40 conferidas, F41–F45 planejadas com GS17–GS21.
 - **Entrega corrente:** A — detecção de cópia simulada, incidente durável, alerta deduplicado.
 - **Próxima capacidade:** bootstrap repo + contratos mínimos; depois primeiro fluxo vertical testável.
-- **Bloqueios:** dependem de acesso aos arquivos de referência e credenciais do ambiente local; ainda não verificados.
+- **Bloqueios:** nenhum para a auditoria documental; credenciais de ambientes de implementação não verificadas.
 - **Último teste:** somente validação estática do kit; aplicação, banco e VPS NÃO testados.
 - **Orquestração:** revisão independente admite outra sessão Codex ou Claude Code; seleção e delegação devem ser verificadas no ambiente de uso.
-- **PR/branch:** configuração documental em `docs/codex-orquestracao`.
+- **PR/branch:** audit/functional-definitive; PR e CI consultados fora deste arquivo.
