@@ -72,6 +72,10 @@ test('GS02: browser visits, durable incident and test SMTP alert after restart',
       assert.equal((await request('x'.repeat(2049))).status,413);
       let limited = false; for (let i=0;i<65;i++) if ((await request(clone)).status === 429) { limited=true; break; }
       assert.ok(limited, 'flood is rate limited');
+      // Expired incidents also expire unsent alerts, deliberately bounded by retention.
+      await reconnected.query("WITH old AS (INSERT INTO incidents(project_id,host,last_seen) VALUES($1,'expired.test',now()-interval '31 days') RETURNING id) INSERT INTO alert_outbox(incident_id) SELECT id FROM old", [project]);
+      await until(async () => (await reconnected.query("SELECT id FROM incidents WHERE project_id=$1 AND host='expired.test'", [project])).rowCount === 0, 'incident and pending alert expiry');
+      assert.equal((await reconnected.query("SELECT a.id FROM alert_outbox a JOIN incidents i ON i.id=a.incident_id WHERE i.project_id=$1 AND i.host='expired.test'", [project])).rowCount, 0);
       // Retention removes expired evidence while preserving recent incident and outbox.
       await reconnected.query("UPDATE observations SET observed_at=now()-interval '8 days' WHERE project_id=$1",[project]);
       await until(async () => (await reconnected.query('SELECT id FROM observations WHERE project_id=$1',[project])).rowCount === 0, 'retention');
