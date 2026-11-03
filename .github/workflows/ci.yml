@@ -1,4 +1,4 @@
-name: AntiClone checks
+﻿name: AntiClone checks
 on:
   pull_request:
   push:
@@ -9,23 +9,29 @@ jobs:
   validate:
     name: validate-repo
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: anticlone
+          POSTGRES_PASSWORD: test-only
+          POSTGRES_DB: anticlone_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U anticlone -d anticlone_test"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      TEST_DATABASE_URL: postgres://anticlone:test-only@localhost:5432/anticlone_test
     steps:
       - uses: actions/checkout@v4
-      - name: Validar estrutura documental e exigir scripts quando houver codigo
-        run: python3 scripts/validate_repo.py
-      - name: Configurar Node para testes reais
-        if: ${{ hashFiles('package.json') != '' }}
-        uses: actions/setup-node@v4
+      - run: python3 scripts/validate_repo.py
+      - uses: actions/setup-node@v4
         with:
-          node-version: "22"
-      - name: Testes reais de codigo (quando projeto Node for criado)
-        if: ${{ hashFiles('package.json') != '' }}
-        run: |
-          npm ci
-          npm run lint
-          npm run typecheck
-          npm run test
-          npm run build
-      - name: Aviso de bootstrap sem codigo
-        if: ${{ hashFiles('package.json') == '' }}
-        run: echo 'Somente bootstrap documental. Nao representa protecao implementada.'
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build

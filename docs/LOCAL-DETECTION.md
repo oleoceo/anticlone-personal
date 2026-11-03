@@ -1,0 +1,5 @@
+﻿# Detecção local experimental
+
+Este protótipo vincula o servidor exclusivamente a 127.0.0.1 e destina-se a testes locais autorizados, não a produção. Configure um PostgreSQL isolado com `docker compose -f infra/compose.yml up -d`. Aplique `infra/001_initial.sql` ao banco de teste. Defina `DATABASE_URL`, `PROJECT_ID` (letras, números, hífen ou sublinhado) e `ALLOWED_ORIGIN`; então execute `npm ci`, `npm run build` e `npm start`. Em páginas HTTP locais controladas, inclua `<script src="http://127.0.0.1:3000/runtime.js"></script>`. O registro de incidentes é consultável no PostgreSQL. Para testes, defina `TEST_DATABASE_URL` para banco isolado e execute `npm test`.
+
+O cliente alega a URL; ela pode ser forjada. Apenas o hostname é armazenado, sem caminho, query, IP ou identificação de visitante. Incidentes são `unverified`; não se deve presumir cópia confirmada. A configuração atual compara hostname, não origem completa. Não há autenticação administrativa, proteção contra abuso, política de retenção, interface, alertas nem prova em navegador; não expor o serviço. GS02 completo ainda não foi demonstrado.

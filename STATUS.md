@@ -1,10 +1,8 @@
-# STATUS — AntiClone Personal
+﻿# STATUS — AntiClone Personal
 
-- **Estado:** bootstrap documental; implementação NÃO iniciada neste kit.
-- **Escopo:** auditoria documental da matriz e Blueprint frente às referências históricas disponíveis; F01–F40 conferidas, F41–F45 planejadas com GS17–GS21.
-- **Entrega corrente:** A — detecção de cópia simulada, incidente durável, alerta deduplicado.
-- **Próxima capacidade:** bootstrap repo + contratos mínimos; depois primeiro fluxo vertical testável.
-- **Bloqueios:** nenhum para a auditoria documental; credenciais de ambientes de implementação não verificadas.
-- **Último teste:** somente validação estática do kit; aplicação, banco e VPS NÃO testados.
-- **Orquestração:** revisão independente admite outra sessão Codex ou Claude Code; seleção e delegação devem ser verificadas no ambiente de uso.
-- **PR/branch:** audit/functional-definitive; PR e CI consultados fora deste arquivo.
+- **Estado:** Entrega A iniciada; protótipo local de observações e incidentes não verificados.
+- **Escopo:** F11/F12 parciais; ainda não marcar capacidades como validadas.
+- **Limites:** sem alerta, painel, autenticação, retenção ou proteção de gateway; não publicar.
+- **Teste:** lint, typecheck e build locais; integração PostgreSQL depende de banco de teste real.
+- **Próximo gate:** revisão independente, integração PostgreSQL e cenário real em navegador.
+- **Branch:** feat/deteccao-inicial; PR e CI consultáveis no GitHub.

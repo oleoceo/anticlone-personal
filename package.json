@@ -1,0 +1,30 @@
+{
+  "name": "anticlone-personal",
+  "version": "1.0.0",
+  "description": "Projeto **privado, single-owner**, para proteger sites próprios. Em construção; não presumir capacidades implementadas.",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "lint": "eslint apps tests",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "test": "npm run build && node --test dist/tests/*.test.js",
+    "start": "node dist/apps/server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/pg": "^8.23.1",
+    "eslint": "^10.14.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.72.1"
+  },
+  "private": true
+}
