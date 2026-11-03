@@ -2,7 +2,7 @@
 
 **Estado:** cobertura documental F01–F40 **AUDITADA** nas fontes temáticas consultadas; F41–F45 registram lacunas. Não é código implementado nem prova de comportamento; a auditoria não garante exaustividade.
 
-Legenda: **P** = planejada no Personal; **V** = validada por teste; **B** = bloqueada com explicação. Inicialmente tudo está `P`. Cada `Fxx` só vira `V` depois de evidência de teste, não por texto ou interface.
+Legenda: **P** = planejada no Personal; **PARCIAL** = parte comprovada, capacidade incompleta; **V** = validada por teste; **B** = bloqueada com explicação. Inicialmente tudo está `P`. Cada `Fxx` só vira `V` depois de evidência de teste, não por texto ou interface.
 
 | ID | Capacidade operacional preservada | Fonte SaaS (arquivo ou texto) | Prova mínima / cenário | Sit. |
 |---|---|---|---|---|
@@ -39,7 +39,7 @@ Legenda: **P** = planejada no Personal; **V** = validada por teste; **B** = bloq
 | F31 | Webhook mínimo de checkout com autenticação e idempotência | 33-INTEGRATIONS-WEBHOOKS-ADAPTIVE-MAPPING | GS14 | P |
 | F32 | DNS/ASN/hosting externo separado do IP do visitante | 25-INCIDENT-EVIDENCE-MODEL, 16-SECURITY-PRINCIPLES | GS12 | P |
 | F33 | Segurança do gateway: body, spoofing, rate, replay, validação | 16-SECURITY-PRINCIPLES, 02- Observacoes Tecnicas | GS11 | P |
-| F34 | Admin único, login seguro, MFA, sessão e trilha de alterações | 18-AUTHENTICATION-AUTHORIZATION (simplificado) | GS16 | P |
+| F34 | Admin único, login seguro, MFA, sessão e trilha de alterações | 18-AUTHENTICATION-AUTHORIZATION (simplificado) | GS16; login e sessão locais em tests/admin-auth.test.ts, sem MFA ou auditoria | PARCIAL |
 | F35 | Persistência PostgreSQL, fila/outbox e dedup a reinício | 12-MVP-SCOPE, 29-DATABASE-PERSISTENCE | GS02, GS13 | P |
 | F36 | Histórico preservado com projeto pausado/arquivado | 12-MVP-SCOPE, 34-PRIVACY-DATA-RETENTION | GS15 | P |
 | F37 | Proteção de privacidade, minimização e retenção | 34-PRIVACY-DATA-RETENTION | GS15 | P |

@@ -1,8 +1,8 @@
-# STATUS — AntiClone Personal
+﻿# STATUS — AntiClone Personal
 
-- **Estado:** Entrega A em construção; protótipo restrito a localhost com incidentes não verificados e SMTP de teste.
-- **Escopo:** F11/F12/F26 parciais; GS02 demonstrado em laboratório no CI 41669343753, commit e5988d8.
-- **Limites:** sem painel, autenticação administrativa ou proteção pública; não publicar.
+- **Estado:** GS02 demonstrado em laboratório no CI 41669343753, commit e5988d8; detecção permanece experimental.
+- **F34 parcial:** API local de login de proprietário, sessão efêmera e limite por processo; sem MFA ou trilha de alterações.
+- **Limites:** uso somente em laboratório; exposição pública bloqueada, sem painel e sem dados reais.
 - **Retenção:** observações 7 dias; incidentes inativos e alertas 30 dias, com limpeza durante operação.
-- **Teste:** CI com Chromium, PostgreSQL e SMTP de teste: 3 testes passaram; lint, typecheck e build verdes.
-- **Branch:** feat/deteccao-inicial; PR #3, revisão independente de laboratório concluída.
+- **Testes:** autenticação local, lint, typecheck e build; GS02 depende de PostgreSQL, Chromium e SMTP de teste no CI.
+- **Branch:** feat/admin-auth-lab; revisão independente e CI registrados no PR.
