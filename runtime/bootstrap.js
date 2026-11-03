@@ -18,10 +18,10 @@
         if (!['http:', 'https:'].includes(original.protocol) || original.origin !== decision.original || original.origin === location.origin || !['localhost','127.0.0.1'].includes(original.hostname) || !['localhost','127.0.0.1'].includes(location.hostname)) return;
         const mappings = new Map();
         for (const row of decision.mappings) {
-          if (!row || typeof row.marker !== 'string' || !/^[a-zA-Z0-9_-]{8,64}$/.test(row.marker) || mappings.has(row.marker) || typeof row.destination !== 'string') return;
+          if (!row || typeof row.marker !== 'string' || !/^[a-zA-Z0-9_-]{8,64}$/.test(row.marker) || mappings.has(row.marker) || !['a','form'].includes(row.kind) || typeof row.destination !== 'string') return;
           const target = new URL(row.destination);
           if (target.origin !== original.origin || target.username || target.password || target.hash || !['http:', 'https:'].includes(target.protocol)) return;
-          mappings.set(row.marker, target.href);
+          mappings.set(row.marker, {kind:row.kind, destination:target.href});
         }
         const install = () => {
           if (interacted || location.pathname !== decision.pathname) return;
@@ -35,11 +35,11 @@
                 try {
                   if (event.defaultPrevented || location.pathname !== decision.pathname || !node.isConnected || !node.hasAttribute('href')) return;
                   const marker = node.getAttribute('data-anticlone-point');
-                  if (!mappings.has(marker)) return;
+                  if (mappings.get(marker)?.kind !== 'a') return;
                   const current = Array.from(document.querySelectorAll('[data-anticlone-point]'));
                   if (current.length > 1000 || current.filter(item => item.getAttribute('data-anticlone-point') === marker).length !== 1) return;
                   const previous = node.getAttribute('href');
-                  const replacement = mappings.get(marker);
+                  const replacement = mappings.get(marker).destination;
                   node.setAttribute('href', replacement);
                   setTimeout(() => { if (node.getAttribute('href') === replacement) node.setAttribute('href', previous); }, 0);
                 } catch (_) { /* Preserve the page on incompatible DOM implementations. */ }
@@ -48,6 +48,24 @@
               setTimeout(() => node.removeEventListener('click', activate, true), 0);
             } catch (_) { /* Preserve the page on incompatible DOM implementations. */ }
           }, {capture:true});
+          addEventListener('submit', event => {
+            try {
+              const form = event.target;
+              if (!(form instanceof HTMLFormElement)) return;
+              const target = form.getAttribute('target') ?? document.querySelector('base[target]')?.getAttribute('target') ?? '';
+              if (!event.isTrusted || !event.cancelable || event.defaultPrevented || location.pathname !== decision.pathname || !form.isConnected || !form.hasAttribute('action') || form.method.toLowerCase() !== 'get' || (target && target.toLowerCase() !== '_self')) return;
+              const submitter = event.submitter;
+              if (submitter && (submitter.hasAttribute('formaction') || submitter.hasAttribute('formmethod') || submitter.hasAttribute('formtarget') || submitter.hasAttribute('name'))) return;
+              if (Array.from(form.elements).some(element => element.hasAttribute('name'))) return;
+              const marker = form.getAttribute('data-anticlone-point');
+              const mapping = mappings.get(marker);
+              if (!mapping || mapping.kind !== 'form') return;
+              const current = Array.from(document.querySelectorAll('[data-anticlone-point]'));
+              if (current.length > 1000 || current.filter(item => item.getAttribute('data-anticlone-point') === marker).length !== 1) return;
+              event.preventDefault();
+              location.assign(mapping.destination);
+            } catch (_) { /* Keep original submission. */ }
+          });
         };
         if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', install, {once:true}); else install();
       } catch (_) { /* Keep original links. */ }

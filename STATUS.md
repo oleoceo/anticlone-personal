@@ -1,5 +1,7 @@
 # STATUS — AntiClone Personal
 
+- **F22 formulários em desenvolvimento:** GET sem campos nomeados em laboratório; teste focal em `tests/f21.test.ts`. Revisão independente apontou P2 remanescente para cancelamento tardio no window; manter PR em rascunho, GS07/GS10 pendentes.
+
 - **F22 parcial em PR:** âncoras tardias, pop-up e SPA no pathname autorizado em laboratório; GS07/GS10 integrais e formulários pendentes. Chromium/PostgreSQL em `tests/f21.test.ts`; revisão Codex independente sem P0/P1/P2 após correções; CI final pendente.
 
 - **Estado:** GS02 e GS06 demonstrados em laboratório; detecção experimental.
