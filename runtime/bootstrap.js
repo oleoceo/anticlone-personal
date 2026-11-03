@@ -3,9 +3,9 @@
     const source = document.currentScript && document.currentScript.src;
     if (!source) return;
     const deadline = performance.now() + 150;
-    let pending = true;
-    const cancel = () => { pending = false; };
-    setTimeout(cancel, 150);
+    let pending = true, interacted = false;
+    const cancel = () => { pending = false; interacted = true; };
+    setTimeout(() => { pending = false; }, 150);
     addEventListener('pagehide', cancel, {once:true});
     addEventListener('beforeunload', cancel, {once:true});
     addEventListener('pointerdown', cancel, {once:true, capture:true});

@@ -61,6 +61,10 @@ test('F21: approved static anchors, entry precedence and fail-open in Chromium',
     await page.route('**/entry-decision',route=>route.abort()); await check('[data-anticlone-point="basic001"]',clone+'/clone-basic'); await page.unroute('**/entry-decision');
     await page.route('**/entry-decision',async route=>{await new Promise(r=>setTimeout(r,500)); await route.abort().catch(()=>{});});
     await check('[data-anticlone-point="basic001"]',clone+'/clone-basic'); await page.unroute('**/entry-decision');
+    await db.query("INSERT INTO protection_policy_versions(project_id,version,enabled,approved_destination,stealth,allocation) VALUES($1,1,true,$2,true,'{}')",[project,original+'/page']);
+    await db.query('INSERT INTO active_protection_policies VALUES($1,1)',[project]);
+    await check('[data-anticlone-point="basic001"]',clone+'/clone-basic');
+    await db.query('DELETE FROM active_protection_policies WHERE project_id=$1',[project]);
     await saveDraft(db,project,{enabled:true,approved_destination:original+'/page',stealth:true,allocation}); await activatePolicy(db,project);
     await page.goto(clone+'/clone'); await page.waitForURL(original+'/page');
   } finally {
