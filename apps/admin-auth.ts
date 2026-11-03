@@ -2,6 +2,8 @@
 import { Pool } from 'pg';
 import http from 'node:http';
 import { randomBytes, scryptSync, timingSafeEqual, createHash, createHmac } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
+import { configuredOrigin } from './detection.js';
 
 // Laboratory-only: one process, one owner, ephemeral sessions and rate limit.
 export function createAdminServer(passwordRecord: string, totpSecret: string, db: Pool, now: () => number = Date.now) {
@@ -18,12 +20,38 @@ export function createAdminServer(passwordRecord: string, totpSecret: string, db
     res.setHeader('X-Content-Type-Options', 'nosniff');
     // No CORS and no browser-origin requests: this slice is a local API, not a UI.
     if (req.headers.origin || req.headers['sec-fetch-site']) { res.writeHead(403).end(); return; }
-    if (req.method === 'GET' && req.url === '/admin/session') {
+    if (req.url?.startsWith('/admin/') && req.url !== '/admin/login') {
       const token = /^Bearer ([a-f0-9]{64})$/.exec(req.headers.authorization ?? '')?.[1];
       const key = token && createHash('sha256').update(token).digest('hex');
       const expiry = key && sessions.get(key);
       if (!key || !expiry || now() >= expiry) { if (key) sessions.delete(key); res.writeHead(401).end(); return; }
-      res.writeHead(200, { 'Content-Type': 'application/json' }).end('{"authenticated":true}'); return;
+      if (req.method === 'GET' && req.url === '/admin/session') {
+        res.writeHead(200, { 'Content-Type': 'application/json' }).end('{"authenticated":true}'); return;
+      }
+      if (req.method === 'GET' && req.url === '/admin/projects') {
+        void db.query('SELECT id, name, origin FROM projects ORDER BY name, id').then(result => res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(result.rows))).catch(() => res.writeHead(503).end()); return;
+      }
+      const projectPath = /^\/admin\/projects\/([a-zA-Z0-9_-]{1,64})\/(observations|incidents)$/.exec(req.url ?? '');
+      if (req.method === 'GET' && projectPath) {
+        const table = projectPath[2] === 'observations' ? 'observations' : 'incidents';
+        void db.query(`SELECT * FROM ${table} WHERE project_id=$1 ORDER BY id LIMIT 100`, [projectPath[1]]).then(result => res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(result.rows))).catch(() => res.writeHead(503).end()); return;
+      }
+      if (req.method === 'POST' && req.url === '/admin/projects') {
+        if (req.headers['content-type'] !== 'application/json') { res.writeHead(415).end(); return; }
+        let size = 0, rejected = false; const chunks: Buffer[] = [];
+        req.on('data', (chunk: Buffer) => { size += chunk.length; if (size > 4096) { if (!rejected) res.writeHead(413).end(); rejected = true; chunks.length = 0; } else if (!rejected) chunks.push(chunk); });
+        req.on('end', () => {
+          if (rejected) return;
+          let name: string, origin: string;
+          try {
+            const body: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+            if (!body || typeof body !== 'object' || !('name' in body) || !('origin' in body) || typeof body.name !== 'string' || typeof body.origin !== 'string' || !body.name.trim() || body.name.length > 100) throw Error('invalid');
+            name = body.name.trim(); origin = configuredOrigin(body.origin);
+          } catch { res.writeHead(400).end(); return; }
+          void db.query('INSERT INTO projects(id,name,origin) VALUES($1,$2,$3) RETURNING id,name,origin', [randomUUID(), name, origin]).then(result => res.writeHead(201, { 'Content-Type': 'application/json' }).end(JSON.stringify(result.rows[0]))).catch((error: {code?: string}) => res.writeHead(error.code === '23505' ? 409 : 503).end());
+        }); return;
+      }
+      res.writeHead(404).end(); return;
     }
     if (req.method !== 'POST' || req.url !== '/admin/login') { res.writeHead(404).end(); return; }
     if (now() - windowStart >= 60_000) { attempts = 0; windowStart = now(); }

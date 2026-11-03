@@ -26,7 +26,7 @@ async function stop(child: ChildProcess) {
 test('GS02: browser visits, durable incident and test SMTP alert after restart', { timeout: 90000 }, async () => {
   assert.ok(process.env.TEST_DATABASE_URL, 'TEST_DATABASE_URL required');
   const db = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
-  await db.query(await readFile('infra/001_initial.sql', 'utf8')); await db.query(await readFile('infra/002_alerts.sql', 'utf8'));
+  await db.query(await readFile('infra/001_initial.sql', 'utf8')); await db.query(await readFile('infra/002_alerts.sql', 'utf8')); await db.query(await readFile('infra/003_projects.sql', 'utf8'));
   const project = 'gs02_' + crypto.randomUUID();
   const fixture = createServer(async (req, res) => {
     const html = await readFile(req.url === '/clone' ? 'tests/fixtures/clone.html' : 'tests/fixtures/original.html', 'utf8');
@@ -37,6 +37,8 @@ test('GS02: browser visits, durable incident and test SMTP alert after restart',
   const reserve = createServer(); const smtpPort = await listen(reserve); await new Promise<void>(resolve => reserve.close(() => resolve()));
   const apiPort = 3000;
   const original = 'http://127.0.0.1:' + fixturePort, clone = 'http://localhost:' + fixturePort;
+  await db.query("INSERT INTO incidents(project_id,host) VALUES($1,'legacy.test')", [project]);
+  await db.query("INSERT INTO observations(project_id,host) VALUES($1,'legacy.test')", [project]);
   const start = () => spawn(process.execPath, ['dist/apps/server.js'], { env: {...process.env, DATABASE_URL: process.env.TEST_DATABASE_URL, PROJECT_ID: project, ALLOWED_ORIGIN: original, SMTP_PORT: String(smtpPort), PORT: String(apiPort)}, stdio:['ignore','ignore','inherit'] });
   let app = start();
   const messages: string[] = [];
@@ -47,6 +49,11 @@ test('GS02: browser visits, durable incident and test SMTP alert after restart',
     browser = await chromium.launch({headless:true, args:['--host-resolver-rules=MAP localhost 127.0.0.1']});
     process.stderr.write('GS02: waiting for server\n');
     await until(async () => { try { return (await fetch('http://127.0.0.1:3000/runtime.js')).ok; } catch { return false; } }, 'server');
+    assert.equal((await db.query('SELECT id FROM projects WHERE id=$1 AND origin=$2', [project, original])).rowCount, 1);
+    assert.equal((await db.query("SELECT id FROM incidents WHERE project_id=$1 AND host='legacy.test'", [project])).rowCount, 1);
+    assert.equal((await db.query("SELECT id FROM observations WHERE project_id=$1 AND host='legacy.test'", [project])).rowCount, 1);
+    await db.query("DELETE FROM incidents WHERE project_id=$1 AND host='legacy.test'", [project]);
+    await db.query("DELETE FROM observations WHERE project_id=$1 AND host='legacy.test'", [project]);
     const page = await browser.newPage();
     await page.goto(original + '/original'); await page.waitForTimeout(300);
     assert.equal((await db.query('SELECT id FROM incidents WHERE project_id=$1',[project])).rowCount, 0);
@@ -97,6 +104,7 @@ test('GS02: browser visits, durable incident and test SMTP alert after restart',
       await reconnected.query('DELETE FROM observations WHERE project_id=$1',[project]);
       await reconnected.query('DELETE FROM observation_days WHERE project_id=$1',[project]);
       await reconnected.query('DELETE FROM incidents WHERE project_id=$1',[project]);
+      await reconnected.query('DELETE FROM projects WHERE id=$1',[project]);
       await reconnected.end();
     }
   } finally {

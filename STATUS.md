@@ -5,4 +5,4 @@
 - **Limites:** somente laboratório, exposição pública bloqueada, sem painel e sem dados reais; limite de tentativas é por processo.
 - **Retenção:** observações 7 dias; incidentes inativos e alertas 30 dias, com limpeza durante operação.
 - **Testes:** autenticação e GS02 dependem de PostgreSQL; Chromium e SMTP de teste necessários para GS02 no CI.
-- **Branch:** feat/admin-totp-lab; revisão e CI registrados no PR.
+- **F01 em desenvolvimento:** cadastro local de projetos e isolamento propostos na branch feat/f01-projects-lab; validação integrada, GS02 e revisão independente pendentes.
