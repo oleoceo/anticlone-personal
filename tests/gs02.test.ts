@@ -26,7 +26,7 @@ async function stop(child: ChildProcess) {
 test('GS02: browser visits, durable incident and test SMTP alert after restart', { timeout: 90000 }, async () => {
   assert.ok(process.env.TEST_DATABASE_URL, 'TEST_DATABASE_URL required');
   const db = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
-  await db.query(await readFile('infra/001_initial.sql', 'utf8')); await db.query(await readFile('infra/002_alerts.sql', 'utf8')); await db.query(await readFile('infra/003_projects.sql', 'utf8'));
+  await db.query(await readFile('infra/001_initial.sql', 'utf8')); await db.query(await readFile('infra/002_alerts.sql', 'utf8')); await db.query(await readFile('infra/003_projects.sql', 'utf8')); await db.query(await readFile('infra/004_observation_sources.sql', 'utf8'));
   const project = 'gs02_' + crypto.randomUUID();
   const fixture = createServer(async (req, res) => {
     const html = await readFile(req.url === '/clone' ? 'tests/fixtures/clone.html' : 'tests/fixtures/original.html', 'utf8');
@@ -55,6 +55,15 @@ test('GS02: browser visits, durable incident and test SMTP alert after restart',
     await db.query("DELETE FROM incidents WHERE project_id=$1 AND host='legacy.test'", [project]);
     await db.query("DELETE FROM observations WHERE project_id=$1 AND host='legacy.test'", [project]);
     const page = await browser.newPage();
+    // Install independently of bootstrap; the test fixture remains unchanged for GS02.
+    const both = await browser.newPage();
+    await both.route('**/core.js', route => route.abort());
+    await both.goto(clone + '/clone');
+    await until(async () => (await db.query("SELECT id FROM observations WHERE project_id=$1 AND source='fallback'", [project])).rowCount === 1, 'fallback with blocked core');
+    await both.close();
+    await db.query('DELETE FROM observation_source_days WHERE project_id=$1',[project]);
+    await db.query('DELETE FROM observations WHERE project_id=$1',[project]);
+    await db.query('DELETE FROM incidents WHERE project_id=$1',[project]);
     const loaded: string[] = [];
     page.on('response', response => { if (response.url().endsWith('/runtime.js') || response.url().endsWith('/core.js')) loaded.push(response.url()); });
     const originalObservation = page.waitForResponse(response => response.url().endsWith('/observe'));
@@ -75,6 +84,13 @@ test('GS02: browser visits, durable incident and test SMTP alert after restart',
     await failedCore.locator('a').click();
     assert.ok(failedCore.url().endsWith('/checkout'));
     await failedCore.close();
+    const neither = await browser.newPage();
+    await neither.route('**/core.js', route => route.abort());
+    await neither.route('**/fallback.js', route => route.abort());
+    await neither.goto(original + '/original');
+    await neither.locator('a').click();
+    assert.ok(neither.url().endsWith('/checkout'));
+    await neither.close();
     const failedBackend = await browser.newPage();
     let observationBlocked = false;
     await failedBackend.route('**/observe', route => { observationBlocked = true; return route.abort(); });
@@ -91,9 +107,10 @@ test('GS02: browser visits, durable incident and test SMTP alert after restart',
     await until(async () => (await db.query('SELECT id FROM incidents WHERE project_id=$1',[project])).rowCount === 1, 'incident');
     await until(async () => (await db.query('SELECT attempts FROM alert_outbox a JOIN incidents i ON i.id=a.incident_id WHERE i.project_id=$1 AND attempts>0',[project])).rowCount === 1, 'SMTP failure');
     await page.reload();
+    await until(async () => (await db.query('SELECT id FROM observations WHERE project_id=$1',[project])).rowCount === 2, 'both sources');
     const before = await db.query('SELECT i.host,i.status,a.sent_at FROM incidents i JOIN alert_outbox a ON a.incident_id=i.id WHERE i.project_id=$1',[project]);
     assert.equal(before.rowCount,1); assert.equal(before.rows[0].host,'localhost'); assert.equal(before.rows[0].status,'unverified'); assert.equal(before.rows[0].sent_at,null);
-    assert.equal((await db.query('SELECT id FROM observations WHERE project_id=$1',[project])).rowCount,1);
+    assert.equal((await db.query('SELECT id FROM observations WHERE project_id=$1',[project])).rowCount,2);
     process.stderr.write('GS02: restarting after SMTP failure\n');
     await stop(app); await db.end();
     const reconnected = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
@@ -113,7 +130,7 @@ test('GS02: browser visits, durable incident and test SMTP alert after restart',
       await page.reload(); await page.waitForTimeout(1400);
       assert.equal(messages.length,1); assert.match(messages[0], /Unverified browser claim for host: localhost/);
       assert.equal((await reconnected.query('SELECT id FROM incidents WHERE project_id=$1',[project])).rowCount,1);
-      assert.equal((await reconnected.query('SELECT id FROM observations WHERE project_id=$1',[project])).rowCount,1);
+      assert.equal((await reconnected.query('SELECT id FROM observations WHERE project_id=$1',[project])).rowCount,2);
       const request = (body: string, origin = clone, contentType = 'text/plain') => fetch('http://127.0.0.1:3000/observe',{method:'POST',headers:{origin,'content-type':contentType},body});
       assert.equal((await request('invalid')).status,400);
       assert.equal((await request(clone, original)).status,400);
@@ -131,6 +148,7 @@ test('GS02: browser visits, durable incident and test SMTP alert after restart',
     } finally {
       await stop(app);
       await reconnected.query('DELETE FROM observations WHERE project_id=$1',[project]);
+      await reconnected.query('DELETE FROM observation_source_days WHERE project_id=$1',[project]);
       await reconnected.query('DELETE FROM observation_days WHERE project_id=$1',[project]);
       await reconnected.query('DELETE FROM incidents WHERE project_id=$1',[project]);
       await reconnected.query('DELETE FROM projects WHERE id=$1',[project]);
