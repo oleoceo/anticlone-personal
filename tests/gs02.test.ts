@@ -82,6 +82,16 @@ test('GS02: browser visits, durable incident and test SMTP alert after restart',
     assert.equal((await db.query('SELECT * FROM canary_observations WHERE project_id=$1 AND host=$2', [project, '127.0.0.1'])).rowCount, 1);
     assert.equal((await db.query('SELECT * FROM incidents WHERE project_id=$1', [project])).rowCount, 0);
     await db.query('DELETE FROM canary_observations WHERE project_id=$1', [project]);
+    // Retention and project-scoped limits do not affect another project.
+    const otherProject = project + '_other';
+    await db.query("INSERT INTO canary_observations(project_id,host,source,day,observed_at) VALUES($1,'expired','html_canary',current_date - 8,now()-interval '8 days'),($2,'kept','html_canary',current_date,now())", [project, otherProject]);
+    await until(async () => (await db.query("SELECT * FROM canary_observations WHERE project_id=$1 AND host='expired'", [project])).rowCount === 0, 'canary retention');
+    assert.equal((await db.query('SELECT * FROM canary_observations WHERE project_id=$1', [otherProject])).rowCount, 1);
+    await db.query("INSERT INTO canary_observations(project_id,host,source,day) SELECT $1, 'host' || n, 'html_canary', current_date FROM generate_series(1,1400) n", [project]);
+    await fetch('http://127.0.0.1:3000/canary/css.gif', {headers: {referer:'http://limit.example/'}});
+    assert.equal((await db.query('SELECT * FROM canary_observations WHERE project_id=$1', [project])).rowCount, 1400);
+    assert.equal((await db.query('SELECT * FROM canary_observations WHERE project_id=$1', [otherProject])).rowCount, 1);
+    await db.query('DELETE FROM canary_observations WHERE project_id IN ($1,$2)', [project, otherProject]);
     const page = await browser.newPage();
     // Install independently of bootstrap; the test fixture remains unchanged for GS02.
     const coreOnly = await browser.newPage();
