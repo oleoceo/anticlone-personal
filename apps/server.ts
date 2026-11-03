@@ -5,6 +5,7 @@ import { configuredOrigin, cleanup, observe, observeCanary } from './detection.j
 import { deliverOne } from './alerts.js';
 import { classifyTraffic } from './traffic.js';
 import { entryDecision } from './page-redirect.js';
+import { safeEvaluateRisk, recordRisk } from './risk.js';
 const connectionString = process.env.DATABASE_URL, project = process.env.PROJECT_ID;
 const smtpPort = Number(process.env.SMTP_PORT), port = Number(process.env.PORT ?? 3000);
 if (!connectionString || !project || !/^[a-zA-Z0-9_-]{1,64}$/.test(project) || !Number.isInteger(smtpPort) || smtpPort < 1 || smtpPort > 65535 || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('invalid local test configuration');
@@ -16,6 +17,7 @@ if (legacyOrigin) {
   await pool.query('INSERT INTO projects(id,name,origin) VALUES($1,$1,$2) ON CONFLICT (id) DO NOTHING', [activeProject, legacyOrigin]);
 }
 await pool.query('SELECT project_id, host, day, traffic_class, evidence, certainty, source, observed_at FROM traffic_observation_days LIMIT 0');
+await pool.query('SELECT project_id,host,day,level,evaluator_version,source,reason,confidence,observed_at FROM risk_assessment_days LIMIT 0');
 const projectRow = await pool.query('SELECT origin FROM projects WHERE id=$1', [activeProject]);
 if (projectRow.rowCount !== 1) throw new Error('unknown project');
 const normalizedOrigin = configuredOrigin(projectRow.rows[0].origin);
@@ -27,6 +29,7 @@ const bootstrap = readFileSync('runtime/bootstrap.js');
 const core = readFileSync('runtime/core.js');
 const fallback = readFileSync('runtime/fallback.js');
 let windowStart = Date.now(), count = 0;
+let decisionWindowStart = Date.now(), decisionCount = 0;
 const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*'); res.setHeader('Cache-Control', 'no-store');
   if (req.method === 'GET' && (req.url === '/runtime.js' || req.url === '/core.js' || req.url === '/fallback.js')) {
@@ -44,12 +47,16 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && req.url === '/entry-decision') {
     let origin: string;
     try { origin = configuredOrigin(req.headers.origin ?? ''); } catch { res.writeHead(400).end(); return; }
-    if (!controlledOrigin || origin !== controlledOrigin || origin === normalizedOrigin || process.env.LAB_CONTROLLED_RISK !== 'LOW') { res.writeHead(200, {'Content-Type': 'application/json'}).end(JSON.stringify({action:'OBSERVE_ONLY'})); return; }
-    if (Date.now() - windowStart >= 60_000) { windowStart = Date.now(); count = 0; }
-    if (++count > 60) { res.writeHead(429).end(); return; }
-    void pool.query('SELECT v.version,v.enabled,v.approved_destination FROM active_protection_policies a JOIN protection_policy_versions v ON v.project_id=a.project_id AND v.version=a.version WHERE a.project_id=$1 AND v.stealth=true', [activeProject]).then(result => {
-      res.writeHead(200, {'Content-Type': 'application/json'}).end(JSON.stringify(entryDecision(result.rows[0], normalizedOrigin, origin, controlledOrigin, process.env.LAB_CONTROLLED_RISK)));
-    }).catch(() => res.writeHead(200, {'Content-Type': 'application/json'}).end(JSON.stringify({action:'OBSERVE_ONLY'}))); return;
+    if (Date.now() - decisionWindowStart >= 60_000) { decisionWindowStart = Date.now(); decisionCount = 0; }
+    if (++decisionCount > 60) { res.writeHead(429).end(); return; }
+    void (async () => {
+      const assessment = safeEvaluateRisk(controlledOrigin === origin && origin !== normalizedOrigin && process.env.LAB_CONTROLLED_RISK === 'LOW');
+      if (!assessment) return {action:'OBSERVE_ONLY'};
+      await recordRisk(pool, activeProject, new URL(origin).hostname, assessment);
+      const result = await pool.query('SELECT v.version,v.enabled,v.approved_destination FROM active_protection_policies a JOIN protection_policy_versions v ON v.project_id=a.project_id AND v.version=a.version WHERE a.project_id=$1 AND v.stealth=true', [activeProject]);
+      return entryDecision(result.rows[0], normalizedOrigin, origin, controlledOrigin, assessment.level);
+    })().then(decision => res.writeHead(200, {'Content-Type': 'application/json'}).end(JSON.stringify(decision)))
+      .catch(() => res.writeHead(200, {'Content-Type': 'application/json'}).end(JSON.stringify({action:'OBSERVE_ONLY'}))); return;
   }
   if (req.method !== 'POST' || req.url !== '/observe' && req.url !== '/observe/fallback') { res.writeHead(404).end(); return; }
   if (Date.now() - windowStart >= 60_000) { windowStart = Date.now(); count = 0; }

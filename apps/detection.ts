@@ -14,6 +14,7 @@ export function configuredOrigin(input: string): string {
   return url.origin;
 }
 export async function cleanup(pool: Pool, project: string): Promise<void> {
+  await pool.query("DELETE FROM risk_assessment_days WHERE project_id = $1 AND observed_at < now() - interval '7 days'", [project]);
   await pool.query("DELETE FROM traffic_observation_days WHERE project_id = $1 AND observed_at < now() - interval '7 days'", [project]);
   await pool.query("DELETE FROM canary_observations WHERE project_id = $1 AND observed_at < now() - interval '7 days'", [project]);
   await pool.query("DELETE FROM observations WHERE project_id = $1 AND observed_at < now() - interval '7 days'", [project]);
