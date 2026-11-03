@@ -10,4 +10,4 @@
 
 - **F05 em implementacao:** fallback em laboratorio; GS09 completo depende de canarios e ainda nao foi comprovado.
 
-- **F06/GS09 em andamento:** canarios passivos em laboratorio; validacao depende de CI e revisao independente.
+- **F06/GS09 parciais:** canarios passivos em Chromium no CI 41688461172 (2a73ee8); CSP e outros navegadores pendentes.
