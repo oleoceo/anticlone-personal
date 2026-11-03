@@ -56,6 +56,15 @@ test('GS02: browser visits, durable incident and test SMTP alert after restart',
     await db.query("DELETE FROM observations WHERE project_id=$1 AND host='legacy.test'", [project]);
     const page = await browser.newPage();
     // Install independently of bootstrap; the test fixture remains unchanged for GS02.
+    const coreOnly = await browser.newPage();
+    await coreOnly.route('**/fallback.js', route => route.abort());
+    await coreOnly.goto(clone + '/clone');
+    await until(async () => (await db.query("SELECT id FROM observations WHERE project_id=$1 AND source='core'", [project])).rowCount === 1, 'core only');
+    assert.equal((await db.query("SELECT id FROM observations WHERE project_id=$1 AND source='fallback'", [project])).rowCount, 0);
+    await coreOnly.close();
+    await db.query('DELETE FROM observation_source_days WHERE project_id=$1',[project]);
+    await db.query('DELETE FROM observations WHERE project_id=$1',[project]);
+    await db.query('DELETE FROM incidents WHERE project_id=$1',[project]);
     const both = await browser.newPage();
     await both.route('**/core.js', route => route.abort());
     await both.goto(clone + '/clone');
@@ -108,6 +117,7 @@ test('GS02: browser visits, durable incident and test SMTP alert after restart',
     await until(async () => (await db.query('SELECT attempts FROM alert_outbox a JOIN incidents i ON i.id=a.incident_id WHERE i.project_id=$1 AND attempts>0',[project])).rowCount === 1, 'SMTP failure');
     await page.reload();
     await until(async () => (await db.query('SELECT id FROM observations WHERE project_id=$1',[project])).rowCount === 2, 'both sources');
+    assert.deepEqual((await db.query('SELECT source FROM observations WHERE project_id=$1 ORDER BY source',[project])).rows.map(row => row.source), ['core', 'fallback']);
     const before = await db.query('SELECT i.host,i.status,a.sent_at FROM incidents i JOIN alert_outbox a ON a.incident_id=i.id WHERE i.project_id=$1',[project]);
     assert.equal(before.rowCount,1); assert.equal(before.rows[0].host,'localhost'); assert.equal(before.rows[0].status,'unverified'); assert.equal(before.rows[0].sent_at,null);
     assert.equal((await db.query('SELECT id FROM observations WHERE project_id=$1',[project])).rowCount,2);

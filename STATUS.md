@@ -8,4 +8,4 @@
 - **Testes locais:** lint, typecheck e build passaram; suíte integrada exige PostgreSQL isolado indisponível localmente.
 - **Revisão:** independente, achados de teste corrigidos e reavaliados; PR #7, sem merge ou deploy.
 
-- **F05 em implementa??o:** fallback independente em laborat?rio; GS09 completo depende dos can?rios, sem comprova??o ainda.
+- **F05 em implementacao:** fallback em laboratorio; GS09 completo depende de canarios e ainda nao foi comprovado.
