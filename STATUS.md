@@ -1,5 +1,7 @@
 # STATUS — AntiClone Personal
 
+- **F22 parcial em PR:** âncoras tardias, pop-up e SPA no pathname autorizado em laboratório; GS07/GS10 integrais e formulários pendentes. Teste Chromium/PostgreSQL em `tests/f21.test.ts`; CI e revisão independente ainda pendentes.
+
 - **Estado:** GS02 e GS06 demonstrados em laboratório; detecção experimental.
 - **F01/F34 parciais:** projetos locais e autenticação com TOTP testados; faltam requisitos de produção e auditoria.
 - **F04/F05/F06/F09 parciais:** Core, fallback e canários testados em laboratório; compatibilidade e GS09 completo pendentes.
