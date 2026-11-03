@@ -75,6 +75,12 @@ test('F21: approved static anchors, entry precedence and fail-open in Chromium',
     await page.goto(clone+'/clone'); await page.waitForTimeout(300);
     await page.evaluate(()=>{document.body.insertAdjacentHTML('beforeend','<form data-anticlone-point="form0001" data-cancel-test action="/form-original"><button>Cancelar</button></form>');});
     await page.getByText('Cancelar',{exact:true}).click(); await page.waitForTimeout(100); assert.equal(page.url(),clone+'/clone');
+    await page.evaluate(()=>{document.querySelector('form')!.removeAttribute('data-cancel-test'); addEventListener('submit',event=>event.preventDefault(),{once:true});});
+    await page.getByText('Cancelar',{exact:true}).click(); await page.waitForTimeout(100); assert.equal(page.url(),clone+'/clone');
+    await page.evaluate(()=>{addEventListener('submit',event=>{(event.target as HTMLFormElement).insertAdjacentHTML('beforeend','<input name="late" value="synthetic">');},{once:true});});
+    await page.getByText('Cancelar',{exact:true}).click(); await page.waitForURL(clone+'/form-original?late=synthetic');
+    await page.goto(clone+'/clone'); await page.waitForTimeout(300);
+    await page.evaluate(()=>{document.body.insertAdjacentHTML('beforeend','<form data-anticlone-point="form0001" action="/form-original"><button>Cancelar</button></form>');});
     await page.evaluate(()=>{const f=document.querySelector('form')!; f.removeAttribute('data-cancel-test'); f.dispatchEvent(new Event('submit',{bubbles:true}));});
     await page.waitForTimeout(100); assert.equal(page.url(),clone+'/clone');
     await page.evaluate(()=>{document.head.insertAdjacentHTML('beforeend','<base target="_blank">');});
