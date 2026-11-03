@@ -63,7 +63,10 @@ test('GS02: browser visits, durable incident and test SMTP alert after restart',
     const reconnected = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
     try {
       smtp = new SMTPServer({ authOptional:true, disabledCommands:['STARTTLS','AUTH'], onData(stream, _session, callback) { let message=''; stream.on('data', chunk => { message += String(chunk); }); stream.on('end', () => { messages.push(message); callback(); }); } });
-      smtp.listen(smtpPort, '127.0.0.1'); await once(smtp, 'listening');
+      await new Promise<void>((resolve, reject) => {
+        smtp!.once('error', reject);
+        smtp!.listen(smtpPort, '127.0.0.1', resolve);
+      });
       await reconnected.query(`UPDATE alert_outbox SET next_attempt=now() WHERE incident_id IN (SELECT id FROM incidents WHERE project_id=$1)`,[project]);
       app = start();
       await until(async () => { try { return (await fetch('http://127.0.0.1:3000/runtime.js')).ok; } catch { return false; } }, 'restart');
