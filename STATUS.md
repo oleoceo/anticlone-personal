@@ -1,9 +1,10 @@
 # STATUS — AntiClone Personal
 
 - **Estado:** bootstrap documental; implementação NÃO iniciada neste kit.
-- **Escopo:** matriz v0.1 e Blueprint; conferir com as referências SaaS antes da primeira feature.
+- **Escopo:** auditoria documental da matriz e Blueprint frente às referências históricas disponíveis.
 - **Entrega corrente:** A — detecção de cópia simulada, incidente durável, alerta deduplicado.
 - **Próxima capacidade:** bootstrap repo + contratos mínimos; depois primeiro fluxo vertical testável.
-- **Bloqueios:** dependem de acesso aos arquivos de referência e credenciais do ambiente local; ainda não verificados.
+- **Bloqueios:** nenhum para a auditoria documental; credenciais de ambientes de implementação não verificadas.
 - **Último teste:** somente validação estática do kit; aplicação, banco e VPS NÃO testados.
-- **PR/branch:** ainda não criado.
+- **PR/branch:** audit/functional-definitive; PR e CI consultados fora deste arquivo.
+- **Auditoria documental:** F01–F40 conferidas; F41–F45 planejadas, com fontes e GS17–GS21. Nenhuma capacidade foi validada em execução.

@@ -1,6 +1,6 @@
 # Matriz de Cobertura Funcional — AntiClone Personal
 
-**Estado:** cobertura inicial **de especificação**, NÃO código implementado e NÃO auditoria final exaustiva. Revisar com os documentos do SaaS antes do primeiro slice e registrar lacunas; não criar novo cronograma.
+**Estado:** cobertura documental F01–F40 **AUDITADA** nas fontes temáticas consultadas; F41–F45 registram lacunas. Não é código implementado nem prova de comportamento; a auditoria não garante exaustividade.
 
 Legenda: **P** = planejada no Personal; **V** = validada por teste; **B** = bloqueada com explicação. Inicialmente tudo está `P`. Cada `Fxx` só vira `V` depois de evidência de teste, não por texto ou interface.
 
@@ -46,6 +46,18 @@ Legenda: **P** = planejada no Personal; **V** = validada por teste; **B** = bloq
 | F38 | Backups, recuperação e deploy/rollback verificados | 36-BACKUP-DISASTER-RECOVERY, 38-CI-CD-MIGRATIONS-RELEASE | GS16 | P |
 | F39 | Testes navegador e performance reais, sem números inventados | 27-COMPATIBILITY-MATRIX, 28-PERFORMANCE-BUDGETS-BENCHMARKS | GS10, GS16 | P |
 | F40 | Um painel responsivo de projetos, proteção, conversões e incidentes | 12-MVP-SCOPE, 39-INFORMATION-ARCHITECTURE | GS16 | P |
+| F41 | Identidade de CTA por marcador estável ou correspondência estrutural com confiança; candidato novo ou incerto exige revisão antes de substituir | 26-CONVERSION-SURFACES-DRIFT §§3, 12, 23 | GS17 | P |
+| F42 | Propagação configurável de atribuição por allowlist nos destinos de página e CTA, sem repasse arbitrário de parâmetros | 20-POLICY-ENGINE §13, 26-CONVERSION-SURFACES-DRIFT §17 | GS18 | P |
+| F43 | Política publicada versionada e determinística: precedência de stealth/segurança, fases de entrada e interação e rejeição de conflitos ambíguos | 20-POLICY-ENGINE §§4, 8–9, 14, 18 | GS19 | P |
+| F44 | Correlacionar ausência do Core com sinais independentes ainda observados, registrando possível degradação ou adulteração sem tratá-la como certeza | 23-RUNTIME-PROTOCOL §14, 25-INCIDENT-EVIDENCE-MODEL §§2, 11.5 | GS20 | P |
+| F45 | Alertas de instalação inativa quando habilitados e de falha operacional, com deduplicação, retry e histórico | Blueprint §2; 31-NOTIFICATIONS-EMAIL-TEMPLATES | GS21 | P |
+
+### Rastreio da auditoria documental
+
+- F01–F10: instalação e redundância — 12-MVP-SCOPE, 23-RUNTIME-PROTOCOL, 24-EDGE-DELIVERY-NETWORK e 02- Observacoes Tecnicas; degradação correlacionada acrescentada em F44.
+- F11–F18: evidências, risco e política — 20-POLICY-ENGINE, 21-EVENT-MODEL, 25-INCIDENT-EVIDENCE-MODEL e 00- O anticlone; precedência esclarecida em F43 e D05–D06.
+- F19–F27: conversões e alertas — 26-CONVERSION-SURFACES-DRIFT, 31-NOTIFICATIONS-EMAIL-TEMPLATES e 00- O anticlone; identidade, atribuição e saúde acrescentadas em F41, F42 e F45.
+- F28–F40: evidências, métricas, segurança e operação — 22-METRIC-DICTIONARY, 25-INCIDENT-EVIDENCE-MODEL, 16-SECURITY-PRINCIPLES, 33-INTEGRATIONS-WEBHOOKS-ADAPTIVE-MAPPING, 34-PRIVACY-DATA-RETENTION e Blueprint. A comparação é temática, não uma revisão integral de cada especificação histórica.
 
 ## Fora do Personal (por decisão de produto, não por perda de função de proteção)
 

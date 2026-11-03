@@ -20,5 +20,10 @@ Todos usam **ambientes, cópias simuladas e domínios autorizados** sob controle
 | GS14 | Cliques/handoffs não são vendas; receita estimada distinta de webhook de venda verificada; webhook duplicado idempotente. |
 | GS15 | Pausa, arquivamento e retenção: histórico mantido corretamente e dados sensíveis expiram. |
 | GS16 | Dois projetos isolados logicamente, login/MFA, backup restaurável e deploy/rollback com smoke test. |
+| GS17 | Dois CTAs com texto igual permanecem distintos; alteração de texto preserva identidade válida; candidato novo ou de baixa confiança não é substituído automaticamente. |
+| GS18 | Em redirecionamento de página e CTA, somente parâmetros de atribuição configurados e permitidos chegam ao destino; parâmetros arbitrários não são repassados. |
+| GS19 | Com stealth ativo e risco alto ou incerto, a mitigação visível é suprimida mesmo com atribuição paga; entrada e interação usam suas fases, versões publicadas são imutáveis e conflito ambíguo impede publicação. |
+| GS20 | Em cópia autorizada, Core interrompido enquanto fallback ou canário ainda envia sinal produz registro de possível degradação com fonte e horário; ausência de todos os sinais permanece desconhecida. |
+| GS21 | Com alerta de inatividade habilitado, ausência de sinais além do prazo configurado e falha operacional geram alertas rastreáveis, com deduplicação, retry e histórico; retomada e nova falha são registradas. |
 
 É proibido substituir teste real por mock no lugar de teste de integração/E2E exigido. Mocks são permitidos somente em camadas unitárias apropriadas.
