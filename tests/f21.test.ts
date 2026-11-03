@@ -63,7 +63,7 @@ test('F21: approved static anchors, entry precedence and fail-open in Chromium',
       await page.getByText('Enviar',{exact:true}).click(); await page.waitForURL(expected);
       assert.equal(backgroundRequests.length,before);
     };
-    await form('method="get"','',clone+'/form-original');
+    await form('method="get"','',clone+'/form-original?');
     await form('method="get"','<input name="test" value="synthetic">',clone+'/form-original?test=synthetic');
     await form('method="post"','',clone+'/form-original');
     await page.goto(clone+'/clone'); await page.waitForTimeout(300);
