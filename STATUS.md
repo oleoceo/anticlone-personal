@@ -1,6 +1,6 @@
 # STATUS — AntiClone Personal
 
-- **F22 formulários em desenvolvimento:** GET sem campos nomeados em laboratório; teste focal em `tests/f21.test.ts`. Revisão independente mantém P2 para handler registrado durante propagação do submit; manter PR em rascunho, GS07/GS10 pendentes.
+- **F22 formulários suspensos (D07):** P2 residual reproduzido em Chromium; interceptação removida, envio nativo preservado. Regressão Chromium, lint, typecheck e build passaram; revisão Codex read-only sem P0/P1/P2. CI final registrada no PR #18; GS07/GS10 completos pendentes.
 
 - **F22 parcial em PR:** âncoras tardias, pop-up e SPA no pathname autorizado em laboratório; GS07/GS10 integrais e formulários pendentes. Chromium/PostgreSQL em `tests/f21.test.ts`; revisão Codex independente sem P0/P1/P2 após correções; CI final pendente.
 

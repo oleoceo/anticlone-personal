@@ -48,31 +48,7 @@
               setTimeout(() => node.removeEventListener('click', activate, true), 0);
             } catch (_) { /* Preserve the page on incompatible DOM implementations. */ }
           }, {capture:true});
-          document.addEventListener('submit', event => {
-            try {
-              const form = event.target;
-              if (!(form instanceof HTMLFormElement)) return;
-              const activate = currentEvent => {
-                if (currentEvent !== event) return;
-                try {
-                  const target = form.getAttribute('target') ?? document.querySelector('base[target]')?.getAttribute('target') ?? '';
-                  if (!event.isTrusted || !event.cancelable || event.defaultPrevented || location.pathname !== decision.pathname || !form.isConnected || !form.hasAttribute('action') || form.method.toLowerCase() !== 'get' || (target && target.toLowerCase() !== '_self')) return;
-                  const submitter = event.submitter;
-                  if (submitter && (submitter.hasAttribute('formaction') || submitter.hasAttribute('formmethod') || submitter.hasAttribute('formtarget') || submitter.hasAttribute('name'))) return;
-                  if (Array.from(form.elements).some(element => element.hasAttribute('name'))) return;
-                  const marker = form.getAttribute('data-anticlone-point');
-                  const mapping = mappings.get(marker);
-                  if (!mapping || mapping.kind !== 'form') return;
-                  const current = Array.from(document.querySelectorAll('[data-anticlone-point]'));
-                  if (current.length > 1000 || current.filter(item => item.getAttribute('data-anticlone-point') === marker).length !== 1) return;
-                  event.preventDefault();
-                  location.assign(mapping.destination);
-                } catch (_) { /* Keep original submission. */ }
-              };
-              addEventListener('submit', activate, {once:true});
-              setTimeout(() => removeEventListener('submit', activate), 0);
-            } catch (_) { /* Keep original submission. */ }
-          }, {capture:true});
+          // Preserve native form submission until cancellation and data safety can be guaranteed.
         };
         if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', install, {once:true}); else install();
       } catch (_) { /* Keep original links. */ }
