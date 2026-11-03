@@ -9,4 +9,4 @@
 - **Retenção:** observações 7 dias; incidentes inativos e alertas 30 dias.
 - **Revisão e CI:** revisão independente sem P0/P1 para laboratório; PR #12: CI 41702201540 aprovado no commit do PR; merge 92f38c0; credencial privilegiada PostgreSQL permanece confiável.
 
-- **F13/F14 em desenvolvimento:** avaliador conservador de laboratorio e OBSERVE_ONLY; GS05 integral e classificador operacional pendentes. CI e revisao final desta branch pendentes.
+- **F13/F14 em desenvolvimento:** avaliador conservador de laboratorio e OBSERVE_ONLY; GS05 integral e classificador operacional pendentes. Revisao independente sem P0/P1 para laboratorio, condicionada ao CI verde; conferir checks do PR no commit final.
