@@ -10,7 +10,7 @@ import { createAdminServer } from '../apps/admin-auth.js';
 
 test('policy publication and activation require the existing admin session', async () => {
   const db = new Pool({connectionString:process.env.TEST_DATABASE_URL});
-  for (const file of ['001_initial','002_alerts','003_projects','007_protection_policy']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
+  for (const file of ['001_initial','002_alerts','003_projects','007_protection_policy','010_policy_allocation']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
   await db.query('CREATE TABLE IF NOT EXISTS admin_totp_replay (factor_id text PRIMARY KEY, last_counter bigint NOT NULL)');
   await db.query('CREATE TABLE IF NOT EXISTS admin_totp_codes (factor_id text NOT NULL, digest text NOT NULL, valid_until bigint NOT NULL, PRIMARY KEY (factor_id, digest))');
   const secret='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', salt='0123456789abcdef0123456789abcdef';
@@ -27,7 +27,7 @@ test('policy publication and activation require the existing admin session', asy
     for (const part of ['draft','publish','activate']) assert.equal((await post(part,{})).status,401);
     const login=await fetch(`${base}/admin/login`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:'password',code:new TOTP({secret:Secret.fromBase32(secret)}).generate()})});
     assert.equal(login.status,200); const {token}=await login.json() as {token:string};
-    assert.equal((await post('draft',{enabled:true,approved_destination:origin+'/ok',stealth:true},token)).status,200);
+    assert.equal((await post('draft',{enabled:true,approved_destination:origin+'/ok',stealth:true,allocation:{PAID_ATTRIBUTED:100,ORGANIC:100,REFERRAL:100,DIRECT_UNKNOWN:100}},token)).status,200);
     assert.equal((await post('publish',{},token)).status,200);
     assert.equal((await post('activate',{version:1},token)).status,200);
     assert.equal((await post('activate',{version:999},token)).status,400);

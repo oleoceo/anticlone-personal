@@ -44,19 +44,26 @@ const server = http.createServer((req, res) => {
       res.writeHead(200, { 'Content-Type': 'image/gif' }).end(Buffer.from('R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==', 'base64'));
     }).catch(() => res.writeHead(503).end()); return;
   }
-  if (req.method === 'GET' && req.url === '/entry-decision') {
+  if (req.method === 'POST' && req.url === '/entry-decision') {
     let origin: string;
     try { origin = configuredOrigin(req.headers.origin ?? ''); } catch { res.writeHead(400).end(); return; }
     if (Date.now() - decisionWindowStart >= 60_000) { decisionWindowStart = Date.now(); decisionCount = 0; }
     if (++decisionCount > 60) { res.writeHead(429).end(); return; }
+    if (!/^text\/plain(?:\s*;|$)/i.test(req.headers['content-type'] ?? '')) { res.writeHead(415).end(); return; }
+    let body = ''; let rejected = false;
+    req.on('data', (chunk: Buffer) => { if (rejected) return; body += chunk.toString('utf8'); if (body.length > 2048) { rejected = true; body = ''; res.writeHead(413).end(); } });
+    req.on('end', () => {
+    if (rejected) return;
+    let session: unknown; let trafficClass: string;
+    try { const input: unknown = JSON.parse(body); if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).sort().join(',') !== 'session,signals') throw Error('invalid'); const fields = input as Record<string, unknown>; session = fields.session; trafficClass = classifyTraffic(fields.signals, origin).trafficClass; } catch { res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify({action:'OBSERVE_ONLY'})); return; }
     void (async () => {
       const assessment = safeEvaluateRisk(controlledOrigin === origin && origin !== normalizedOrigin && process.env.LAB_CONTROLLED_RISK === 'LOW');
       if (!assessment) return {action:'OBSERVE_ONLY'};
       await recordRisk(pool, activeProject, new URL(origin).hostname, assessment);
-      const result = await pool.query('SELECT v.version,v.enabled,v.approved_destination FROM active_protection_policies a JOIN protection_policy_versions v ON v.project_id=a.project_id AND v.version=a.version WHERE a.project_id=$1 AND v.stealth=true', [activeProject]);
-      return entryDecision(result.rows[0], normalizedOrigin, origin, controlledOrigin, assessment.level);
+      const result = await pool.query('SELECT v.version,v.enabled,v.approved_destination,v.allocation FROM active_protection_policies a JOIN protection_policy_versions v ON v.project_id=a.project_id AND v.version=a.version WHERE a.project_id=$1 AND v.stealth=true', [activeProject]);
+      return entryDecision(result.rows[0], normalizedOrigin, origin, controlledOrigin, assessment.level, session, trafficClass);
     })().then(decision => res.writeHead(200, {'Content-Type': 'application/json'}).end(JSON.stringify(decision)))
-      .catch(() => res.writeHead(200, {'Content-Type': 'application/json'}).end(JSON.stringify({action:'OBSERVE_ONLY'}))); return;
+      .catch(() => res.writeHead(200, {'Content-Type': 'application/json'}).end(JSON.stringify({action:'OBSERVE_ONLY'}))); }); return;
   }
   if (req.method !== 'POST' || req.url !== '/observe' && req.url !== '/observe/fallback') { res.writeHead(404).end(); return; }
   if (Date.now() - windowStart >= 60_000) { windowStart = Date.now(); count = 0; }
