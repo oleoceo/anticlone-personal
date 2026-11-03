@@ -18,6 +18,7 @@
   "type": "module",
   "dependencies": {
     "nodemailer": "^10.3.1",
+    "otpauth": "^9.6.0",
     "pg": "^8.23.1"
   },
   "devDependencies": {
