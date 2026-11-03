@@ -17,7 +17,7 @@ async function until(fn: () => Promise<boolean>, label: string) {
   while (Date.now() < end) { if (await fn()) return; await new Promise(resolve => setTimeout(resolve, 100)); }
   throw Error('timeout: ' + label);
 }
-async function stop(child: ChildProcess) { if (child.exitCode !== null) return; child.kill('SIGTERM'); await once(child, 'exit'); }
+async function stop(child: ChildProcess) { if (child.exitCode !== null || child.signalCode !== null) return; child.kill('SIGTERM'); await once(child, 'exit'); }
 
 test('GS02: browser visits, durable incident and test SMTP alert after restart', { timeout: 90000 }, async () => {
   assert.ok(process.env.TEST_DATABASE_URL, 'TEST_DATABASE_URL required');
