@@ -5,6 +5,7 @@ import { configuredOrigin, cleanup, observe, observeCanary } from './detection.j
 import { deliverOne } from './alerts.js';
 import { classifyTraffic } from './traffic.js';
 import { entryDecision } from './page-redirect.js';
+import { ctaDecision } from './cta-policy.js';
 import { safeEvaluateRisk, recordRisk } from './risk.js';
 const connectionString = process.env.DATABASE_URL, project = process.env.PROJECT_ID;
 const smtpPort = Number(process.env.SMTP_PORT), port = Number(process.env.PORT ?? 3000);
@@ -61,7 +62,9 @@ const server = http.createServer((req, res) => {
       if (!assessment) return {action:'OBSERVE_ONLY'};
       await recordRisk(pool, activeProject, new URL(origin).hostname, assessment);
       const result = await pool.query('SELECT v.version,v.enabled,v.approved_destination,v.allocation FROM active_protection_policies a JOIN protection_policy_versions v ON v.project_id=a.project_id AND v.version=a.version WHERE a.project_id=$1 AND v.stealth=true', [activeProject]);
-      return entryDecision(result.rows[0], normalizedOrigin, origin, controlledOrigin, assessment.level, session, trafficClass);
+      const entry = entryDecision(result.rows[0], normalizedOrigin, origin, controlledOrigin, assessment.level, session, trafficClass);
+      if (entry.action === 'PAGE_REDIRECT') return entry;
+      return ctaDecision(pool, activeProject, normalizedOrigin, origin, controlledOrigin, assessment.level, session, trafficClass);
     })().then(decision => res.writeHead(200, {'Content-Type': 'application/json'}).end(JSON.stringify(decision)))
       .catch(() => res.writeHead(200, {'Content-Type': 'application/json'}).end(JSON.stringify({action:'OBSERVE_ONLY'}))); }); return;
   }

@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { configuredOrigin } from './detection.js';
 import { activatePolicy, saveDraft } from './protection-policy.js';
 import { importInventory, approveDestination, mapPoint } from './cta-inventory.js';
+import { publishCtaPolicy } from './cta-policy.js';
 
 // Laboratory-only: one process, one owner, ephemeral sessions and rate limit.
 export function createAdminServer(passwordRecord: string, totpSecret: string, db: Pool, now: () => number = Date.now) {
@@ -38,7 +39,7 @@ export function createAdminServer(passwordRecord: string, totpSecret: string, db
         const table = projectPath[2] === 'observations' ? 'observations' : 'incidents';
         void db.query(`SELECT * FROM ${table} WHERE project_id=$1 ORDER BY id LIMIT 100`, [projectPath[1]]).then(result => res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(result.rows))).catch(() => res.writeHead(503).end()); return;
       }
-      const ctaPath = /^\/admin\/projects\/([a-zA-Z0-9_-]{1,64})\/cta(?:\/(inventory|destinations|mappings))?$/.exec(req.url ?? '');
+      const ctaPath = /^\/admin\/projects\/([a-zA-Z0-9_-]{1,64})\/cta(?:\/(inventory|destinations|mappings|policy))?$/.exec(req.url ?? '');
       if (ctaPath && req.method === 'GET' && !ctaPath[2]) {
         void db.query(`SELECT p.id,p.surface,p.marker,p.kind,p.offer,p.review_required,o.evidence,o.confidence,o.observed_url,o.observed_at,m.destination_id,d.url AS approved_url,
           COALESCE(s.suggestions,ARRAY[]::uuid[]) AS structural_candidates
@@ -63,7 +64,7 @@ export function createAdminServer(passwordRecord: string, totpSecret: string, db
         req.on('end', () => {
           if (rejected) return;
           let body: unknown; try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { res.writeHead(400).end(); return; }
-          const operation = ctaPath[2] === 'inventory' ? importInventory(db,ctaPath[1],body).then(() => ({})) : ctaPath[2] === 'destinations' ? approveDestination(db,ctaPath[1],body) : mapPoint(db,ctaPath[1],body).then(() => ({}));
+          const operation = ctaPath[2] === 'policy' ? publishCtaPolicy(db,ctaPath[1],body).then(version => ({version})) : ctaPath[2] === 'inventory' ? importInventory(db,ctaPath[1],body).then(() => ({})) : ctaPath[2] === 'destinations' ? approveDestination(db,ctaPath[1],body) : mapPoint(db,ctaPath[1],body).then(() => ({}));
           void operation.then(result => res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error: Error & {code?: string}) => res.writeHead(error instanceof TypeError || !error.code ? 400 : 503).end());
         }); return;
       }
