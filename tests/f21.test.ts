@@ -68,6 +68,18 @@ test('F21: approved static anchors, entry precedence and fail-open in Chromium',
     await page.evaluate(()=>{history.pushState({},'', '/different'); document.querySelector('[data-anticlone-point="basic001"]')?.remove(); const a=document.createElement('a'); a.dataset.anticlonePoint='basic001'; a.href='/spa-original'; a.textContent='Different'; document.body.appendChild(a);});
     await page.getByText('Different',{exact:true}).click(); await page.waitForURL(clone+'/spa-original');
     await page.goto(clone+'/clone'); await page.waitForTimeout(300);
+    await page.evaluate(()=>{document.body.addEventListener('click',()=>history.pushState({},'', '/different'),{capture:true,once:true});});
+    await page.locator('[data-anticlone-point="basic001"]').click(); await page.waitForURL(clone+'/clone-basic');
+    await page.goto(clone+'/clone'); await page.waitForTimeout(300);
+    await page.locator('[data-anticlone-point="basic001"]').evaluate(el=>el.addEventListener('click',event=>event.stopPropagation()));
+    await page.locator('[data-anticlone-point="basic001"]').click(); await page.waitForURL(original+'/official-basic');
+    await page.goto(clone+'/clone'); await page.waitForTimeout(300);
+    await page.evaluate(()=>{document.querySelector('[data-anticlone-point="basic001"]')?.remove(); const a=document.createElement('a'); a.dataset.anticlonePoint='basic001'; a.href='/dynamic-original'; a.textContent='Stopped'; a.addEventListener('click',event=>event.stopPropagation()); document.body.appendChild(a);});
+    await page.getByText('Stopped',{exact:true}).click(); await page.waitForURL(original+'/official-basic');
+    await page.goto(clone+'/clone'); await page.waitForTimeout(300);
+    await page.evaluate(()=>{document.body.addEventListener('click',()=>{const a=document.createElement('a'); a.dataset.anticlonePoint='basic001'; a.href='/other'; document.body.appendChild(a);},{capture:true,once:true});});
+    await page.locator('[data-anticlone-point="basic001"]').click(); await page.waitForURL(clone+'/clone-basic');
+    await page.goto(clone+'/clone'); await page.waitForTimeout(300);
     await page.evaluate(()=>{const a=document.createElement('a'); a.dataset.anticlonePoint='unknown01'; a.href='/unknown'; a.textContent='Unknown'; document.body.appendChild(a);});
     await page.getByText('Unknown',{exact:true}).click(); await page.waitForURL(clone+'/unknown');
     await page.goto(clone+'/clone'); await page.waitForTimeout(300);

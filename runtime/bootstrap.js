@@ -27,17 +27,25 @@
           if (interacted || location.pathname !== decision.pathname) return;
           document.addEventListener('click', event => {
             try {
-              if (location.pathname !== decision.pathname || !(event.target instanceof Element)) return;
+              if (!(event.target instanceof Element)) return;
               const node = event.target.closest('a[data-anticlone-point][href]');
               if (!node || !node.isConnected) return;
-              const marker = node.getAttribute('data-anticlone-point');
-              if (!mappings.has(marker)) return;
-              const current = Array.from(document.querySelectorAll('[data-anticlone-point]'));
-              if (current.length > 1000 || current.filter(item => item.getAttribute('data-anticlone-point') === marker).length !== 1) return;
-              const previous = node.getAttribute('href');
-              const replacement = mappings.get(marker);
-              node.setAttribute('href', replacement);
-              setTimeout(() => { if (node.getAttribute('href') === replacement) node.setAttribute('href', previous); }, 0);
+              const activate = currentEvent => {
+                if (currentEvent !== event) return;
+                try {
+                  if (event.defaultPrevented || location.pathname !== decision.pathname || !node.isConnected || !node.hasAttribute('href')) return;
+                  const marker = node.getAttribute('data-anticlone-point');
+                  if (!mappings.has(marker)) return;
+                  const current = Array.from(document.querySelectorAll('[data-anticlone-point]'));
+                  if (current.length > 1000 || current.filter(item => item.getAttribute('data-anticlone-point') === marker).length !== 1) return;
+                  const previous = node.getAttribute('href');
+                  const replacement = mappings.get(marker);
+                  node.setAttribute('href', replacement);
+                  setTimeout(() => { if (node.getAttribute('href') === replacement) node.setAttribute('href', previous); }, 0);
+                } catch (_) { /* Preserve the page on incompatible DOM implementations. */ }
+              };
+              node.addEventListener('click', activate, {capture:true, once:true});
+              setTimeout(() => node.removeEventListener('click', activate, true), 0);
             } catch (_) { /* Preserve the page on incompatible DOM implementations. */ }
           }, {capture:true});
         };
