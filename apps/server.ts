@@ -1,7 +1,7 @@
 import http from 'node:http';
 import { readFileSync } from 'node:fs';
 import { Pool } from 'pg';
-import { configuredOrigin, cleanup, observe } from './detection.js';
+import { configuredOrigin, cleanup, observe, observeCanary } from './detection.js';
 import { deliverOne } from './alerts.js';
 const connectionString = process.env.DATABASE_URL, project = process.env.PROJECT_ID;
 const smtpPort = Number(process.env.SMTP_PORT), port = Number(process.env.PORT ?? 3000);
@@ -26,6 +26,14 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && (req.url === '/runtime.js' || req.url === '/core.js' || req.url === '/fallback.js')) {
     res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
     res.end(req.url === '/runtime.js' ? bootstrap : req.url === '/core.js' ? core : fallback); return;
+  }
+  if (req.method === 'GET' && (req.url === '/canary/html.gif' || req.url === '/canary/css.gif')) {
+    if (Date.now() - windowStart >= 60_000) { windowStart = Date.now(); count = 0; }
+    if (++count > 60) { res.writeHead(429).end(); return; }
+    const source = req.url === '/canary/html.gif' ? 'html_canary' : 'css_canary';
+    void observeCanary(pool, activeProject, req.headers.referer, source).then(() => {
+      res.writeHead(200, { 'Content-Type': 'image/gif' }).end(Buffer.from('R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==', 'base64'));
+    }).catch(() => res.writeHead(503).end()); return;
   }
   if (req.method !== 'POST' || req.url !== '/observe' && req.url !== '/observe/fallback') { res.writeHead(404).end(); return; }
   if (Date.now() - windowStart >= 60_000) { windowStart = Date.now(); count = 0; }

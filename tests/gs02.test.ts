@@ -26,7 +26,7 @@ async function stop(child: ChildProcess) {
 test('GS02: browser visits, durable incident and test SMTP alert after restart', { timeout: 90000 }, async () => {
   assert.ok(process.env.TEST_DATABASE_URL, 'TEST_DATABASE_URL required');
   const db = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
-  await db.query(await readFile('infra/001_initial.sql', 'utf8')); await db.query(await readFile('infra/002_alerts.sql', 'utf8')); await db.query(await readFile('infra/003_projects.sql', 'utf8')); await db.query(await readFile('infra/004_observation_sources.sql', 'utf8'));
+  await db.query(await readFile('infra/001_initial.sql', 'utf8')); await db.query(await readFile('infra/002_alerts.sql', 'utf8')); await db.query(await readFile('infra/003_projects.sql', 'utf8')); await db.query(await readFile('infra/004_observation_sources.sql', 'utf8')); await db.query(await readFile('infra/005_canaries.sql', 'utf8'));
   const project = 'gs02_' + crypto.randomUUID();
   const fixture = createServer(async (req, res) => {
     const html = await readFile(req.url === '/clone' ? 'tests/fixtures/clone.html' : 'tests/fixtures/original.html', 'utf8');
@@ -54,6 +54,34 @@ test('GS02: browser visits, durable incident and test SMTP alert after restart',
     assert.equal((await db.query("SELECT id FROM observations WHERE project_id=$1 AND host='legacy.test'", [project])).rowCount, 1);
     await db.query("DELETE FROM incidents WHERE project_id=$1 AND host='legacy.test'", [project]);
     await db.query("DELETE FROM observations WHERE project_id=$1 AND host='legacy.test'", [project]);
+    // Canary-only requests remain passive and carry an untrusted Referer claim.
+    for (const available of ['both', 'html', 'css', 'none']) {
+      await db.query('DELETE FROM canary_observations WHERE project_id=$1', [project]);
+      const passive = await browser.newPage();
+      await passive.route('**/runtime.js', route => route.abort());
+      await passive.route('**/fallback.js', route => route.abort());
+      if (available === 'css' || available === 'none') await passive.route('**/canary/html.gif', route => route.abort());
+      if (available === 'html' || available === 'none') await passive.route('**/canary/css.gif', route => route.abort());
+      await passive.goto(clone + '/clone');
+      const expected = available === 'both' ? 2 : available === 'none' ? 0 : 1;
+      if (expected) await until(async () => (await db.query('SELECT * FROM canary_observations WHERE project_id=$1', [project])).rowCount === expected, available);
+      await passive.locator('a').click(); assert.ok(passive.url().endsWith('/checkout'));
+      await passive.close();
+      const signals = await db.query('SELECT host,source FROM canary_observations WHERE project_id=$1 ORDER BY source', [project]);
+      assert.equal(signals.rowCount, expected);
+      assert.ok(signals.rows.every(row => row.host === 'localhost'));
+      if (available === 'html') assert.equal(signals.rows[0].source, 'html_canary');
+      if (available === 'css') assert.equal(signals.rows[0].source, 'css_canary');
+      assert.equal((await db.query('SELECT id FROM incidents WHERE project_id=$1', [project])).rowCount, 0);
+    }
+    await db.query('DELETE FROM canary_observations WHERE project_id=$1', [project]);
+    await fetch('http://127.0.0.1:3000/canary/html.gif');
+    await fetch('http://127.0.0.1:3000/canary/html.gif', {headers: {referer:'invalid'}});
+    assert.equal((await db.query("SELECT * FROM canary_observations WHERE project_id=$1 AND host=''", [project])).rowCount, 1);
+    await fetch('http://127.0.0.1:3000/canary/css.gif', {headers: {referer: original + '/ambiguous'}});
+    assert.equal((await db.query('SELECT * FROM canary_observations WHERE project_id=$1 AND host=$2', [project, '127.0.0.1'])).rowCount, 1);
+    assert.equal((await db.query('SELECT * FROM incidents WHERE project_id=$1', [project])).rowCount, 0);
+    await db.query('DELETE FROM canary_observations WHERE project_id=$1', [project]);
     const page = await browser.newPage();
     // Install independently of bootstrap; the test fixture remains unchanged for GS02.
     const coreOnly = await browser.newPage();
@@ -78,6 +106,7 @@ test('GS02: browser visits, durable incident and test SMTP alert after restart',
     const originalObservation = page.waitForResponse(response => response.url().endsWith('/observe'));
     await page.goto(original + '/original');
     assert.equal((await originalObservation).status(), 204);
+    await until(async () => (await db.query("SELECT * FROM canary_observations WHERE project_id=$1 AND host='127.0.0.1'", [project])).rowCount === 2, 'original canaries');
     await until(async () => loaded.some(url => url.endsWith('/core.js')), 'core loaded');
     assert.ok(loaded.some(url => url.endsWith('/runtime.js')));
     assert.equal(await page.locator('h1').textContent(), 'Site original controlado');
@@ -119,6 +148,8 @@ test('GS02: browser visits, durable incident and test SMTP alert after restart',
     await until(async () => (await db.query('SELECT id FROM observations WHERE project_id=$1',[project])).rowCount === 2, 'both sources');
     assert.deepEqual((await db.query('SELECT source FROM observations WHERE project_id=$1 ORDER BY source',[project])).rows.map(row => row.source), ['core', 'fallback']);
     const before = await db.query('SELECT i.host,i.status,a.sent_at FROM incidents i JOIN alert_outbox a ON a.incident_id=i.id WHERE i.project_id=$1',[project]);
+    await until(async () => (await db.query("SELECT * FROM canary_observations WHERE project_id=$1 AND host='localhost'", [project])).rowCount === 2, 'combined canaries');
+    assert.deepEqual((await db.query("SELECT source FROM canary_observations WHERE project_id=$1 AND host='localhost' ORDER BY source", [project])).rows.map(row => row.source), ['css_canary','html_canary']);
     assert.equal(before.rowCount,1); assert.equal(before.rows[0].host,'localhost'); assert.equal(before.rows[0].status,'unverified'); assert.equal(before.rows[0].sent_at,null);
     assert.equal((await db.query('SELECT id FROM observations WHERE project_id=$1',[project])).rowCount,2);
     process.stderr.write('GS02: restarting after SMTP failure\n');
@@ -157,6 +188,7 @@ test('GS02: browser visits, durable incident and test SMTP alert after restart',
       await until(async () => (await reconnected.query('SELECT id FROM observations WHERE project_id=$1',[project])).rowCount === 0, 'retention');
     } finally {
       await stop(app);
+      await reconnected.query('DELETE FROM canary_observations WHERE project_id=$1',[project]);
       await reconnected.query('DELETE FROM observations WHERE project_id=$1',[project]);
       await reconnected.query('DELETE FROM observation_source_days WHERE project_id=$1',[project]);
       await reconnected.query('DELETE FROM observation_days WHERE project_id=$1',[project]);

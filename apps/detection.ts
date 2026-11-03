@@ -13,6 +13,7 @@ export function configuredOrigin(input: string): string {
   return url.origin;
 }
 export async function cleanup(pool: Pool, project: string): Promise<void> {
+  await pool.query("DELETE FROM canary_observations WHERE project_id = $1 AND observed_at < now() - interval '7 days'", [project]);
   await pool.query("DELETE FROM observations WHERE project_id = $1 AND observed_at < now() - interval '7 days'", [project]);
   await pool.query("DELETE FROM observation_source_days WHERE project_id = $1 AND day < (now() AT TIME ZONE 'UTC')::date - 7", [project]);
   await pool.query("DELETE FROM observation_days WHERE project_id = $1 AND day < (now() AT TIME ZONE 'UTC')::date - 7", [project]);
@@ -39,6 +40,23 @@ export async function observe(pool: Pool, project: string, allowedOrigin: string
     if (day.rowCount) await client.query('INSERT INTO observations (project_id, host, source) VALUES ($1, $2, $3)', [project, host, source]);
     await client.query('INSERT INTO alert_outbox(incident_id) VALUES ($1) ON CONFLICT DO NOTHING', [incident.rows[0].id]);
     await client.query('COMMIT'); return 'observed';
+  } catch (error) { await client.query('ROLLBACK'); throw error; }
+  finally { client.release(); }
+}
+
+// Referer is an unauthenticated claim; never create an incident or alert from a canary.
+export async function observeCanary(pool: Pool, project: string, referer: string | undefined, source: 'html_canary' | 'css_canary'): Promise<void> {
+  let host = '';
+  try { if (referer) host = hostFromUrl(referer); } catch { /* Unknown is not a fraud signal. */ }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [project]);
+    await client.query(`INSERT INTO canary_observations(project_id,host,source,day)
+      SELECT $1,$2,$3,(now() AT TIME ZONE 'UTC')::date WHERE
+      (SELECT count(*) FROM canary_observations WHERE project_id=$1) < 1400
+      ON CONFLICT DO NOTHING`, [project, host, source]);
+    await client.query('COMMIT');
   } catch (error) { await client.query('ROLLBACK'); throw error; }
   finally { client.release(); }
 }

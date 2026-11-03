@@ -9,3 +9,5 @@
 - **Revisão:** independente, achados de teste corrigidos e reavaliados; PR #7, sem merge ou deploy.
 
 - **F05 em implementacao:** fallback em laboratorio; GS09 completo depende de canarios e ainda nao foi comprovado.
+
+- **F06/GS09 em andamento:** canarios passivos em laboratorio; validacao depende de CI e revisao independente.
