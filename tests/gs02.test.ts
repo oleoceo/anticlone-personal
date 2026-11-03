@@ -26,6 +26,7 @@ async function stop(child: ChildProcess) {
 test('GS02: browser visits, durable incident and test SMTP alert after restart', { timeout: 90000 }, async () => {
   assert.ok(process.env.TEST_DATABASE_URL, 'TEST_DATABASE_URL required');
   const db = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
+  await db.query(await readFile('infra/008_traffic_observations.sql', 'utf8'));
   await db.query(await readFile('infra/001_initial.sql', 'utf8')); await db.query(await readFile('infra/002_alerts.sql', 'utf8')); await db.query(await readFile('infra/003_projects.sql', 'utf8')); await db.query(await readFile('infra/004_observation_sources.sql', 'utf8')); await db.query(await readFile('infra/005_canaries.sql', 'utf8'));
   const project = 'gs02_' + crypto.randomUUID();
   const fixture = createServer(async (req, res) => {
@@ -183,6 +184,30 @@ test('GS02: browser visits, durable incident and test SMTP alert after restart',
       assert.equal((await reconnected.query('SELECT id FROM incidents WHERE project_id=$1',[project])).rowCount,1);
       assert.equal((await reconnected.query('SELECT id FROM observations WHERE project_id=$1',[project])).rowCount,2);
       const request = (body: string, origin = clone, contentType = 'text/plain') => fetch('http://127.0.0.1:3000/observe',{method:'POST',headers:{origin,'content-type':contentType},body});
+      await page.goto(clone + '/clone?gclid=labToken123&unrelated=private');
+      await until(async () => (await reconnected.query("SELECT * FROM traffic_observation_days WHERE project_id=$1 AND source='gclid'", [project])).rowCount === 1, 'declared attribution');
+      for (const [query, referer, source] of [
+        ['?utm_medium=cpc', '', 'utm_medium'],
+        ['', 'http://www.google.com/search?q=lab', 'google.com'],
+        ['', 'http://referrer.test/path', 'external_referrer'],
+        ['?gclid=one&gclid=two', '', 'none'],
+        ['?gclid=' + 'x'.repeat(2100), '', 'none']
+      ]) {
+        await reconnected.query('DELETE FROM traffic_observation_days WHERE project_id=$1', [project]);
+        await page.goto(clone + '/clone' + query, referer ? {referer} : {});
+        await until(async () => (await reconnected.query('SELECT * FROM traffic_observation_days WHERE project_id=$1 AND source=$2', [project,source])).rowCount === 1, 'browser source ' + source);
+      }
+      await page.goto(clone + '/clone?gclid=labToken123&unrelated=private');
+      await until(async () => (await reconnected.query("SELECT * FROM traffic_observation_days WHERE project_id=$1 AND source='gclid'", [project])).rowCount === 1, 'declared attribution again');
+      const traffic = await reconnected.query('SELECT * FROM traffic_observation_days WHERE project_id=$1', [project]);
+      assert.ok(traffic.rows.some(row => row.traffic_class === 'PAID_ATTRIBUTED' && row.certainty === 'browser_declared_uncorroborated'));
+      assert.doesNotMatch(JSON.stringify(traffic.rows), /labToken123|private/);
+      const payload = (signals: unknown) => request(JSON.stringify({origin:clone,signals}));
+      assert.equal((await payload({evidence:'paid_click_id'})).status,400);
+      assert.equal((await payload({clickId:'abc',clickKey:['gclid']})).status,400);
+      assert.equal((await payload({clickId:'x'.repeat(129),clickKey:'gclid'})).status,400);
+      assert.equal((await payload({medium:'cpc', arbitrary:'private'})).status,400);
+      assert.equal((await payload({referrerHost:'https://google.com/private'})).status,400);
       assert.equal((await request('invalid')).status,400);
       assert.equal((await request(clone, original)).status,400);
       assert.equal((await request(clone, clone, 'application/json')).status,415);
@@ -198,6 +223,7 @@ test('GS02: browser visits, durable incident and test SMTP alert after restart',
       await until(async () => (await reconnected.query('SELECT id FROM observations WHERE project_id=$1',[project])).rowCount === 0, 'retention');
     } finally {
       await stop(app);
+      await reconnected.query('DELETE FROM traffic_observation_days WHERE project_id=$1',[project]);
       await reconnected.query('DELETE FROM canary_observations WHERE project_id=$1',[project]);
       await reconnected.query('DELETE FROM observations WHERE project_id=$1',[project]);
       await reconnected.query('DELETE FROM observation_source_days WHERE project_id=$1',[project]);

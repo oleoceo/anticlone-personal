@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { Pool } from 'pg';
 import { configuredOrigin, cleanup, observe, observeCanary } from './detection.js';
 import { deliverOne } from './alerts.js';
+import { classifyTraffic } from './traffic.js';
 import { entryDecision } from './page-redirect.js';
 const connectionString = process.env.DATABASE_URL, project = process.env.PROJECT_ID;
 const smtpPort = Number(process.env.SMTP_PORT), port = Number(process.env.PORT ?? 3000);
@@ -14,6 +15,7 @@ const legacyOrigin = process.env.ALLOWED_ORIGIN && configuredOrigin(process.env.
 if (legacyOrigin) {
   await pool.query('INSERT INTO projects(id,name,origin) VALUES($1,$1,$2) ON CONFLICT (id) DO NOTHING', [activeProject, legacyOrigin]);
 }
+await pool.query('SELECT project_id, host, day, traffic_class, evidence, certainty, source, observed_at FROM traffic_observation_days LIMIT 0');
 const projectRow = await pool.query('SELECT origin FROM projects WHERE id=$1', [activeProject]);
 if (projectRow.rowCount !== 1) throw new Error('unknown project');
 const normalizedOrigin = configuredOrigin(projectRow.rows[0].origin);
@@ -62,10 +64,19 @@ const server = http.createServer((req, res) => {
   req.on('end', () => {
     if (rejected) return;
     const body = Buffer.concat(chunks).toString('utf8');
-    let origin: string;
-    try { origin = configuredOrigin(body); if (!req.headers.origin || origin !== configuredOrigin(req.headers.origin)) throw new Error('origin mismatch'); }
+    let origin: string; let evidence: unknown;
+    try {
+      if (body.startsWith('{')) {
+        const parsed: unknown = JSON.parse(body);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('invalid payload');
+        const record = parsed as Record<string, unknown>;
+        if (Object.keys(record).sort().join(',') !== 'origin,signals' || typeof record.origin !== 'string' || req.url !== '/observe') throw new Error('invalid payload');
+        origin = configuredOrigin(record.origin); classifyTraffic(record.signals, origin); evidence = record.signals;
+      } else origin = configuredOrigin(body);
+      if (!req.headers.origin || origin !== configuredOrigin(req.headers.origin)) throw new Error('origin mismatch');
+    }
     catch { res.writeHead(400).end(); return; }
-    void observe(pool, activeProject, normalizedOrigin, origin, req.url === '/observe/fallback' ? 'fallback' : 'core').then(result => res.writeHead(result === 'capacity' ? 429 : 204).end()).catch(() => res.writeHead(503).end());
+    void observe(pool, activeProject, normalizedOrigin, origin, req.url === '/observe/fallback' ? 'fallback' : 'core', evidence).then(result => res.writeHead(result === 'capacity' ? 429 : 204).end()).catch(() => res.writeHead(503).end());
   });
 });
 server.requestTimeout = 5000; server.headersTimeout = 6000;

@@ -1,4 +1,5 @@
 import type { Pool } from 'pg';
+import { classifyTraffic } from './traffic.js';
 export function hostFromUrl(input: string): string {
   if (Buffer.byteLength(input) > 2048) throw new Error('invalid URL');
   const url = new URL(input);
@@ -13,6 +14,7 @@ export function configuredOrigin(input: string): string {
   return url.origin;
 }
 export async function cleanup(pool: Pool, project: string): Promise<void> {
+  await pool.query("DELETE FROM traffic_observation_days WHERE project_id = $1 AND observed_at < now() - interval '7 days'", [project]);
   await pool.query("DELETE FROM canary_observations WHERE project_id = $1 AND observed_at < now() - interval '7 days'", [project]);
   await pool.query("DELETE FROM observations WHERE project_id = $1 AND observed_at < now() - interval '7 days'", [project]);
   await pool.query("DELETE FROM observation_source_days WHERE project_id = $1 AND day < (now() AT TIME ZONE 'UTC')::date - 7", [project]);
@@ -20,7 +22,7 @@ export async function cleanup(pool: Pool, project: string): Promise<void> {
   const expired = await pool.query(`DELETE FROM incidents WHERE project_id = $1 AND last_seen < now() - interval '30 days' RETURNING id`, [project]);
   if (expired.rowCount) process.stderr.write(`Expired ${expired.rowCount} inactive incident(s) and associated alerts under retention policy\n`);
 }
-export async function observe(pool: Pool, project: string, allowedOrigin: string, input: string, source: 'core' | 'fallback' = 'core'): Promise<'authorized' | 'observed' | 'capacity'> {
+export async function observe(pool: Pool, project: string, allowedOrigin: string, input: string, source: 'core' | 'fallback' = 'core', evidence?: unknown): Promise<'authorized' | 'observed' | 'capacity'> {
   const origin = configuredOrigin(input), host = hostFromUrl(origin);
   if (origin === allowedOrigin) return 'authorized';
   const client = await pool.connect();
@@ -38,6 +40,12 @@ export async function observe(pool: Pool, project: string, allowedOrigin: string
     const day = await client.query(`INSERT INTO observation_source_days(project_id,host,day,source) VALUES($1,$2,(now() AT TIME ZONE 'UTC')::date,$3)
       ON CONFLICT DO NOTHING RETURNING host`, [project, host, source]);
     if (day.rowCount) await client.query('INSERT INTO observations (project_id, host, source) VALUES ($1, $2, $3)', [project, host, source]);
+    if (evidence !== undefined) {
+      const traffic = classifyTraffic(evidence, origin);
+      await client.query(`INSERT INTO traffic_observation_days(project_id,host,day,traffic_class,evidence,certainty,source)
+        VALUES($1,$2,(now() AT TIME ZONE 'UTC')::date,$3,$4,$5,$6) ON CONFLICT DO NOTHING`,
+      [project, host, traffic.trafficClass, traffic.evidence, traffic.certainty, traffic.source]);
+    }
     await client.query('INSERT INTO alert_outbox(incident_id) VALUES ($1) ON CONFLICT DO NOTHING', [incident.rows[0].id]);
     await client.query('COMMIT'); return 'observed';
   } catch (error) { await client.query('ROLLBACK'); throw error; }
