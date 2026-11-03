@@ -1,4 +1,5 @@
-﻿import http from 'node:http';
+import http from 'node:http';
+import { readFileSync } from 'node:fs';
 import { Pool } from 'pg';
 import { configuredOrigin, cleanup, observe } from './detection.js';
 import { deliverOne } from './alerts.js';
@@ -16,12 +17,14 @@ const projectRow = await pool.query('SELECT origin FROM projects WHERE id=$1', [
 if (projectRow.rowCount !== 1) throw new Error('unknown project');
 const normalizedOrigin = configuredOrigin(projectRow.rows[0].origin);
 if (legacyOrigin && legacyOrigin !== normalizedOrigin) throw new Error('legacy configuration conflicts with project');
+const bootstrap = readFileSync('runtime/bootstrap.js');
+const core = readFileSync('runtime/core.js');
 let windowStart = Date.now(), count = 0;
 const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*'); res.setHeader('Cache-Control', 'no-store');
-  if (req.method === 'GET' && req.url === '/runtime.js') {
+  if (req.method === 'GET' && (req.url === '/runtime.js' || req.url === '/core.js')) {
     res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
-    res.end(`fetch('http://127.0.0.1:${port}/observe',{method:'POST',headers:{'Content-Type':'text/plain'},body:location.origin,keepalive:true}).catch(()=>{});`); return;
+    res.end(req.url === '/runtime.js' ? bootstrap : core); return;
   }
   if (req.method !== 'POST' || req.url !== '/observe') { res.writeHead(404).end(); return; }
   if (Date.now() - windowStart >= 60_000) { windowStart = Date.now(); count = 0; }
