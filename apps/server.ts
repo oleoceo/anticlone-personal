@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { Pool } from 'pg';
 import { configuredOrigin, cleanup, observe, observeCanary } from './detection.js';
 import { deliverOne } from './alerts.js';
+import { entryDecision } from './page-redirect.js';
 const connectionString = process.env.DATABASE_URL, project = process.env.PROJECT_ID;
 const smtpPort = Number(process.env.SMTP_PORT), port = Number(process.env.PORT ?? 3000);
 if (!connectionString || !project || !/^[a-zA-Z0-9_-]{1,64}$/.test(project) || !Number.isInteger(smtpPort) || smtpPort < 1 || smtpPort > 65535 || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('invalid local test configuration');
@@ -17,6 +18,9 @@ const projectRow = await pool.query('SELECT origin FROM projects WHERE id=$1', [
 if (projectRow.rowCount !== 1) throw new Error('unknown project');
 const normalizedOrigin = configuredOrigin(projectRow.rows[0].origin);
 if (legacyOrigin && legacyOrigin !== normalizedOrigin) throw new Error('legacy configuration conflicts with project');
+// The operator controls this local experiment; requests never provide risk.
+const controlledOrigin = process.env.LAB_CONTROLLED_ORIGIN ? configuredOrigin(process.env.LAB_CONTROLLED_ORIGIN) : undefined;
+if (controlledOrigin && (!['127.0.0.1', 'localhost'].includes(new URL(controlledOrigin).hostname) || !['127.0.0.1', 'localhost'].includes(new URL(normalizedOrigin).hostname))) throw new Error('lab origins must be loopback');
 const bootstrap = readFileSync('runtime/bootstrap.js');
 const core = readFileSync('runtime/core.js');
 const fallback = readFileSync('runtime/fallback.js');
@@ -33,6 +37,16 @@ const server = http.createServer((req, res) => {
     const source = req.url === '/canary/html.gif' ? 'html_canary' : 'css_canary';
     void observeCanary(pool, activeProject, req.headers.referer, source).then(() => {
       res.writeHead(200, { 'Content-Type': 'image/gif' }).end(Buffer.from('R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==', 'base64'));
+    }).catch(() => res.writeHead(503).end()); return;
+  }
+  if (req.method === 'GET' && req.url === '/entry-decision') {
+    let origin: string;
+    try { origin = configuredOrigin(req.headers.origin ?? ''); } catch { res.writeHead(400).end(); return; }
+    if (!controlledOrigin || origin !== controlledOrigin || origin === normalizedOrigin || process.env.LAB_CONTROLLED_RISK !== 'LOW') { res.writeHead(200, {'Content-Type': 'application/json'}).end(JSON.stringify({action:'OBSERVE_ONLY'})); return; }
+    if (Date.now() - windowStart >= 60_000) { windowStart = Date.now(); count = 0; }
+    if (++count > 60) { res.writeHead(429).end(); return; }
+    void pool.query('SELECT version,enabled,approved_destination FROM page_redirect_policies WHERE project_id=$1 ORDER BY version DESC LIMIT 1', [activeProject]).then(result => {
+      res.writeHead(200, {'Content-Type': 'application/json'}).end(JSON.stringify(entryDecision(result.rows[0], normalizedOrigin, origin, controlledOrigin, process.env.LAB_CONTROLLED_RISK)));
     }).catch(() => res.writeHead(503).end()); return;
   }
   if (req.method !== 'POST' || req.url !== '/observe' && req.url !== '/observe/fallback') { res.writeHead(404).end(); return; }
