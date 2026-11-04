@@ -99,6 +99,19 @@ test('authenticated inventory and offer-scoped mappings persist and isolate proj
     assert.equal((await (await get(p,token)).json() as Row[]).find(x=>x.id===point)?.review_required,true);
     assert.equal((await post(p,'mappings',{pointId:point,offer:'basic',destinationId:dest.id},token)).status,400);
     assert.equal((await (await get(p,token)).json() as Row[]).find(x=>x.id===point)?.destination_id,dest.id);
+    const alertUrl=`${base}/admin/projects/${p}/cta/alerts`;
+    assert.equal((await fetch(alertUrl)).status,401);
+    const headers={authorization:`Bearer ${token}`};
+    const history=await (await fetch(alertUrl,{headers})).json() as {id:string;point_id:string;reason:string;created_at:string}[];
+    assert.deepEqual(history.map(x=>x.reason),['MARKER_COLLISION','DESTINATION_CHANGED']);
+    assert.ok(history.every(x=>x.point_id===point && x.created_at));
+    assert.deepEqual(await (await fetch(`${base}/admin/projects/${q}/cta/alerts`,{headers})).json(),[]);
+    await db.query(`INSERT INTO cta_drift_alerts(project_id,point_id,reason,created_at)
+      SELECT $1,$2,'MARKER_COLLISION',now() FROM generate_series(1,101)`,[p,point]);
+    const limited=await (await fetch(alertUrl,{headers})).json() as {id:string}[];
+    assert.equal(limited.length,100);
+    assert.ok(limited.every((x,i)=>i===0 || BigInt(limited[i-1].id)>BigInt(x.id)));
+    await db.query("DELETE FROM cta_drift_alerts WHERE project_id=$1 AND reason='MARKER_COLLISION' AND id<>$2",[p,history[0].id]);
     assert.equal((await (await get(q,token)).json() as Row[]).length,0);
     await db.query("UPDATE cta_observations SET observed_at=now()-interval '8 days' WHERE project_id=$1",[p]);
     await db.query("UPDATE cta_drift_alerts SET created_at=now()-interval '31 days' WHERE project_id=$1 AND reason='DESTINATION_CHANGED'",[p]);
