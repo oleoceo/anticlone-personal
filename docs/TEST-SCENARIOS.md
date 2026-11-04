@@ -27,3 +27,5 @@ Todos usam **ambientes, cópias simuladas e domínios autorizados** sob controle
 | GS21 | Com alerta de inatividade habilitado, ausência de sinais além do prazo configurado e falha operacional geram alertas rastreáveis, com deduplicação, retry e histórico; retomada e nova falha são registradas. |
 
 É proibido substituir teste real por mock no lugar de teste de integração/E2E exigido. Mocks são permitidos somente em camadas unitárias apropriadas.
+
+Evidência parcial GS13 (PR #30, `d169dba`): `tests/notification-expiry.test.ts` verifica expiração F26/F27 em 24 horas, concorrência, saturação do orçamento, reinício e preservação de incidentes, alertas, histórico SIMULATED e envio em andamento. A execução consultada passou 35 testes; conclusão formal da CI e gates do novo HEAD documental devem ser conferidos no PR. A fronteira F26 entre SELECT e UPDATE não é reproduzida exatamente pelo teste. F26/F27/GS13 continuam incompletos.
