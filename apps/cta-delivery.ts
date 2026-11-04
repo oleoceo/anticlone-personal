@@ -1,14 +1,17 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
+import { budgetMayBeAvailable, lockBudget, recordBudget } from './notification-budget.js';
 
 export type LocalSender = (alertId: string) => Promise<void>;
 
 export async function deliverCtaAlert(db: Pool, send: LocalSender): Promise<boolean> {
+  if (!budgetMayBeAvailable(db)) return false;
   const token = randomUUID();
   const client = await db.connect();
   let id: string | undefined;
   try {
     await client.query('BEGIN');
+    if (!await lockBudget(client, db)) { await client.query('COMMIT'); return false; }
     await client.query(`UPDATE cta_alert_deliveries SET state='FAILED', lease_token=NULL, lease_until=NULL
       WHERE delivery_mode='SMTP_LOCAL' AND state='PROCESSING' AND lease_until <= now() AND attempts=3`);
     const result = await client.query(`WITH next AS (
@@ -19,6 +22,7 @@ export async function deliverCtaAlert(db: Pool, send: LocalSender): Promise<bool
       lease_token=$1, lease_until=now()+interval '1 minute' FROM next
       WHERE d.alert_id=next.alert_id RETURNING d.alert_id`, [token]);
     id = result.rows[0]?.alert_id;
+    if (id) await recordBudget(client);
     await client.query('COMMIT');
   } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
   if (!id) return false;

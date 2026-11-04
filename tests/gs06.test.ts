@@ -13,7 +13,7 @@ test('GS06 integration: persisted policy, controlled LOW and original', {timeout
   const db = new Pool({connectionString:process.env.TEST_DATABASE_URL});
   await db.query(await readFile('infra/008_traffic_observations.sql', 'utf8'));
   await db.query(await readFile('infra/009_risk_assessments.sql', 'utf8'));
-  for (const file of ['001_initial','002_alerts','003_projects','004_observation_sources','005_canaries','006_page_redirect','007_protection_policy','010_policy_allocation']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
+  for (const file of ['001_initial','002_alerts','003_projects','004_observation_sources','005_canaries','006_page_redirect','007_protection_policy','010_policy_allocation','018_notification_budget']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
   const project='gs06_'+crypto.randomUUID();
   const fixture=createServer((_req,res)=>res.writeHead(200,{'content-type':'text/html'}).end('<h1>site</h1><a href="/next">next</a><script src="http://127.0.0.1:3000/runtime.js"></script>'));
   fixture.listen(0,'127.0.0.1'); await once(fixture,'listening'); const address=fixture.address(); if (!address || typeof address==='string') throw Error('address');
