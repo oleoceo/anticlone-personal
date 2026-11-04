@@ -31,7 +31,7 @@ def check_documents(root):
                 elif token[0]==fence[0] and len(token)>=len(fence): fence=None
                 prose=''
             else:
-                prose='' if fence else re.sub(r'(`+).*?\1', '', line)
+                prose='' if fence or line.startswith(('    ', '\t')) else re.sub(r'(`+).*?\1', '', line)
             if '\ufffd' in line or re.search(r'[ÃÂ][\x80-\xbf]',line):
                 problems.append(f'{path.relative_to(root)}:{number}: possivel texto corrompido')
             elif re.search(r'[^\W\d_]\?{2,}[^\W\d_]',prose):

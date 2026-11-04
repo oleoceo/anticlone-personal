@@ -50,6 +50,10 @@ class DocumentChecksTest(unittest.TestCase):
                    '```js\nvalue??fallback\n```\n~~~text\na??b\n~~~\n')
         self.assertEqual(check_documents(self.root), [])
 
+    def test_legitimate_indented_code(self):
+        self.write('STATUS.md', 'Exemplo JavaScript:\n\n    value??fallback\n\ta??b\n')
+        self.assertEqual(check_documents(self.root), [])
+
     def test_newest_explicit_status_wins_over_history(self):
         self.write('STATUS.md', '- **F01 parcial:** atual.\n- **F01 planejada:** histórico.\n')
         self.assertEqual(check_documents(self.root), [])
