@@ -1,4 +1,5 @@
 # STATUS — AntiClone Personal
+- **Interface local de notificações:** configuração global e preferência sem envio real; testes em `tests/admin-notification-ui.test.ts`. Validação PostgreSQL/Chromium, revisão independente e CI final pendentes no PR; F26, F27 e GS13 permanecem inalterados.
 - **PR #27 delta:** repeated disable is a transactional no-op; regression checks response, persisted state/version/timestamp and complete audit. Local lint/typecheck/build passed; PostgreSQL execution, independent isolated review and final HEAD CI evidence are recorded in PR #27. No worker or delivery changes.
 - **Global notification settings - laboratory:** authenticated, versioned API with atomic audit and explicit preference; no credentials or delivery integration. Test: `tests/notification-settings.test.ts`; independent review and final CI will be recorded in the PR. F26 planned, F27 partial, GS08/GS13 pending; D03 remains proposed.
 - **Qualidade do processo:** gate documental verifica codificação e declarações explícitas de situação; testes no workflow existente. Revisão independente e CI final registradas no PR.
