@@ -5,19 +5,24 @@ export function makeMailer(port: number) {
   return nodemailer.createTransport({ host: '127.0.0.1', port, ignoreTLS: true, connectionTimeout: 3000, greetingTimeout: 3000, socketTimeout: 3000 });
 }
 export async function deliverOne(pool: Pool, project: string, port: number): Promise<void> {
-  if (!budgetMayBeAvailable(pool)) return;
   const client = await pool.connect();
   let locked = false;
   try {
     const result = await client.query("SELECT pg_try_advisory_lock(hashtext($1), 1) AS locked", [project]);
     locked = result.rows[0].locked;
     if (!locked) return;
+    // This lock remains held through SMTP, so active attempts cannot expire.
+    await client.query(`UPDATE alert_outbox a SET expired_at=clock_timestamp()
+      FROM incidents i WHERE i.id=a.incident_id AND i.project_id=$1
+      AND a.sent_at IS NULL AND a.expired_at IS NULL
+      AND i.first_seen <= clock_timestamp()-interval '24 hours'`, [project]);
+    if (!budgetMayBeAvailable(pool)) return;
     await client.query('BEGIN');
     let item: {id: string; host: string} | undefined;
     try {
       if (await lockBudget(client, pool)) {
         const pending = await client.query(`SELECT a.id, i.host FROM alert_outbox a JOIN incidents i ON i.id=a.incident_id
-          WHERE i.project_id=$1 AND a.sent_at IS NULL AND a.attempts < 3 AND a.next_attempt <= now() ORDER BY a.id LIMIT 1 FOR UPDATE OF a SKIP LOCKED`, [project]);
+          WHERE i.project_id=$1 AND a.sent_at IS NULL AND a.expired_at IS NULL AND i.first_seen > clock_timestamp()-interval '24 hours' AND a.attempts < 3 AND a.next_attempt <= now() ORDER BY a.id LIMIT 1 FOR UPDATE OF a SKIP LOCKED`, [project]);
         item = pending.rows[0];
         if (item) {
           await client.query("UPDATE alert_outbox SET attempts=attempts+1, next_attempt=clock_timestamp()+interval '1 minute' WHERE id=$1", [item.id]);
