@@ -27,3 +27,17 @@ Na importação autenticada, uma mudança de origem ou caminho entre URLs observ
 
 Aplique também `infra/013_cta_review.sql`. Após examinar o contexto e a última observação HIGH com URL conhecida, o administrador autenticado pode confirmar o destino existente por `POST /admin/projects/{id}/cta/review` com `{"pointId":"UUID","destinationId":"UUID","observationId":"ID"}`, usando o identificador retornado no inventário. A operação exige ponto mapeado em revisão, observação recente e atual e destino associado; colisões exigem nova captura única. A transação registra ponto, observação, oferta, destino e horário em `cta_review_audit` e libera apenas esse ponto. Não altera política ou outros mapeamentos; se a política já estiver ativa, o ponto volta a ser elegível em decisões futuras. Não há reativação automática após importação. Formulários seguem suspensos por D07. GS08 integral e alertas continuam pendentes.
 - F27 parcial: `infra/014_cta_drift_alerts.sql` registra transições de CTA mapeado para revisão por colisão ou mudança de destino. A transação do inventário deduplica enquanto o ponto permanece em revisão; reaprovação permite um novo alerta. Sem envio, retry ou interface nesta fatia; histórico contém projeto, ponto, motivo e horário.
+
+## GS03: recorte e lacunas
+
+Teste em `tests/gs03.test.ts`: quatro ofertas sinteticas, marcadores estaveis, inventario Chromium e mapeamento manual autenticado para destinos HTTP locais. Inclui dois pontos para uma oferta, textos iguais, mudanca de idioma, preco, moeda, ordem e estrutura. Sem marcador, sem mapeamento ou com colisao: preservar comportamento nativo. Recorte A demonstrado na CI 41911761424 em 6756c37 (39 testes, PostgreSQL/Chromium), com revisao independente `/root/gs03_review` sem achados remanescentes; gates do HEAD final no PR #34.
+
+| Caso | Situacao e limite |
+|---|---|
+| A: CTA novo com marcador estavel | Inventariado e mapeado manualmente; quarta oferta sintetica com destino aprovado local. |
+| B: CTA criado sem marcador conhecido | Substituicao segura PENDENTE. O snapshot pode mostrar URL observavel e confianca LOW; mapear no banco nao cria identidade interceptavel no runtime. Permanece nativo. |
+| C: checkout, mensageria ou contato externo real | Nao comprovado; destinos aprovados exigem a origem do projeto. Formularios suspensos (D07); botoes sem ancora compativel nao sao substituidos. |
+
+Texto e preco sao contexto humano, nunca chaves de identidade ou autorizacao; o snapshot atual nao coleta esses campos. Cadastrar destino aprovado nao cria checkout comercial em provedor externo. Marcador publico nao comprova autoridade. Substituicao exige runtime em execucao no contexto suportado, politica pronta e identidade/mapeamento seguros; nao permite alterar remotamente qualquer copia. F19/F20/F21 continuam PARCIAL; GS17 integral pendente.
+
+Menor proxima fatia proposta para B (nao implementada): contrato e ensaio local de vinculacao explicita do candidato sem marcador a identidade estavel. Exigir selecao humana no DOM controlado, confirmacao autenticada da observacao/destino e evidencia auditavel; invalidar por colisao ou mudanca incompativel e preservar navegacao nativa. Definir mecanismo seguro de vinculacao e revisao de seguranca antes de ativar substituicao. Sem heuristica por texto, preco, idioma, posicao ou aparencia. Interface completa e destinos externos exigem etapas proprias.
