@@ -62,8 +62,17 @@ test('local notification UI: browser, session boundaries, CSRF, concurrency and 
     await page.getByLabel('TLS').selectOption('starttls');
     await page.getByLabel('Remetente').fill('sender@example.test');
     await page.getByLabel('Destinatário').fill('owner@example.test');
+    let releaseSave!: () => void, requestArrived!: () => void;
+    const blockedSave = new Promise<void>(resolve => { releaseSave=resolve; });
+    const saveArrived = new Promise<void>(resolve => { requestArrived=resolve; });
+    await page.route('**/admin/ui/settings', async route => { if (route.request().method()==='POST') { requestArrived(); await blockedSave; } await route.continue(); });
     await page.getByRole('button',{name:'Salvar configurações'}).click();
+    await saveArrived;
+    assert.equal(await page.locator('#settings').evaluate(element=>(element as HTMLElement).inert),true);
+    releaseSave();
     await page.getByText('Configurada / desativada').waitFor();
+    assert.equal(await page.locator('#settings').evaluate(element=>(element as HTMLElement).inert),false);
+    await page.unroute('**/admin/ui/settings');
     await page.getByRole('button',{name:'Solicitar habilitação'}).click();
     await page.getByText('Habilitação solicitada — envio não operacional').waitFor();
     await page.getByLabel('Destinatário').fill('new@example.test');
