@@ -7,6 +7,7 @@ import { configuredOrigin } from './detection.js';
 import { activatePolicy, saveDraft } from './protection-policy.js';
 import { importInventory, approveDestination, mapPoint, reviewPoint } from './cta-inventory.js';
 import { publishCtaPolicy } from './cta-policy.js';
+import { Conflict, getNotificationSettings, saveNotificationSettings, setNotificationPreference } from './notification-settings.js';
 
 // Laboratory-only: one process, one owner, ephemeral sessions and rate limit.
 export function createAdminServer(passwordRecord: string, totpSecret: string, db: Pool, now: () => number = Date.now) {
@@ -28,6 +29,20 @@ export function createAdminServer(passwordRecord: string, totpSecret: string, db
       const key = token && createHash('sha256').update(token).digest('hex');
       const expiry = key && sessions.get(key);
       if (!key || !expiry || now() >= expiry) { if (key) sessions.delete(key); res.writeHead(401).end(); return; }
+      if (req.url === '/admin/notification-settings' && req.method === 'GET') {
+        void getNotificationSettings(db).then(result=>res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify(result))).catch(()=>res.writeHead(503).end()); return;
+      }
+      if (req.method === 'POST' && (req.url === '/admin/notification-settings' || req.url === '/admin/notification-settings/preference')) {
+        if (req.headers['content-type'] !== 'application/json') { res.writeHead(415).end(); return; }
+        let size=0, rejected=false; const chunks: Buffer[]=[];
+        req.on('data',(chunk:Buffer)=>{ size+=chunk.length; if(size>4096) { if(!rejected) res.writeHead(413).end(); rejected=true; chunks.length=0; } else if(!rejected) chunks.push(chunk); });
+        req.on('end',()=>{
+          if(rejected) return;
+          let body:unknown; try { body=JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { res.writeHead(400).end(); return; }
+          const operation=req.url === '/admin/notification-settings' ? saveNotificationSettings(db,body) : setNotificationPreference(db,body);
+          void operation.then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error:unknown)=>res.writeHead(error instanceof Conflict ? 409 : error instanceof TypeError ? 400 : 503).end());
+        }); return;
+      }
       if (req.method === 'GET' && req.url === '/admin/session') {
         res.writeHead(200, { 'Content-Type': 'application/json' }).end('{"authenticated":true}'); return;
       }
