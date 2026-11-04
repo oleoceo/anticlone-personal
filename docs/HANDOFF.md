@@ -6,6 +6,8 @@ Antes da atualização, parar todos os servidores F26, processos administrativos
 
 Incidentes e alertas novos são a fonte durável para reconciliação em lotes. A intenção ausente é criada sem consumir orçamento; após 24 horas, nasce expirada conforme o horário original. Alertas anteriores à migração não são inferidos como SMTP_LOCAL, preservando histórico SIMULATED. Falhas são registradas sem dados de eventos e a manutenção tenta novamente em até um minuto enquanto o processo estiver ativo. F26, F27 e GS13 permanecem parciais.
 
+A migração 021 interrompe a transação se encontrar alerta histórico sem entrega: investigar e resolver essa inconsistência antes de repetir, sem presumir o modo histórico. A migração não é aplicada automaticamente por esta alteração.
+
 - Base: main `963da9e`, PRs #21, #22 e #23 integrados; F25/F27 permanecem PARCIAL na matriz e no STATUS.
 - PR #21: alerta persistente por transição de CTA mapeado para revisão, deduplicado até reaprovação, com retenção de 30 dias; F25 preserva reaprovação auditada. Migration de laboratório: `infra/014_cta_drift_alerts.sql`, após as anteriores.
 - PR #22: consulta autenticada `GET /admin/projects/:id/cta/alerts`, limitada a 100 alertas por projeto, mais recentes primeiro e desempate por ID. Entrega e retry dos alertas F27 ainda pendentes.

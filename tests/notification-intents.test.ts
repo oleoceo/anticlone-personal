@@ -25,6 +25,12 @@ test('notification intent failures preserve events and reconciliation survives r
     await db.query("INSERT INTO cta_points(project_id,id,surface,kind) VALUES('p',$1,'old','a')",[oldPoint]);
     const historical=(await db.query("INSERT INTO cta_drift_alerts(project_id,point_id,reason) VALUES('p',$1,'MARKER_COLLISION') RETURNING id",[oldPoint])).rows[0].id;
     await db.query("UPDATE cta_alert_deliveries SET delivery_mode='SIMULATED' WHERE alert_id=$1",[historical]);
+    const orphan=(await db.query("INSERT INTO cta_drift_alerts(project_id,point_id,reason) VALUES('p',$1,'MARKER_COLLISION') RETURNING id",[oldPoint])).rows[0].id;
+    await db.query('DELETE FROM cta_alert_deliveries WHERE alert_id=$1',[orphan]);
+    await assert.rejects(db.query(await readFile('infra/021_notification_intent_reconciliation.sql','utf8')),/historical CTA alerts without delivery/);
+    // Migration has an explicit transaction: roll it back before retrying.
+    await db.query('ROLLBACK');
+    await db.query('DELETE FROM cta_drift_alerts WHERE id=$1',[orphan]);
     await db.query(await readFile('infra/021_notification_intent_reconciliation.sql','utf8'));
     await db.query(`CREATE FUNCTION reject_intent() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION USING ERRCODE='53100', MESSAGE='injected'; END $$`);
     await db.query('CREATE TRIGGER reject_outbox BEFORE INSERT ON alert_outbox FOR EACH ROW EXECUTE FUNCTION reject_intent()');
@@ -33,6 +39,10 @@ test('notification intent failures preserve events and reconciliation survives r
     assert.equal((await db.query("SELECT 1 FROM observations WHERE host='clone.test'")).rowCount,1);
     assert.equal((await db.query('SELECT 1 FROM alert_outbox')).rowCount,0);
     await db.query('DROP TRIGGER reject_outbox ON alert_outbox');
+    await db.query("UPDATE incidents SET first_seen=clock_timestamp()-interval '25 hours' WHERE host='clone.test'");
+    await observe(db,'p','http://localhost','https://clone.test');
+    assert.equal((await db.query("SELECT expired_at IS NOT NULL AS expired FROM alert_outbox a JOIN incidents i ON i.id=a.incident_id WHERE i.host='clone.test'")).rows[0].expired,true);
+    await db.query('DELETE FROM alert_outbox');
 
     const point=randomUUID(), destination=randomUUID();
     await db.query("INSERT INTO cta_points(project_id,id,surface,marker,kind,offer) VALUES('p',$1,'landing','marker001','a','offer')",[point]);
