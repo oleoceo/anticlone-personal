@@ -33,6 +33,10 @@ class DocumentChecksTest(unittest.TestCase):
         self.assertTrue(any('STATUS.md:1' in error for error in errors))
         self.assertTrue(any('bad.md' in error and 'UTF-8 invalido' in error for error in errors))
 
+    def test_newest_explicit_status_wins_over_history(self):
+        self.write('STATUS.md', '- **F01 parcial:** atual.\n- **F01 planejada:** histórico.\n')
+        self.assertEqual(check_documents(self.root), [])
+
 
 if __name__ == '__main__':
     unittest.main()

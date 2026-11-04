@@ -27,12 +27,15 @@ def check_documents(root):
                 problems.append(f'{path.relative_to(root)}:{number}: possivel texto corrompido')
     matrix=contents.get('docs/FUNCTIONAL-MATRIX.md','')
     statuses=dict(re.findall(r'^\| (F\d{2,}) \|.*\| (P|PARCIAL|V|B) \|\s*$',matrix,re.M))
+    seen=set()
     for number,line in enumerate(contents.get('STATUS.md','').splitlines(),1):
         match=re.match(r'^- \*\*((?:F\d{2,})(?:/F\d{2,})*)\s+(parcial|parciais|validada(?:s)?|bloqueada(?:s)?|planejada(?:s)?)(?=\s|[:—*])',line,re.I)
         if not match: continue
         label=match.group(2).lower()
         expected=('PARCIAL' if label.startswith('parcia') else 'V' if label.startswith('validada') else 'B' if label.startswith('bloqueada') else 'P')
         for capability in match.group(1).split('/'):
+            if capability in seen: continue
+            seen.add(capability)
             if capability not in statuses:
                 problems.append(f'STATUS.md:{number}: {capability} ausente da matriz')
             elif statuses[capability]!=expected:
@@ -40,6 +43,10 @@ def check_documents(root):
     return problems
 
 errors.extend(check_documents(root))
+if any('UTF-8 invalido' in error for error in errors):
+    print('FALHOU:')
+    for error in errors: print(' -',error)
+    sys.exit(1)
 for file in required:
     if not (root/file).is_file(): errors.append('Arquivo obrigatorio ausente: '+file)
 if (root/'CLAUDE.md').is_file() and (root/'CLAUDE.md').read_text(encoding='utf8').strip()!='@AGENTS.md':
