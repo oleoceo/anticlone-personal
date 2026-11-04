@@ -8,7 +8,11 @@
 - Preservar política pronta, destinos aprovados, demais mapeamentos, Stealth/OBSERVE_ONLY e PAGE_REDIRECT.
 - Usar somente laboratório e dados sintéticos; GS08/GS13 integrais e F27 completo continuam pendentes.
 - Pré-entrega obrigatória: conferir documentação/codificação, executar `python scripts/validate_repo.py` e `python -m unittest discover -s scripts -p 'test_*.py'`; identificar sessão revisora independente, isolamento real, SHA/delta e parecer; conferir CI verde no HEAD final, incluindo checks da aplicação quando relevantes. Gate documental não prova funcionamento do sistema.
-- Próxima fatia F27, proposta ainda não aprovada nem implementada: preparação durável da entrega por alerta e retry em laboratório, com adaptador local simulado, sem SMTP, destinatários reais ou envio externo. Preservar histórico, deduplicação por transição e consulta atual; F25/F27 continuam PARCIAL.
-- Critérios propostos: registro de entrega único por alerta, preparação atômica com o alerta, tentativas com prazo e limite explícitos, recuperação após reinício e concorrência controlada; sucesso simulado separado de entrega externa confirmada. PostgreSQL é a fonte durável; integração de worker/fila segue o Blueprint, sem criar infraestrutura distribuída.
-- Testes propostos: transação/rollback e deduplicação concorrente; falha simulada seguida de retry no prazo; esgotamento de tentativas; reinício e recuperação de trabalho interrompido; retenção coerente; regressão da consulta autenticada e ausência de envio externo. Dependências: migration incremental, relógio/adaptador injetáveis, limites de retry e reserva de trabalho documentados, escolha do encaixe no worker existente/previsto e revisão independente.
-- Riscos a resolver na aprovação: duplicação após interrupção entre processamento e confirmação, trabalho preso ou concorrente, conflito de retenção e exposição de URLs em logs. A simulação não comprova entrega de e-mail nem encerra GS08/GS13. Não implementar antes da aprovação; sem merge ou deploy.
+
+## F27: entrega simulada em laboratório
+
+Aplicar `infra/015_cta_alert_deliveries.sql` após as migrations anteriores. A inserção do alerta prepara uma única entrega na mesma transação; alertas existentes são preparados pela migration. A exclusão por retenção remove a entrega associada.
+
+Após `npm run build`, iniciar `node dist/apps/cta-delivery-worker.js` com `DATABASE_URL` do laboratório. O processo percorre um alerta por segundo; a simulação não usa rede nem registra conteúdo. Interrupção retoma após reserva expirar em um minuto; falha espera um minuto. São no máximo três tentativas, inclusive reservas interrompidas; após esgotamento o estado é FAILED. SIGTERM/SIGINT encerra após o processamento atual.
+
+A reserva possui token para rejeitar confirmação antiga. Uma interrupção entre simulação e confirmação pode repetir a simulação; nenhum resultado representa entrega externa. O estado DELIVERED significa apenas simulação local concluída. GS08/GS13 integrais e envio real permanecem pendentes.

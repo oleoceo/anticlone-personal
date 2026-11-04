@@ -1,4 +1,4 @@
-﻿import { test } from 'node:test';
+import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createHash, scryptSync } from 'node:crypto';
@@ -13,7 +13,7 @@ import { ctaDecision, publishCtaPolicy } from '../apps/cta-policy.js';
 test('authenticated inventory and offer-scoped mappings persist and isolate projects', async () => {
   assert.ok(process.env.TEST_DATABASE_URL);
   const db=new Pool({connectionString:process.env.TEST_DATABASE_URL});
-  for (const file of ['001_initial','002_alerts','003_projects','011_cta_inventory','012_cta_policy','013_cta_review','014_cta_drift_alerts']) await db.query((await readFile(`infra/${file}.sql`,'utf8')).replace(/^\uFEFF/,''));
+  for (const file of ['001_initial','002_alerts','003_projects','011_cta_inventory','012_cta_policy','013_cta_review','014_cta_drift_alerts','015_cta_alert_deliveries']) await db.query((await readFile(`infra/${file}.sql`,'utf8')).replace(/^\uFEFF/,''));
   await db.query('CREATE TABLE IF NOT EXISTS admin_totp_replay (factor_id text PRIMARY KEY, last_counter bigint NOT NULL)');
   await db.query('CREATE TABLE IF NOT EXISTS admin_totp_codes (factor_id text NOT NULL, digest text NOT NULL, valid_until bigint NOT NULL, PRIMARY KEY (factor_id, digest))');
   const secret='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',salt='0123456789abcdef0123456789abcdef', factor=createHash('sha256').update(secret).digest('hex');
