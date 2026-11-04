@@ -1,8 +1,14 @@
 # Handoff — AntiClone Personal
 
-- Base: main c60f2c7, PR #21 integrado; F25 parcial com reaprovação auditada.
-- F27 em desenvolvimento: alerta persistente por transição de CTA mapeado para revisão; consulta autenticada por projeto em desenvolvimento; sem e-mail ou retry. Aplicar `infra/014_cta_drift_alerts.sql` após as anteriores.
+- Base: main `963da9e`, PRs #21, #22 e #23 integrados; F25/F27 permanecem PARCIAL na matriz e no STATUS.
+- PR #21: alerta persistente por transição de CTA mapeado para revisão, deduplicado até reaprovação, com retenção de 30 dias; F25 preserva reaprovação auditada. Migration de laboratório: `infra/014_cta_drift_alerts.sql`, após as anteriores.
+- PR #22: consulta autenticada `GET /admin/projects/:id/cta/alerts`, limitada a 100 alertas por projeto, mais recentes primeiro e desempate por ID. Entrega e retry dos alertas F27 ainda pendentes.
+- PR #23: gate documental obrigatório no workflow existente: UTF-8 válido, sinais de corrupção (inclusive interrogações repetidas entre letras em prosa) e consistência das declarações explícitas mais recentes de STATUS com a matriz. Preserva perguntas e exemplos técnicos Markdown; testes independentes de corrupção e de texto legítimo.
 - D07: formulários suspensos e armazenados, sem consumir o limite de âncoras; preservar envio nativo.
 - Preservar política pronta, destinos aprovados, demais mapeamentos, Stealth/OBSERVE_ONLY e PAGE_REDIRECT.
-- Usar somente laboratório e dados sintéticos; GS08 integral e F27 completo continuam pendentes.
-- Revisão Codex independente e CI com PostgreSQL/Chromium exigidas; não fazer merge ou deploy.
+- Usar somente laboratório e dados sintéticos; GS08/GS13 integrais e F27 completo continuam pendentes.
+- Pré-entrega obrigatória: conferir documentação/codificação, executar `python scripts/validate_repo.py` e `python -m unittest discover -s scripts -p 'test_*.py'`; identificar sessão revisora independente, isolamento real, SHA/delta e parecer; conferir CI verde no HEAD final, incluindo checks da aplicação quando relevantes. Gate documental não prova funcionamento do sistema.
+- Próxima fatia F27, proposta ainda não aprovada nem implementada: preparação durável da entrega por alerta e retry em laboratório, com adaptador local simulado, sem SMTP, destinatários reais ou envio externo. Preservar histórico, deduplicação por transição e consulta atual; F25/F27 continuam PARCIAL.
+- Critérios propostos: registro de entrega único por alerta, preparação atômica com o alerta, tentativas com prazo e limite explícitos, recuperação após reinício e concorrência controlada; sucesso simulado separado de entrega externa confirmada. PostgreSQL é a fonte durável; integração de worker/fila segue o Blueprint, sem criar infraestrutura distribuída.
+- Testes propostos: transação/rollback e deduplicação concorrente; falha simulada seguida de retry no prazo; esgotamento de tentativas; reinício e recuperação de trabalho interrompido; retenção coerente; regressão da consulta autenticada e ausência de envio externo. Dependências: migration incremental, relógio/adaptador injetáveis, limites de retry e reserva de trabalho documentados, escolha do encaixe no worker existente/previsto e revisão independente.
+- Riscos a resolver na aprovação: duplicação após interrupção entre processamento e confirmação, trabalho preso ou concorrente, conflito de retenção e exposição de URLs em logs. A simulação não comprova entrega de e-mail nem encerra GS08/GS13. Não implementar antes da aprovação; sem merge ou deploy.
