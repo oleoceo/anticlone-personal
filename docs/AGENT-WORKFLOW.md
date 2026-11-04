@@ -20,6 +20,11 @@
 
 ## C. Decisão de avanço
 
+Checklist de pré-entrega do implementador:
+- Conferir documentação alterada, codificação, consistência com a matriz e evidências dos testes.
+- Identificar a sessão independente, seu parecer e o SHA ou delta revisado; resolver achados aplicáveis.
+- Antes de declarar o PR pronto, conferir revisão aplicável e CI verde no SHA final; após nova alteração, reavaliar o delta e repetir a conferência da CI.
+
 ```text
 IMPLEMENTAR -> TESTAR
   ├── PASSOU -> PR -> REVISÃO INDEPENDENTE + CI -> ACEITE -> PRÓXIMA FATIA

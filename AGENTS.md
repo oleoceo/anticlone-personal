@@ -54,3 +54,8 @@
 - Estado vivo: `STATUS.md`. Protocolo: `docs/AGENT-WORKFLOW.md`. Cenários: `docs/TEST-SCENARIOS.md`.
 - Enquanto não existe código, executar `python scripts/validate_repo.py` (CI **apenas documental**).
 - Quando criar código, fornecer `package.json` na raiz com scripts reais: `lint`, `typecheck`, `test`, `build`; nunca criar scripts placebo que retornam sucesso sem verificar.
+
+## Checklist curto de pré-entrega
+- Conferir documentação alterada, codificação, consistência com a matriz e evidências dos testes.
+- Identificar a sessão independente, seu parecer e o SHA ou delta revisado; resolver achados aplicáveis.
+- Antes de declarar o PR pronto, conferir revisão aplicável e CI verde no SHA final; após nova alteração, reavaliar o delta e repetir a conferência da CI.

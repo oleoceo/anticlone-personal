@@ -11,6 +11,53 @@ required=[
     'docs/DECISIONS.md','docs/SOURCES.md','docs/WINDOWS-GITHUB.md',
 ]
 errors=[]
+def check_documents(root):
+    """Verifica UTF-8 e declaracoes explicitas de situacao no STATUS."""
+    problems=[]
+    contents={}
+    for path in list(root.glob('*.md')) + list((root/'docs').rglob('*.md')):
+        try:
+            content=path.read_text(encoding='utf8')
+        except UnicodeDecodeError:
+            problems.append(f'{path.relative_to(root)}: UTF-8 invalido')
+            continue
+        contents[path.relative_to(root).as_posix()]=content
+        fence=None
+        for number,line in enumerate(content.splitlines(),1):
+            marker=re.match(r'^\s{0,3}(`{3,}|~{3,})',line)
+            if marker:
+                token=marker.group(1)
+                if fence is None: fence=token
+                elif token[0]==fence[0] and len(token)>=len(fence): fence=None
+                prose=''
+            else:
+                prose='' if fence or line.startswith(('    ', '\t')) else re.sub(r'(`+).*?\1', '', line)
+            if '\ufffd' in line or re.search(r'[ÃÂ][\x80-\xbf]',line):
+                problems.append(f'{path.relative_to(root)}:{number}: possivel texto corrompido')
+            elif re.search(r'[^\W\d_]\?{2,}[^\W\d_]',prose):
+                problems.append(f'{path.relative_to(root)}:{number}: possivel texto corrompido')
+    matrix=contents.get('docs/FUNCTIONAL-MATRIX.md','')
+    statuses=dict(re.findall(r'^\| (F\d{2,}) \|.*\| (P|PARCIAL|V|B) \|\s*$',matrix,re.M))
+    seen=set()
+    for number,line in enumerate(contents.get('STATUS.md','').splitlines(),1):
+        match=re.match(r'^- \*\*((?:F\d{2,})(?:/F\d{2,})*)\s+(parcial|parciais|validada(?:s)?|bloqueada(?:s)?|planejada(?:s)?)(?=\s|[:—*])',line,re.I)
+        if not match: continue
+        label=match.group(2).lower()
+        expected=('PARCIAL' if label.startswith('parcia') else 'V' if label.startswith('validada') else 'B' if label.startswith('bloqueada') else 'P')
+        for capability in match.group(1).split('/'):
+            if capability in seen: continue
+            seen.add(capability)
+            if capability not in statuses:
+                problems.append(f'STATUS.md:{number}: {capability} ausente da matriz')
+            elif statuses[capability]!=expected:
+                problems.append(f'STATUS.md:{number}: {capability} declarado {expected}, matriz {statuses[capability]}')
+    return problems
+
+errors.extend(check_documents(root))
+if any('UTF-8 invalido' in error for error in errors):
+    print('FALHOU:')
+    for error in errors: print(' -',error)
+    sys.exit(1)
 for file in required:
     if not (root/file).is_file(): errors.append('Arquivo obrigatorio ausente: '+file)
 if (root/'CLAUDE.md').is_file() and (root/'CLAUDE.md').read_text(encoding='utf8').strip()!='@AGENTS.md':
