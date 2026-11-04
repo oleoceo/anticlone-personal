@@ -31,6 +31,7 @@ test('GS02: browser visits, durable incident and test SMTP alert after restart',
   await db.query(await readFile('infra/001_initial.sql', 'utf8')); await db.query(await readFile('infra/002_alerts.sql', 'utf8')); await db.query(await readFile('infra/003_projects.sql', 'utf8')); await db.query(await readFile('infra/004_observation_sources.sql', 'utf8')); await db.query(await readFile('infra/005_canaries.sql', 'utf8')); await db.query(await readFile('infra/018_notification_budget.sql', 'utf8')); await db.query(await readFile('infra/019_alert_outbox_expiry.sql', 'utf8'));
   const project = 'gs02_' + crypto.randomUUID();
   const fixture = createServer(async (req, res) => {
+    if (req.url === '/checkout') { res.writeHead(200, {'content-type':'text/html'}).end('<h1>Checkout</h1>'); return; }
     const html = await readFile(req.url === '/clone' ? 'tests/fixtures/clone.html' : 'tests/fixtures/original.html', 'utf8');
     res.writeHead(200, {'content-type':'text/html'}).end(html);
   });
@@ -60,13 +61,23 @@ test('GS02: browser visits, durable incident and test SMTP alert after restart',
     for (const available of ['both', 'html', 'css', 'none']) {
       await db.query('DELETE FROM canary_observations WHERE project_id=$1', [project]);
       const passive = await browser.newPage();
+      const canaryEvents: string[] = [];
+      passive.on('response', response => { if (response.url().includes('/canary/')) canaryEvents.push(`${new URL(response.url()).pathname}: ${response.status()}`); });
+      passive.on('requestfailed', request => { if (request.url().includes('/canary/')) canaryEvents.push(`${new URL(request.url()).pathname}: failed`); });
       await passive.route('**/runtime.js', route => route.abort());
       await passive.route('**/fallback.js', route => route.abort());
       if (available === 'css' || available === 'none') await passive.route('**/canary/html.gif', route => route.abort());
       if (available === 'html' || available === 'none') await passive.route('**/canary/css.gif', route => route.abort());
       await passive.goto(clone + '/clone');
       const expected = available === 'both' ? 2 : available === 'none' ? 0 : 1;
-      if (expected) await until(async () => (await db.query('SELECT * FROM canary_observations WHERE project_id=$1', [project])).rowCount === expected, available);
+      if (expected) {
+        try { await until(async () => (await db.query('SELECT * FROM canary_observations WHERE project_id=$1', [project])).rowCount === expected, available); }
+        catch (error) {
+          const rows = await db.query('SELECT host,source FROM canary_observations WHERE project_id=$1 ORDER BY host,source', [project]);
+          process.stderr.write(`GS02 canary ${available}: ${JSON.stringify({events:canaryEvents, rows:rows.rows})}\n`);
+          throw error;
+        }
+      }
       await passive.locator('a').click(); assert.ok(passive.url().endsWith('/checkout'));
       await passive.close();
       const signals = await db.query('SELECT host,source FROM canary_observations WHERE project_id=$1 ORDER BY source', [project]);
