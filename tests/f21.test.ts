@@ -22,9 +22,10 @@ test('F21: approved static anchors, entry precedence and fail-open in Chromium',
   const port=(fixture.address() as AddressInfo).port, original=`http://127.0.0.1:${port}`,clone=`http://localhost:${port}`;
   await db.query('INSERT INTO projects(id,name,origin) VALUES($1,$1,$2)',[project,original]);
   const candidates=['basic001','premium1','review01'].map((marker,i)=>({marker,kind:'a',parent:'body',ordinal:i+1,url:clone+'/x'}));
+  candidates.push({marker:'form0001',kind:'form',parent:'body',ordinal:4,url:clone+'/form-original'});
   await importInventory(db,project,{surface:'landing',candidates});
   const rows=await db.query('SELECT id,marker FROM cta_points WHERE project_id=$1',[project]);
-  for(const [marker,offer] of [['basic001','basic'],['premium1','premium'],['review01','review']] as const) {
+  for(const [marker,offer] of [['basic001','basic'],['premium1','premium'],['review01','review'],['form0001','form']] as const) {
     const destination=await approveDestination(db,project,{offer,url:original+'/official-'+offer});
     await mapPoint(db,project,{pointId:rows.rows.find(x=>x.marker===marker).id,offer,destinationId:destination.id});
   }
@@ -47,6 +48,7 @@ test('F21: approved static anchors, entry precedence and fail-open in Chromium',
     let ready=false; for(let i=0;i<100;i++){try{if((await fetch('http://127.0.0.1:3000/runtime.js')).ok){ready=true;break;}}catch{} await new Promise(r=>setTimeout(r,100));} assert.ok(ready);
     browser=await chromium.launch({headless:true,args:['--host-resolver-rules=MAP localhost 127.0.0.1']});
     const page=await browser.newPage();
+    await page.addInitScript(()=>{addEventListener('submit',event=>{if ((event.target as HTMLElement).hasAttribute('data-cancel-test')) event.preventDefault();});});
     const decisions:string[]=[], backgroundRequests:string[]=[]; page.on('request',r=>{if(r.url().endsWith('/entry-decision')) decisions.push(r.url()); if(['fetch','xhr'].includes(r.resourceType())) backgroundRequests.push(r.url());});
     const check=async (selector:string,expected:string) => { await page.goto(clone+'/clone'); await page.waitForTimeout(300); const before=decisions.length; await page.locator(selector).click(); await page.waitForURL(expected); assert.equal(decisions.length,before); };
     await check('[data-anticlone-point="basic001"]',original+'/official-basic');
@@ -54,6 +56,35 @@ test('F21: approved static anchors, entry precedence and fail-open in Chromium',
     await check('[data-anticlone-point="whatsapp"]',clone+'/whatsapp');
     await check('[data-anticlone-point="review01"]',clone+'/review');
     await check('a:not([data-anticlone-point])',clone+'/unmarked');
+    const form = async (attributes:string, contents:string, expected:string) => {
+      await page.goto(clone+'/clone'); await page.waitForTimeout(300);
+      await page.evaluate(({attributes,contents})=>{document.body.insertAdjacentHTML('beforeend',`<form data-anticlone-point="form0001" action="/form-original" ${attributes}>${contents}<button type="submit">Enviar</button></form>`);},{attributes,contents});
+      const before=backgroundRequests.length;
+      await page.getByText('Enviar',{exact:true}).click(); await page.waitForURL(expected);
+      assert.equal(backgroundRequests.length,before);
+    };
+    await form('method="get"','',clone+'/form-original?');
+    await form('method="get"','<input name="test" value="synthetic">',clone+'/form-original?test=synthetic');
+    await form('method="post"','',clone+'/form-original');
+    await page.goto(clone+'/clone'); await page.waitForTimeout(300);
+    await page.evaluate(()=>document.body.insertAdjacentHTML('beforeend','<form data-anticlone-point="form0001" action="/form-original"><button formaction="/override">Override</button></form>'));
+    await page.getByText('Override',{exact:true}).click(); await page.waitForURL(url=>url.origin===clone && url.pathname==='/override');
+    await page.goto(clone+'/clone'); await page.waitForTimeout(300);
+    await page.evaluate(()=>document.body.insertAdjacentHTML('beforeend','<form data-anticlone-point="form0001" action="/form-original"><button>Duplicado</button></form><div data-anticlone-point="form0001"></div>'));
+    await page.getByText('Duplicado',{exact:true}).click(); await page.waitForURL(url=>url.origin===clone && url.pathname==='/form-original');
+    await page.goto(clone+'/clone'); await page.waitForTimeout(300);
+    await page.evaluate(()=>{document.body.insertAdjacentHTML('beforeend','<form data-anticlone-point="form0001" data-cancel-test action="/form-original"><button>Cancelar</button></form>');});
+    await page.getByText('Cancelar',{exact:true}).click(); await page.waitForTimeout(100); assert.equal(page.url(),clone+'/clone');
+    await page.evaluate(()=>{document.querySelector('form')!.removeAttribute('data-cancel-test'); addEventListener('submit',event=>event.preventDefault(),{once:true});});
+    await page.getByText('Cancelar',{exact:true}).click(); await page.waitForTimeout(100); assert.equal(page.url(),clone+'/clone');
+    await page.evaluate(()=>{addEventListener('submit',event=>{(event.target as HTMLFormElement).insertAdjacentHTML('beforeend','<input name="late" value="synthetic">');},{once:true});});
+    await page.getByText('Cancelar',{exact:true}).click(); await page.waitForURL(clone+'/form-original?late=synthetic');
+    await page.goto(clone+'/clone'); await page.waitForTimeout(300);
+    await page.evaluate(()=>{document.body.insertAdjacentHTML('beforeend','<form data-anticlone-point="form0001" action="/form-original"><button>Cancelar</button></form>');});
+    await page.evaluate(()=>{const f=document.querySelector('form')!; f.removeAttribute('data-cancel-test'); f.dispatchEvent(new Event('submit',{bubbles:true}));});
+    await page.waitForTimeout(100); assert.equal(page.url(),clone+'/clone');
+    await page.evaluate(()=>{document.head.insertAdjacentHTML('beforeend','<base target="_blank">');});
+    const popup=page.waitForEvent('popup'); await page.getByText('Cancelar',{exact:true}).click(); const opened=await popup; await opened.waitForURL(url=>url.origin===clone && url.pathname==='/form-original'); await opened.close();
     // Popup content and SPA updates reuse only the already-approved policy.
     await page.goto(clone+'/clone'); await page.waitForTimeout(300);
     await page.locator('[data-anticlone-point="basic001"]').evaluate(el=>el.remove());
