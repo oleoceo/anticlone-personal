@@ -23,6 +23,7 @@ test('notification intent failures preserve events and reconciliation survives r
     await db.query("INSERT INTO projects(id,name,origin) VALUES('p','p','http://localhost')");
     const oldPoint=randomUUID();
     await db.query("INSERT INTO cta_points(project_id,id,surface,kind) VALUES('p',$1,'old','a')",[oldPoint]);
+    await db.query("INSERT INTO cta_observations(project_id,point_id,evidence,confidence) VALUES('p',$1,'historical','LOW')",[oldPoint]);
     const historical=(await db.query("INSERT INTO cta_drift_alerts(project_id,point_id,reason) VALUES('p',$1,'MARKER_COLLISION') RETURNING id",[oldPoint])).rows[0].id;
     await db.query("UPDATE cta_alert_deliveries SET delivery_mode='SIMULATED' WHERE alert_id=$1",[historical]);
     const orphan=(await db.query("INSERT INTO cta_drift_alerts(project_id,point_id,reason) VALUES('p',$1,'MARKER_COLLISION') RETURNING id",[oldPoint])).rows[0].id;
@@ -59,7 +60,7 @@ test('notification intent failures preserve events and reconciliation survives r
     await importInventory(db,'p',{surface:'landing',candidates:[candidate,candidate]});
     assert.equal((await db.query("SELECT 1 FROM cta_drift_alerts WHERE reason='MARKER_COLLISION' AND point_id=$1",[point])).rowCount,1);
     assert.equal((await db.query('SELECT review_required FROM cta_points WHERE id=$1',[point])).rows[0].review_required,true);
-    assert.equal((await db.query('SELECT count(*)::int AS n FROM cta_observations WHERE point_id<>$1',[point])).rows[0].n,2);
+    assert.equal((await db.query("SELECT count(*)::int AS n FROM cta_observations WHERE point_id<>$1 AND evidence<>'historical'",[point])).rows[0].n,2);
     assert.equal((await db.query('SELECT count(*)::int AS n FROM cta_alert_deliveries')).rows[0].n,1);
     await db.query('DROP TRIGGER reject_delivery ON cta_alert_deliveries');
 
