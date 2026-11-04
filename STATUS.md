@@ -1,4 +1,5 @@
 # STATUS — AntiClone Personal
+- **Qualidade do processo:** gate documental verifica codificação e declarações explícitas de situação; testes no workflow existente. Revisão independente e CI final registradas no PR.
 - **F27 consulta:** GET autenticado `/admin/projects/:id/cta/alerts`, até 100 alertas por projeto, mais recentes primeiro (desempate por ID); envio e retry pendentes.
 - **F27 PARCIAL — PR #21:** alerta persistente por transição de CTA mapeado a revisão, deduplicado até reaprovação; retenção de 30 dias. Envio e retry pendentes; GS08/GS13 integrais pendentes. Evidências: tests/cta-inventory.test.ts e CI 41752363089 (4c6a848); revisão final e CI do novo HEAD publicadas no PR #21.
 - **F25 parcial — PR #20:** reaprovação manual autenticada de âncora em revisão, com confirmação da observação e auditoria transacional; revisão Codex independente sem P0/P1/P2 remanescentes (evidência em `docs/PR20-REVIEW.md`). CI aprovada no código `6c56b70`, run 41750058855; resultado do HEAD documental final publicado no PR. GS08 integral e alertas pendentes; sem merge/deploy.
