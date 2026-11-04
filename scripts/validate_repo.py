@@ -22,8 +22,19 @@ def check_documents(root):
             problems.append(f'{path.relative_to(root)}: UTF-8 invalido')
             continue
         contents[path.relative_to(root).as_posix()]=content
+        fence=None
         for number,line in enumerate(content.splitlines(),1):
+            marker=re.match(r'^\s{0,3}(`{3,}|~{3,})',line)
+            if marker:
+                token=marker.group(1)
+                if fence is None: fence=token
+                elif token[0]==fence[0] and len(token)>=len(fence): fence=None
+                prose=''
+            else:
+                prose='' if fence else re.sub(r'(`+).*?\1', '', line)
             if '\ufffd' in line or re.search(r'[ÃÂ][\x80-\xbf]',line):
+                problems.append(f'{path.relative_to(root)}:{number}: possivel texto corrompido')
+            elif re.search(r'[^\W\d_]\?{2,}[^\W\d_]',prose):
                 problems.append(f'{path.relative_to(root)}:{number}: possivel texto corrompido')
     matrix=contents.get('docs/FUNCTIONAL-MATRIX.md','')
     statuses=dict(re.findall(r'^\| (F\d{2,}) \|.*\| (P|PARCIAL|V|B) \|\s*$',matrix,re.M))
