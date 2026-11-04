@@ -48,6 +48,26 @@ test('expiry preserves events, respects active delivery and survives workers and
     try { await deliverCtaAlert(restarted,async()=>{sends++;}); await deliverOne(restarted,'p',1); } finally { await restarted.end(); }
     assert.equal((await db.query('SELECT state FROM cta_alert_deliveries WHERE alert_id=$1',[ids[3]])).rows[0].state,'EXPIRED');
     await db.query('DELETE FROM notification_attempt_budget');
+    // Hold the budget lock while both reservation paths wait; make the events old
+    // before releasing it. Neither worker may reserve or invoke its sender.
+    await db.query("INSERT INTO projects(id,name,origin) VALUES('boundary','boundary','http://localhost')");
+    await db.query("INSERT INTO incidents(project_id,host) VALUES('boundary','boundary.test')");
+    await db.query("INSERT INTO alert_outbox(incident_id) SELECT id FROM incidents WHERE project_id='boundary'");
+    await db.query("INSERT INTO cta_drift_alerts(project_id,point_id,reason) VALUES('p',$1,'MARKER_COLLISION')",[point]);
+    const boundary=(await db.query('SELECT max(id) AS id FROM cta_drift_alerts')).rows[0].id;
+    const waiting=new Pool({connectionString:process.env.TEST_DATABASE_URL,options});
+    const lock=await db.connect();
+    try {
+      await lock.query('BEGIN'); await lock.query('SELECT singleton FROM notification_budget_lock FOR UPDATE');
+      const f26=deliverOne(waiting,'boundary',1);
+      const f27=deliverCtaAlert(waiting,async()=>{sends++;});
+      await db.query("UPDATE incidents SET first_seen=clock_timestamp()-interval '24 hours' WHERE project_id='boundary'");
+      await db.query("UPDATE cta_drift_alerts SET created_at=clock_timestamp()-interval '24 hours' WHERE id=$1",[boundary]);
+      await lock.query('COMMIT'); await Promise.all([f26,f27]);
+      assert.equal((await db.query("SELECT attempts FROM alert_outbox a JOIN incidents i ON i.id=a.incident_id WHERE i.project_id='boundary'")).rows[0].attempts,0);
+      assert.equal((await db.query('SELECT attempts FROM cta_alert_deliveries WHERE alert_id=$1',[boundary])).rows[0].attempts,0);
+      assert.equal((await db.query('SELECT count(*)::int AS n FROM notification_attempt_budget')).rows[0].n,0);
+    } finally {lock.release(); await waiting.end();}
     let entered!:()=>void, release!:()=>void;
     const started=new Promise<void>(r=>{entered=r;}); const gate=new Promise<void>(r=>{release=r;});
     const senderPool=new Pool({connectionString:process.env.TEST_DATABASE_URL,options});

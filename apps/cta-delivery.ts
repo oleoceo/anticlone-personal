@@ -33,7 +33,8 @@ export async function deliverCtaAlert(db: Pool, send: LocalSender): Promise<bool
       ORDER BY d.alert_id FOR UPDATE OF d SKIP LOCKED LIMIT 1
     ) UPDATE cta_alert_deliveries d SET state='PROCESSING', attempts=d.attempts+1,
       lease_token=$1, lease_until=now()+interval '1 minute' FROM next
-      WHERE d.alert_id=next.alert_id RETURNING d.alert_id`, [token]);
+      WHERE d.alert_id=next.alert_id AND EXISTS (SELECT 1 FROM cta_drift_alerts a WHERE a.id=d.alert_id
+        AND a.created_at > clock_timestamp()-interval '24 hours') RETURNING d.alert_id`, [token]);
     id = result.rows[0]?.alert_id;
     if (id) await recordBudget(client);
     await client.query('COMMIT');

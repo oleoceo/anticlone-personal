@@ -25,8 +25,11 @@ export async function deliverOne(pool: Pool, project: string, port: number): Pro
           WHERE i.project_id=$1 AND a.sent_at IS NULL AND a.expired_at IS NULL AND i.first_seen > clock_timestamp()-interval '24 hours' AND a.attempts < 3 AND a.next_attempt <= now() ORDER BY a.id LIMIT 1 FOR UPDATE OF a SKIP LOCKED`, [project]);
         item = pending.rows[0];
         if (item) {
-          await client.query("UPDATE alert_outbox SET attempts=attempts+1, next_attempt=clock_timestamp()+interval '1 minute' WHERE id=$1", [item.id]);
-          await recordBudget(client);
+          const reserved = await client.query(`UPDATE alert_outbox a SET attempts=a.attempts+1, next_attempt=clock_timestamp()+interval '1 minute'
+            FROM incidents i WHERE a.id=$1 AND i.id=a.incident_id AND a.expired_at IS NULL
+            AND i.first_seen > clock_timestamp()-interval '24 hours' RETURNING a.id`, [item.id]);
+          if (reserved.rowCount) await recordBudget(client);
+          else item = undefined;
         }
       }
       await client.query('COMMIT');
