@@ -108,10 +108,19 @@ test('F21: approved static anchors, entry precedence and fail-open in Chromium',
     await page.goto(clone+'/clone'); await page.waitForTimeout(300);
     await page.evaluate(()=>{document.body.addEventListener('click',()=>history.pushState({},'', '/different'),{capture:true,once:true});});
     await page.locator('[data-anticlone-point="basic001"]').click(); await page.waitForURL(clone+'/clone-basic');
+    const decisionEvents: string[] = [];
+    const decisionStart = Date.now();
+    page.on('response', response => { if (response.url().endsWith('/entry-decision')) decisionEvents.push(`response ${response.status()} at ${Date.now()-decisionStart}ms`); });
+    page.on('requestfailed', request => { if (request.url().endsWith('/entry-decision')) decisionEvents.push(`failed at ${Date.now()-decisionStart}ms`); });
     await page.goto(clone+'/clone');
-    await page.waitForFunction(() => document.documentElement.dataset.testCtaListener === 'installed');
-    await page.locator('[data-anticlone-point="basic001"]').evaluate(el=>el.addEventListener('click',event=>event.stopPropagation()));
-    await page.locator('[data-anticlone-point="basic001"]').click(); await page.waitForURL(original+'/official-basic');
+    try {
+      await page.waitForFunction(() => document.documentElement.dataset.testCtaListener === 'installed');
+      await page.locator('[data-anticlone-point="basic001"]').evaluate(el=>el.addEventListener('click',event=>event.stopPropagation()));
+      await page.locator('[data-anticlone-point="basic001"]').click(); await page.waitForURL(original+'/official-basic');
+    } catch (error) {
+      process.stderr.write(`F21 stopPropagation: ${JSON.stringify({path:new URL(page.url()).pathname, listener:await page.evaluate(() => document.documentElement.dataset.testCtaListener ?? 'absent'), decisionEvents})}\n`);
+      throw error;
+    }
     await page.goto(clone+'/clone'); await page.waitForTimeout(300);
     await page.evaluate(()=>{document.querySelector('[data-anticlone-point="basic001"]')?.remove(); const a=document.createElement('a'); a.dataset.anticlonePoint='basic001'; a.href='/dynamic-original'; a.textContent='Stopped'; a.addEventListener('click',event=>event.stopPropagation()); document.body.appendChild(a);});
     await page.getByText('Stopped',{exact:true}).click(); await page.waitForURL(original+'/official-basic');
