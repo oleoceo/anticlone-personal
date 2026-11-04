@@ -65,7 +65,7 @@ test('authenticated inventory and offer-scoped mappings persist and isolate proj
     // A changed destination isolates only its mapped point.
     assert.equal((await post(p,'inventory',{surface:'landing',candidates:[{...candidates[0],url:origin+'/changed'}, {...candidates[1],url:null}, candidates[2]]},token)).status,200);
     const drifted=await (await get(p,token)).json() as Row[];
-    assert.equal(drifted.find(x=>x.marker==='basic001')?.review_required,true);
+    assert.equal(drifted.find(x=>x.surface==='landing' && x.marker==='basic001')?.review_required,true);
     assert.equal(drifted.find(x=>x.marker==='premium1')?.review_required,false);
     assert.equal(drifted.find(x=>x.marker==='whatsapp')?.review_required,false);
     assert.equal(drifted.find(x=>x.marker==='basic001')?.destination_id,dest.id);
