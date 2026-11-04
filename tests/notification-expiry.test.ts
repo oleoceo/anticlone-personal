@@ -50,7 +50,7 @@ test('expiry preserves events, respects active delivery and survives workers and
     await db.query('DELETE FROM notification_attempt_budget');
     // Hold the budget lock while both reservation paths wait; make the events old
     // before releasing it. Neither worker may reserve or invoke its sender.
-    await db.query("INSERT INTO projects(id,name,origin) VALUES('boundary','boundary','http://localhost')");
+    await db.query("INSERT INTO projects(id,name,origin) VALUES('boundary','boundary','http://boundary.localhost')");
     await db.query("INSERT INTO incidents(project_id,host) VALUES('boundary','boundary.test')");
     await db.query("INSERT INTO alert_outbox(incident_id) SELECT id FROM incidents WHERE project_id='boundary'");
     await db.query("INSERT INTO cta_drift_alerts(project_id,point_id,reason) VALUES('p',$1,'MARKER_COLLISION')",[point]);
