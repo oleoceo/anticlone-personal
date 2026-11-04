@@ -8,11 +8,12 @@ import { Pool } from 'pg';
 import { TOTP, Secret } from 'otpauth';
 import { createAdminServer } from '../apps/admin-auth.js';
 import { cleanupCta } from '../apps/cta-inventory.js';
+import { ctaDecision, publishCtaPolicy } from '../apps/cta-policy.js';
 
 test('authenticated inventory and offer-scoped mappings persist and isolate projects', async () => {
   assert.ok(process.env.TEST_DATABASE_URL);
   const db=new Pool({connectionString:process.env.TEST_DATABASE_URL});
-  for (const file of ['001_initial','002_alerts','003_projects','011_cta_inventory']) await db.query((await readFile(`infra/${file}.sql`,'utf8')).replace(/^\uFEFF/,''));
+  for (const file of ['001_initial','002_alerts','003_projects','011_cta_inventory','012_cta_policy']) await db.query((await readFile(`infra/${file}.sql`,'utf8')).replace(/^\uFEFF/,''));
   await db.query('CREATE TABLE IF NOT EXISTS admin_totp_replay (factor_id text PRIMARY KEY, last_counter bigint NOT NULL)');
   await db.query('CREATE TABLE IF NOT EXISTS admin_totp_codes (factor_id text NOT NULL, digest text NOT NULL, valid_until bigint NOT NULL, PRIMARY KEY (factor_id, digest))');
   const secret='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',salt='0123456789abcdef0123456789abcdef', factor=createHash('sha256').update(secret).digest('hex');
@@ -61,6 +62,20 @@ test('authenticated inventory and offer-scoped mappings persist and isolate proj
     assert.notEqual(popup.id,point);
     const special=await (await post(p,'destinations',{offer:'premium15',url:origin+'/official-premium15'},token)).json() as {id:string};
     assert.equal((await post(p,'mappings',{pointId:popup.id,offer:'premium15',destinationId:special.id},token)).status,200);
+    // A changed destination isolates only its mapped point.
+    assert.equal((await post(p,'inventory',{surface:'landing',candidates:[{...candidates[0],url:origin+'/changed'}, {...candidates[1],url:null}, candidates[2]]},token)).status,200);
+    const drifted=await (await get(p,token)).json() as Row[];
+    assert.equal(drifted.find(x=>x.surface==='landing' && x.marker==='basic001')?.review_required,true);
+    assert.equal(drifted.find(x=>x.marker==='premium1')?.review_required,false);
+    assert.equal(drifted.find(x=>x.marker==='whatsapp')?.review_required,false);
+    assert.equal(drifted.find(x=>x.surface==='landing' && x.marker==='basic001')?.destination_id,dest.id);
+    assert.equal(drifted.find(x=>x.surface==='popup')?.review_required,false);
+    await publishCtaPolicy(db,p,{enabled:true,surface:'landing',pathname:'/clone',allocation:{PAID_ATTRIBUTED:100,ORGANIC:100,REFERRAL:100,DIRECT_UNKNOWN:100}});
+    const clone=origin.replace('localhost','127.0.0.1');
+    const decision=await ctaDecision(db,p,origin,clone,clone,'LOW','0'.repeat(32),'DIRECT_UNKNOWN');
+    assert.equal(decision.action,'REPLACE_CONVERSION');
+    assert.deepEqual(decision.mappings?.map(x=>x.marker).sort(),['premium1','whatsapp']);
+
     assert.equal((await post(p,'inventory',{surface:'landing',candidates:[candidates[0],candidates[0]]},token)).status,200);
     assert.equal((await (await get(p,token)).json() as Row[]).find(x=>x.id===point)?.review_required,true);
     assert.equal((await post(p,'mappings',{pointId:point,offer:'basic',destinationId:dest.id},token)).status,400);
@@ -68,6 +83,8 @@ test('authenticated inventory and offer-scoped mappings persist and isolate proj
     assert.equal((await (await get(q,token)).json() as Row[]).length,0);
     await db.query("UPDATE cta_observations SET observed_at=now()-interval '8 days' WHERE project_id=$1",[p]);
     await cleanupCta(db);
+    assert.equal((await post(p,'inventory',{surface:'landing',candidates:[candidates[1]]},token)).status,200);
+    assert.equal((await (await get(p,token)).json() as Row[]).find(x=>x.marker==='premium1')?.review_required,true);
     assert.equal((await (await get(p,token)).json() as Row[]).find(x=>x.id===point)?.destination_id,dest.id);
     server.close(); await once(server,'close');
     const later=Date.now()+30000;
