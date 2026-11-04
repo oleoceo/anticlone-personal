@@ -68,7 +68,7 @@ test('authenticated inventory and offer-scoped mappings persist and isolate proj
     assert.equal(drifted.find(x=>x.surface==='landing' && x.marker==='basic001')?.review_required,true);
     assert.equal(drifted.find(x=>x.marker==='premium1')?.review_required,false);
     assert.equal(drifted.find(x=>x.marker==='whatsapp')?.review_required,false);
-    assert.equal(drifted.find(x=>x.marker==='basic001')?.destination_id,dest.id);
+    assert.equal(drifted.find(x=>x.surface==='landing' && x.marker==='basic001')?.destination_id,dest.id);
     assert.equal(drifted.find(x=>x.surface==='popup')?.review_required,false);
     await publishCtaPolicy(db,p,{enabled:true,surface:'landing',pathname:'/clone',allocation:{PAID_ATTRIBUTED:100,ORGANIC:100,REFERRAL:100,DIRECT_UNKNOWN:100}});
     const clone=origin.replace('localhost','127.0.0.1');
