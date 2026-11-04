@@ -1,4 +1,5 @@
 # STATUS — AntiClone Personal
+- **Global notification settings - laboratory:** authenticated, versioned API with atomic audit and explicit preference; no credentials or delivery integration. Test: `tests/notification-settings.test.ts`; independent review and final CI will be recorded in the PR. F26 planned, F27 partial, GS08/GS13 pending; D03 remains proposed.
 - **Qualidade do processo:** gate documental verifica codificação e declarações explícitas de situação; testes no workflow existente. Revisão independente e CI final registradas no PR.
 - **PR #23, ajuste do gate:** detecta interrogações repetidas entre letras em prosa; testes isolam substituição Unicode, mojibake, interrogações e UTF-8 inválido, preservando perguntas e código Markdown. Revisão do delta e CI do novo HEAD registradas no PR; sem merge/deploy.
 - **F27 PARCIAL — laboratório:** SMTP exclusivamente em loopback e desabilitado por padrão; histórico simulado preservado, aceitação local distinta de entrega final. Testes: `tests/cta-delivery.test.ts` e `tests/cta-local-smtp.test.ts`; entrega externa e GS08/GS13 integrais pendentes.
