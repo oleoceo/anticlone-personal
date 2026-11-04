@@ -9,10 +9,12 @@
 - Usar somente laboratório e dados sintéticos; GS08/GS13 integrais e F27 completo continuam pendentes.
 - Pré-entrega obrigatória: conferir documentação/codificação, executar `python scripts/validate_repo.py` e `python -m unittest discover -s scripts -p 'test_*.py'`; identificar sessão revisora independente, isolamento real, SHA/delta e parecer; conferir CI verde no HEAD final, incluindo checks da aplicação quando relevantes. Gate documental não prova funcionamento do sistema.
 
-## F27: entrega simulada em laboratório
+## F27: SMTP local em laboratório
 
 Aplicar `infra/015_cta_alert_deliveries.sql` após as migrations anteriores. A inserção do alerta prepara uma única entrega na mesma transação; alertas existentes são preparados pela migration. A exclusão por retenção remove a entrega associada.
 
-Após `npm run build`, iniciar `node dist/apps/cta-delivery-worker.js` com `DATABASE_URL` do laboratório. O processo percorre um alerta por segundo; a simulação não usa rede nem registra conteúdo. Interrupção retoma após reserva expirar em um minuto; falha espera um minuto. São no máximo três tentativas, inclusive reservas interrompidas; após esgotamento o estado é FAILED. SIGTERM/SIGINT encerra após o processamento atual.
+Antes da migration, encerrar todos os workers simuladores antigos e não reiniciá-los: eles não reconhecem a classificação nova. Aplicar também `infra/016_cta_local_smtp.sql`: entregas existentes ficam no modo SIMULATED, inclusive pendentes e reservas expiradas, e nunca são enviadas pelo novo worker. Um resultado DELIVERED anterior é classificado SIMULATED, não aceitação SMTP. Novas entregas são SMTP_LOCAL; SMTP_LOCAL_ACCEPTED significa aceitação pelo servidor local, não entrega final.
 
-A reserva possui token para rejeitar confirmação antiga. Uma interrupção entre simulação e confirmação pode repetir a simulação; nenhum resultado representa entrega externa. O estado DELIVERED significa apenas simulação local concluída. GS08/GS13 integrais e envio real permanecem pendentes.
+O worker fica desabilitado por padrão. Somente em laboratório isolado, após `npm run build`, fornecer `DATABASE_URL`, `CTA_SMTP_LAB=1` e `CTA_SMTP_LAB_PORT` do servidor de captura sem relay em 127.0.0.1 e iniciar `node dist/apps/cta-delivery-worker.js`. Remetente e destinatário são fixos em example.test; não há host configurável nem credenciais. A operação SMTP tem prazo total de dez segundos, inferior à reserva de um minuto. Falha espera um minuto; no máximo três reservas contam como tentativas. A retenção de 30 dias remove também entregas pendentes ou falhadas.
+
+O token impede confirmação obsoleta, mas uma interrupção após aceitação e antes da confirmação pode repetir a mensagem. O Message-ID é estável e não garante deduplicação no servidor. A futura escolha de Brevo ou outro SMTP e configuração de remetente e destinatário autorizado requerem outra implementação e aprovação para ativação real. D03 continua proposta a validar; esta fatia não introduz Redis. F27 e GS08/GS13 integrais permanecem pendentes.
