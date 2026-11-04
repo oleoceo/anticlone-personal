@@ -77,6 +77,7 @@ test('local notification UI: browser, session boundaries, CSRF, concurrency and 
     await page.getByText('Habilitação solicitada — envio não operacional').waitFor();
     await page.getByLabel('Destinatário').fill('new@example.test');
     await page.getByRole('button',{name:'Desativar solicitação'}).click();
+    await page.getByText('Solicitação desativada.',{exact:true}).waitFor();
     assert.equal(await page.getByLabel('Destinatário').inputValue(),'new@example.test');
     const enable=page.getByRole('button',{name:'Solicitar habilitação'});
     assert.equal(await enable.isDisabled(),true);
@@ -85,7 +86,7 @@ test('local notification UI: browser, session boundaries, CSRF, concurrency and 
     page.on('request',request=>{if(request.url().endsWith('/preference') && request.postDataJSON()?.enabled===true) enableRequests++});
     await enable.dispatchEvent('click');
     await page.getByRole('button',{name:'Salvar configurações'}).click();
-    await page.getByText('Configurada / desativada').waitFor();
+    await page.getByText('Configuração salva. Alterações desativam a solicitação de habilitação.',{exact:true}).waitFor();
     assert.equal(enableRequests,0);
     assert.equal(await enable.isEnabled(),true);
     assert.equal(await page.locator('#unsaved').isHidden(),true);
