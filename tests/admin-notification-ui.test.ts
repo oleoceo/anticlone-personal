@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { randomUUID, scryptSync } from 'node:crypto';
 import { once } from 'node:events';
 import { createServer, type AddressInfo } from 'node:net';
+import { request as httpRequest } from 'node:http';
 import { Pool } from 'pg';
 import { chromium } from 'playwright';
 import { TOTP, Secret } from 'otpauth';
@@ -47,7 +48,8 @@ test('local notification UI: browser, session boundaries, CSRF, concurrency and 
     assert.equal((await post('preference',{enabled:false},{origin:'http://evil.test'})).status,403);
     assert.equal((await post('preference',{enabled:false},{'sec-fetch-site':'cross-site'})).status,403);
     assert.equal((await post('preference',{enabled:false},{'x-csrf-token':'bad'})).status,403);
-    assert.equal((await post('preference',{enabled:false},{host:'localhost:1234'})).status,403);
+    const wrongHost=await new Promise<number|undefined>((resolve,reject)=>{const r=httpRequest(base+'/admin/ui/preference',{method:'POST',headers:{...headers,host:'localhost:1234',cookie:`admin_session=${cookie.value}`,'x-csrf-token':csrf}},response=>{response.resume();resolve(response.statusCode)});r.on('error',reject);r.end('{"enabled":false}');});
+    assert.equal(wrongHost,403);
     assert.equal((await fetch(base+'/admin/ui/preference',{method:'POST',headers:{'sec-fetch-site':'same-origin','content-type':'application/json',cookie:`admin_session=${cookie.value}`,'x-csrf-token':csrf},body:'{"enabled":false}'})).status,403);
     assert.equal((await fetch(base+'/admin/ui/preference',{method:'POST',headers:{origin:base,'content-type':'application/json',cookie:`admin_session=${cookie.value}`,'x-csrf-token':csrf},body:'{"enabled":false}'})).status,403);
     assert.equal((await fetch(base+'/admin/session',{headers:{cookie:`admin_session=${cookie.value}`}})).status,401);
@@ -68,6 +70,7 @@ test('local notification UI: browser, session boundaries, CSRF, concurrency and 
     await page.getByRole('button',{name:'Desativar solicitação'}).click();
     assert.equal(await page.getByLabel('Destinatário').inputValue(),'new@example.test');
     await page.getByRole('button',{name:'Solicitar habilitação'}).click();
+    await page.getByText('Habilitação solicitada — envio não operacional').waitFor();
     assert.equal(await page.getByLabel('Destinatário').inputValue(),'new@example.test');
     await page.getByRole('button',{name:'Salvar configurações'}).click();
     await page.getByText('Configurada / desativada').waitFor();
