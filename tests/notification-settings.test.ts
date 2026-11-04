@@ -1,0 +1,62 @@
+﻿import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { createHash, randomUUID, scryptSync } from 'node:crypto';
+import { once } from 'node:events';
+import { createServer, type AddressInfo } from 'node:net';
+import { Pool } from 'pg';
+import { TOTP, Secret } from 'otpauth';
+import { createAdminServer } from '../apps/admin-auth.js';
+
+test('global notification settings are authenticated, atomic, versioned and offline', async()=>{
+  assert.ok(process.env.TEST_DATABASE_URL);
+  const admin=new Pool({connectionString:process.env.TEST_DATABASE_URL});
+  const schema=`test_${randomUUID().replaceAll('-','')}`;
+  await admin.query(`CREATE SCHEMA ${schema}`);
+  const db=new Pool({connectionString:process.env.TEST_DATABASE_URL,options:`-c search_path=${schema}`});
+  await db.query((await readFile('infra/017_notification_settings.sql','utf8')).replace(/^\uFEFF/,''));
+  await db.query('CREATE TABLE admin_totp_replay (factor_id text PRIMARY KEY, last_counter bigint NOT NULL)');
+  await db.query('CREATE TABLE admin_totp_codes (factor_id text NOT NULL, digest text NOT NULL, valid_until bigint NOT NULL, PRIMARY KEY (factor_id,digest))');
+  const secret='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',salt='0123456789abcdef0123456789abcdef';
+  const record=`scrypt$${salt}$${scryptSync('password',Buffer.from(salt,'hex'),64).toString('hex')}`;
+  const server=createAdminServer(record,secret,db).listen(0,'127.0.0.1'); await once(server,'listening');
+  let connections=0; const trap=createServer(socket=>{connections++; socket.destroy();}).listen(0,'127.0.0.1'); await once(trap,'listening');
+  const base=`http://127.0.0.1:${(server.address() as AddressInfo).port}/admin`, port=(trap.address() as AddressInfo).port;
+  const request=(path:string,body?:unknown,token?:string)=>fetch(base+path,{method:body===undefined?'GET':'POST',headers:{...(body===undefined?{}:{'content-type':'application/json'}),...(token?{authorization:`Bearer ${token}`}:{})},...(body===undefined?{}:{body:JSON.stringify(body)})});
+  const settings={provider:'smtp',host:'127.0.0.1',port,tls_mode:'starttls',sender:'sender@example.test',recipient:'owner@example.test'};
+  try {
+    assert.equal((await request('/notification-settings')).status,401);
+    assert.equal((await request('/notification-settings',{version:0,...settings})).status,401);
+    assert.equal((await request('/notification-settings/preference',{enabled:false})).status,401);
+    const login=await request('/login',{password:'password',code:new TOTP({secret:Secret.fromBase32(secret)}).generate()});
+    assert.equal(login.status,200); const {token}=await login.json() as {token:string};
+    const initial=await (await request('/notification-settings',undefined,token)).json() as Record<string,unknown>;
+    assert.equal(initial.status,'incomplete'); assert.equal(initial.real_delivery_operational,false);
+    assert.equal((await request('/notification-settings/preference',{enabled:true,version:0},token)).status,400);
+    for(const invalid of [{...settings,password:'secret'}, {...settings,host:'bad\r\nname'}, {...settings,port:0}, {...settings,sender:'a@example.test\r\nBcc:x@example.test'}, {...settings,recipient:'a@example.test,b@example.test'}, {...settings,tls_mode:'none'}, {...settings,provider:'other'}])
+      assert.equal((await request('/notification-settings',{version:0,...invalid},token)).status,400);
+    const parallel=await Promise.all([request('/notification-settings',{version:0,...settings},token),request('/notification-settings',{version:0,...settings,provider:'brevo'},token)]);
+    assert.deepEqual(parallel.map(r=>r.status).sort(),[200,409]);
+    let current=await (await request('/notification-settings',undefined,token)).json() as Record<string,unknown>;
+    assert.equal(current.status,'configured_disabled'); assert.equal(current.real_delivery_operational,false);
+    assert.equal((await request('/notification-settings/preference',{enabled:true,version:0},token)).status,409);
+    current=await (await request('/notification-settings/preference',{enabled:true,version:1},token)).json() as Record<string,unknown>;
+    assert.equal(current.status,'enablement_requested'); assert.equal(current.real_delivery_operational,false);
+    current=await (await request('/notification-settings',{version:2,...settings,recipient:'new@example.test'},token)).json() as Record<string,unknown>;
+    assert.equal(current.status,'configured_disabled'); assert.equal(current.preference_requested,false);
+    await request('/notification-settings/preference',{enabled:true,version:3},token);
+    assert.equal((await request('/notification-settings/preference',{enabled:false},token)).status,200);
+    await db.query(`CREATE FUNCTION reject_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'failure'; END $$`);
+    await db.query('CREATE TRIGGER reject_audit BEFORE INSERT ON notification_settings_audit FOR EACH ROW EXECUTE FUNCTION reject_audit()');
+    assert.equal((await request('/notification-settings',{version:5,...settings},token)).status,503);
+    current=await (await request('/notification-settings',undefined,token)).json() as Record<string,unknown>;
+    assert.equal(current.version,5); assert.equal(current.recipient,'new@example.test');
+    const audit=await db.query('SELECT version,action,changed_fields FROM notification_settings_audit ORDER BY version');
+    assert.deepEqual(audit.rows.map(r=>r.action),['save','enable','save','enable','disable']);
+    assert.equal(JSON.stringify(audit.rows).includes('example.test'),false);
+    assert.equal(JSON.stringify(current).includes('password'),false);
+    assert.equal(connections,0);
+    assert.equal((await db.query('SELECT COUNT(*)::int AS n FROM notification_settings')).rows[0].n,1);
+    assert.ok(createHash('sha256').update(secret).digest('hex'));
+  } finally { server.close(); await once(server,'close'); trap.close(); await once(trap,'close'); await db.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end(); }
+});
