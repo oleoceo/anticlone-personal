@@ -18,7 +18,7 @@ test('shared rolling budget is atomic across F26 and F27 and survives new pools'
   const db=new Pool({connectionString:process.env.TEST_DATABASE_URL,options});
   const other=new Pool({connectionString:process.env.TEST_DATABASE_URL,options});
   try {
-    for (const file of ['001_initial','002_alerts','003_projects','011_cta_inventory','014_cta_drift_alerts','015_cta_alert_deliveries','016_cta_local_smtp','018_notification_budget'])
+    for (const file of ['001_initial','002_alerts','003_projects','011_cta_inventory','014_cta_drift_alerts','015_cta_alert_deliveries','016_cta_local_smtp','018_notification_budget','019_alert_outbox_expiry','020_cta_delivery_expiry'])
       await db.query((await readFile(`infra/${file}.sql`,'utf8')).replace(/^\uFEFF/,''));
     await db.query("INSERT INTO projects(id,name,origin) VALUES('p','p','http://localhost')");
     const point=randomUUID();

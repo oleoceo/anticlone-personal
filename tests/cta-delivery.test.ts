@@ -36,6 +36,7 @@ test('CTA delivery is atomic, exclusive, bounded and recovers interrupted work',
     }
     await db.query(await readFile('infra/016_cta_local_smtp.sql','utf8'));
     await db.query(await readFile('infra/018_notification_budget.sql','utf8'));
+    await db.query(await readFile('infra/020_cta_delivery_expiry.sql','utf8'));
     assert.equal(await deliverCtaAlert(db, async()=>{ throw Error('history must not be sent'); }),false);
     const historical = await db.query('SELECT state,delivery_mode,result_kind FROM cta_alert_deliveries ORDER BY alert_id');
     assert.deepEqual(historical.rows, ['PENDING','PROCESSING','FAILED','DELIVERED'].map(s=>({state:s,delivery_mode:'SIMULATED',result_kind:s==='DELIVERED'?'SIMULATED':null})));
