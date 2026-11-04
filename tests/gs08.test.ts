@@ -22,7 +22,8 @@ test('GS08: real checkout drift isolates a CTA through authenticated review in C
   let fixture:ReturnType<typeof createServer>|undefined, admin:ReturnType<typeof createAdminServer>|undefined;
   let app:ReturnType<typeof spawn>|undefined, browser:Awaited<ReturnType<typeof chromium.launch>>|undefined;
   try {
-    for (const f of ['001_initial','002_alerts','003_projects','004_observation_sources','005_canaries','006_page_redirect','007_protection_policy','008_traffic_observations','009_risk_assessments','010_policy_allocation','018_notification_budget','019_alert_outbox_expiry','011_cta_inventory','012_cta_policy','013_cta_review','014_cta_drift_alerts','015_cta_alert_deliveries']) await db.query(await readFile(`infra/${f}.sql`,'utf8'));
+    for (const f of ['001_initial','002_alerts','003_projects','004_observation_sources','005_canaries','006_page_redirect','007_protection_policy','008_traffic_observations','009_risk_assessments','010_policy_allocation','011_cta_inventory','012_cta_policy','013_cta_review','014_cta_drift_alerts','015_cta_alert_deliveries','016_cta_local_smtp','018_notification_budget','019_alert_outbox_expiry','020_cta_delivery_expiry','021_notification_intent_reconciliation']) await db.query(await readFile(`infra/${f}.sql`,'utf8'));
+    assert.equal((await db.query("SELECT 1 FROM pg_trigger WHERE tgrelid='cta_drift_alerts'::regclass AND tgname='prepare_cta_alert_delivery'")).rowCount,0);
     await db.query('CREATE TABLE admin_totp_replay (factor_id text PRIMARY KEY, last_counter bigint NOT NULL)');
     await db.query('CREATE TABLE admin_totp_codes (factor_id text NOT NULL, digest text NOT NULL, valid_until bigint NOT NULL, PRIMARY KEY (factor_id, digest))');
     const secret='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', salt='0123456789abcdef0123456789abcdef';
@@ -73,6 +74,7 @@ test('GS08: real checkout drift isolates a CTA through authenticated review in C
     assert.deepEqual((await state()).rows,[{marker:'basic001',review_required:true,destination_id:destinations.basic001},{marker:'premium1',review_required:false,destination_id:destinations.premium1}]);
     const point=points.find(x=>x.marker==='basic001').id;
     assert.deepEqual((await db.query('SELECT point_id,reason FROM cta_drift_alerts WHERE project_id=$1',[project])).rows,[{point_id:point,reason:'DESTINATION_CHANGED'}]);
+    assert.deepEqual((await db.query('SELECT d.delivery_mode FROM cta_alert_deliveries d JOIN cta_drift_alerts a ON a.id=d.alert_id WHERE a.project_id=$1',[project])).rows,[{delivery_mode:'SMTP_LOCAL'}]);
     await click('basic001',clone+'/changed'); await click('premium1',original+'/official-premium');
     const observation=(await db.query("SELECT id,confidence FROM cta_observations WHERE project_id=$1 AND point_id=$2 ORDER BY observed_at DESC,id DESC LIMIT 1",[project,point])).rows[0];
     assert.equal(observation.confidence,'HIGH');
