@@ -81,5 +81,13 @@ test('shared rolling budget is atomic across F26 and F27 and survives new pools'
       await deliverOne(attempts,'p',1);
       assert.equal((await db.query('SELECT attempts FROM alert_outbox WHERE id=$1',[id])).rows[0].attempts,3);
     } finally { await attempts.end(); }
+    await db.query('DELETE FROM notification_attempt_budget');
+    await db.query("INSERT INTO notification_attempt_budget(reserved_at) SELECT clock_timestamp()-interval '59 minutes 58 seconds' FROM generate_series(1,10)");
+    const sameWorker=new Pool({connectionString:process.env.TEST_DATABASE_URL,options});
+    try {
+      assert.equal(await deliverCtaAlert(sameWorker,async()=>{throw Error('budget exhausted');}),false);
+      await new Promise(resolve=>setTimeout(resolve,2600));
+      assert.equal(await deliverCtaAlert(sameWorker,async()=>{}),true);
+    } finally { await sameWorker.end(); }
   } finally { await db.end(); await other.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end(); }
 });
