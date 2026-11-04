@@ -67,6 +67,13 @@ export async function importInventory(db: Pool, project: string, body: unknown) 
         id = randomUUID();
         await client.query('INSERT INTO cta_points(project_id,id,surface,marker,kind) VALUES($1,$2,$3,$4,$5)',[project,id,surface,unique ? row.marker : null,row.kind]);
       }
+      // Unknown URLs are not evidence of a destination change.
+      if (unique && row.kind === 'a' && row.url !== null) {
+        await client.query(`UPDATE cta_points p SET review_required=true
+          WHERE p.project_id=$1 AND p.id=$2
+            AND EXISTS (SELECT 1 FROM cta_mappings m WHERE m.project_id=p.project_id AND m.point_id=p.id)
+            AND (SELECT o.observed_url FROM cta_observations o WHERE o.project_id=p.project_id AND o.point_id=p.id AND o.confidence='HIGH' AND o.observed_url IS NOT NULL ORDER BY o.observed_at DESC,o.id DESC LIMIT 1) IS DISTINCT FROM $3`,[project,id,row.url]);
+      }
       await client.query('INSERT INTO cta_observations(project_id,point_id,evidence,confidence,observed_url) VALUES($1,$2,$3,$4,$5)',[project,id,`structural:${row.kind}:${row.parent}:ordinal:${row.ordinal}`,unique ? 'HIGH' : 'LOW',row.url]);
     }
     await client.query('COMMIT');
