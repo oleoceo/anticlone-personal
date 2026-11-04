@@ -1,5 +1,6 @@
 # STATUS — AntiClone Personal
-- **F25 em andamento:** comparação de URL observada em âncora mapeada, revisão somente do ponto; GS08 integral pendente.
+- **F25 parcial — PR #20:** reaprovação manual autenticada de âncora em revisão, com confirmação da observação e auditoria transacional; revisão Codex independente sem P0/P1/P2 remanescentes (evidência em `docs/PR20-REVIEW.md`). CI aprovada no código `6c56b70`, run 41750058855; resultado do HEAD documental final publicado no PR. GS08 integral e alertas pendentes; sem merge/deploy.
+- **F25 anterior:** comparação de URL observada em âncora mapeada, revisão somente do ponto; GS08 integral pendente.
 
 - **F22 formulários suspensos (D07):** P2 residual reproduzido em Chromium; interceptação removida, envio nativo preservado. Regressão Chromium, lint, typecheck e build passaram; revisão Codex read-only sem P0/P1/P2. CI final registrada no PR #18; GS07/GS10 completos pendentes.
 - **D07 decisão ativa:** somente âncoras contam no limite de 100; formulários continuam armazenados. Regressão PostgreSQL em `tests/cta-decision.test.ts`; revisão do delta e CI final no PR #18.

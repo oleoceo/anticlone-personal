@@ -13,7 +13,7 @@ import { ctaDecision, publishCtaPolicy } from '../apps/cta-policy.js';
 test('authenticated inventory and offer-scoped mappings persist and isolate projects', async () => {
   assert.ok(process.env.TEST_DATABASE_URL);
   const db=new Pool({connectionString:process.env.TEST_DATABASE_URL});
-  for (const file of ['001_initial','002_alerts','003_projects','011_cta_inventory','012_cta_policy']) await db.query((await readFile(`infra/${file}.sql`,'utf8')).replace(/^\uFEFF/,''));
+  for (const file of ['001_initial','002_alerts','003_projects','011_cta_inventory','012_cta_policy','013_cta_review']) await db.query((await readFile(`infra/${file}.sql`,'utf8')).replace(/^\uFEFF/,''));
   await db.query('CREATE TABLE IF NOT EXISTS admin_totp_replay (factor_id text PRIMARY KEY, last_counter bigint NOT NULL)');
   await db.query('CREATE TABLE IF NOT EXISTS admin_totp_codes (factor_id text NOT NULL, digest text NOT NULL, valid_until bigint NOT NULL, PRIMARY KEY (factor_id, digest))');
   const secret='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',salt='0123456789abcdef0123456789abcdef', factor=createHash('sha256').update(secret).digest('hex');
@@ -32,7 +32,7 @@ test('authenticated inventory and offer-scoped mappings persist and isolate proj
     const candidates=['basic001','premium1','whatsapp'].map((marker,i)=>({marker,kind:'a',parent:'section',ordinal:i+1,url:`${origin}/${i}`}));
     candidates.push({marker:'duplicate',kind:'a',parent:'div',ordinal:4,url:`${origin}/same`},{marker:'duplicate',kind:'a',parent:'div',ordinal:5,url:`${origin}/same`});
     assert.equal((await post(p,'inventory',{surface:'landing',candidates},token)).status,200);
-    type Row={id:string;surface:string;marker:string|null;confidence:string;destination_id:string|null;approved_url:string|null;review_required:boolean;structural_candidates:string[]};
+    type Row={id:string;surface:string;marker:string|null;confidence:string;destination_id:string|null;approved_url:string|null;review_required:boolean;observation_id:string;structural_candidates:string[]};
     const rows=await (await get(p,token)).json() as Row[];
     assert.equal(rows.length,5); assert.ok(rows.filter(x=>x.confidence==='LOW').every(x=>x.structural_candidates.length===1)); assert.equal(rows.filter(x=>x.confidence==='LOW').length,2); assert.ok(rows.every(x=>x.destination_id===null));
     const ids=rows.filter(x=>x.marker).map(x=>x.id).sort();
@@ -75,8 +75,21 @@ test('authenticated inventory and offer-scoped mappings persist and isolate proj
     const decision=await ctaDecision(db,p,origin,clone,clone,'LOW','0'.repeat(32),'DIRECT_UNKNOWN');
     assert.equal(decision.action,'REPLACE_CONVERSION');
     assert.deepEqual(decision.mappings?.map(x=>x.marker).sort(),['premium1','whatsapp']);
+    const review={pointId:point,destinationId:dest.id,observationId:drifted.find(x=>x.id===point)!.observation_id};
+    assert.equal((await post(p,'review',review)).status,401);
+    assert.equal((await post(q,'review',review,token)).status,400);
+    assert.equal((await post(p,'review',{...review,destinationId:crypto.randomUUID()},token)).status,400);
+    assert.equal((await post(p,'review',{...review,observationId:'0'},token)).status,400);
+    assert.equal((await post(p,'review',review,token)).status,200);
+    assert.equal((await post(p,'review',review,token)).status,400);
+    const audit=await db.query('SELECT point_id,observation_id,destination_id,observed_url FROM cta_review_audit WHERE project_id=$1',[p]);
+    assert.equal(audit.rowCount,1); assert.equal(audit.rows[0].point_id,point); assert.equal(audit.rows[0].observation_id,review.observationId); assert.equal(audit.rows[0].destination_id,dest.id); assert.equal(audit.rows[0].observed_url,origin+'/changed');
+    const afterReview=await ctaDecision(db,p,origin,clone,clone,'LOW','0'.repeat(32),'DIRECT_UNKNOWN');
+    assert.deepEqual(afterReview.mappings?.map(x=>x.marker).sort(),['basic001','premium1','whatsapp']);
+
 
     assert.equal((await post(p,'inventory',{surface:'landing',candidates:[candidates[0],candidates[0]]},token)).status,200);
+    assert.equal((await post(p,'review',review,token)).status,400);
     assert.equal((await (await get(p,token)).json() as Row[]).find(x=>x.id===point)?.review_required,true);
     assert.equal((await post(p,'mappings',{pointId:point,offer:'basic',destinationId:dest.id},token)).status,400);
     assert.equal((await (await get(p,token)).json() as Row[]).find(x=>x.id===point)?.destination_id,dest.id);

@@ -1,7 +1,7 @@
 ﻿# Handoff — AntiClone Personal
 
 - Projeto privado, single-owner e self-hosted; seguir AGENTS.md e docs/AGENT-WORKFLOW.md.
-- Base: main 61848a9, PR #18 integrado; trabalho em feat/f25-checkout-drift.
+- Base: main ecbc272, PR #19 integrado; trabalho em feat/f25-reaprovacao-manual.
 - F22 parcial: âncoras dinâmicas e pop-up em laboratório; GS07/GS10 completos pendentes.
 - PR #18 reduzido (D07): nenhum formulário é interceptado; mapeamentos permanecem armazenados.
 - Decisão ativa inclui somente âncoras; formulários suspensos não consomem o limite de 100. Regressão PostgreSQL em `tests/cta-decision.test.ts`.
