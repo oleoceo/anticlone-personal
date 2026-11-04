@@ -26,6 +26,7 @@ test('shared rolling budget is atomic across F26 and F27 and survives new pools'
     await db.query("INSERT INTO incidents(project_id,host) SELECT 'p','host'||n||'.test' FROM generate_series(1,12) n");
     await db.query('INSERT INTO alert_outbox(incident_id) SELECT id FROM incidents');
     await db.query("INSERT INTO cta_drift_alerts(project_id,point_id,reason) SELECT 'p',$1,'MARKER_COLLISION' FROM generate_series(1,12)",[point]);
+    await db.query(await readFile('infra/021_notification_intent_reconciliation.sql','utf8'));
     await deliverOne(db,'p',1);
     await deliverCtaAlert(db,async()=>{});
     const run = (mode:string) => new Promise<void>((resolve,reject) => {

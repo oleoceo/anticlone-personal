@@ -18,6 +18,7 @@ async function fixture() {
   const point=randomUUID();
   await db.query("INSERT INTO cta_points(project_id,id,surface,kind) VALUES('p',$1,'test','a')",[point]);
   await db.query("INSERT INTO cta_drift_alerts(project_id,point_id,reason) SELECT 'p',$1,'MARKER_COLLISION' FROM generate_series(1,4)",[point]);
+  await db.query(await readFile('infra/021_notification_intent_reconciliation.sql','utf8'));
   await db.query("INSERT INTO incidents(project_id,host) VALUES('p','owned.test')");
   await db.query('INSERT INTO alert_outbox(incident_id) SELECT id FROM incidents');
   return {db, close:async()=>{await db.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end();}};

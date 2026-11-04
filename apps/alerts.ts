@@ -1,6 +1,8 @@
 ﻿import nodemailer from 'nodemailer';
 import type { Pool } from 'pg';
 import { budgetMayBeAvailable, lockBudget, recordBudget } from './notification-budget.js';
+import { reconcileF26 } from './notification-intents.js';
+const reconciliationAfter = new WeakMap<Pool, Map<string, number>>();
 export function makeMailer(port: number) {
   return nodemailer.createTransport({ host: '127.0.0.1', port, ignoreTLS: true, connectionTimeout: 3000, greetingTimeout: 3000, socketTimeout: 3000 });
 }
@@ -11,6 +13,12 @@ export async function deliverOne(pool: Pool, project: string, port: number): Pro
     const result = await client.query("SELECT pg_try_advisory_lock(hashtext($1), 1) AS locked", [project]);
     locked = result.rows[0].locked;
     if (!locked) return;
+    let deadlines = reconciliationAfter.get(pool);
+    if (!deadlines) { deadlines = new Map(); reconciliationAfter.set(pool, deadlines); }
+    if (Date.now() >= (deadlines.get(project) ?? 0)) {
+      deadlines.set(project, Date.now() + 60_000);
+      await reconcileF26(client, project);
+    }
     // This lock remains held through SMTP, so active attempts cannot expire.
     await client.query(`UPDATE alert_outbox a SET expired_at=clock_timestamp()
       FROM incidents i WHERE i.id=a.incident_id AND i.project_id=$1

@@ -31,6 +31,7 @@ test('expiry preserves events, respects active delivery and survives workers and
     await db.query("UPDATE cta_alert_deliveries SET state='PROCESSING',attempts=1,lease_token=$2,lease_until=clock_timestamp()+interval '1 minute' WHERE alert_id=$1",[ids[3],randomUUID()]);
     await db.query("UPDATE cta_alert_deliveries SET state='FAILED' WHERE alert_id=$1",[ids[4]]);
     await db.query("UPDATE cta_alert_deliveries SET state='DELIVERED',result_kind='SMTP_LOCAL_ACCEPTED' WHERE alert_id=$1",[ids[5]]);
+    await db.query(await readFile('infra/021_notification_intent_reconciliation.sql','utf8'));
     await db.query("INSERT INTO notification_attempt_budget(reserved_at) SELECT clock_timestamp() FROM generate_series(1,10)");
     let sends=0;
     await Promise.all([deliverOne(db,'p',1),deliverOne(other,'p',1),deliverCtaAlert(db,async()=>{sends++;}),deliverCtaAlert(other,async()=>{sends++;})]);
@@ -55,6 +56,7 @@ test('expiry preserves events, respects active delivery and survives workers and
     await db.query("INSERT INTO alert_outbox(incident_id) SELECT id FROM incidents WHERE project_id='boundary'");
     await db.query("INSERT INTO cta_drift_alerts(project_id,point_id,reason) VALUES('p',$1,'MARKER_COLLISION')",[point]);
     const boundary=(await db.query('SELECT max(id) AS id FROM cta_drift_alerts')).rows[0].id;
+    await db.query('INSERT INTO cta_alert_deliveries(alert_id) VALUES($1)',[boundary]);
     const waiting=new Pool({connectionString:process.env.TEST_DATABASE_URL,options});
     const lock=await db.connect();
     try {

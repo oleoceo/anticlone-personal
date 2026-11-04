@@ -1,4 +1,5 @@
 import type { Pool } from 'pg';
+import { tryIntent } from './notification-intents.js';
 import { classifyTraffic } from './traffic.js';
 export function hostFromUrl(input: string): string {
   if (Buffer.byteLength(input) > 2048) throw new Error('invalid URL');
@@ -47,7 +48,9 @@ export async function observe(pool: Pool, project: string, allowedOrigin: string
         VALUES($1,$2,(now() AT TIME ZONE 'UTC')::date,$3,$4,$5,$6) ON CONFLICT DO NOTHING`,
       [project, host, traffic.trafficClass, traffic.evidence, traffic.certainty, traffic.source]);
     }
-    await client.query('INSERT INTO alert_outbox(incident_id) VALUES ($1) ON CONFLICT DO NOTHING', [incident.rows[0].id]);
+    await tryIntent(client, () => client.query(`INSERT INTO alert_outbox(incident_id,expired_at)
+      SELECT id, CASE WHEN first_seen <= clock_timestamp()-interval '24 hours' THEN clock_timestamp() END
+      FROM incidents WHERE id=$1 ON CONFLICT (incident_id) DO NOTHING`, [incident.rows[0].id]));
     await client.query('COMMIT'); return 'observed';
   } catch (error) { await client.query('ROLLBACK'); throw error; }
   finally { client.release(); }

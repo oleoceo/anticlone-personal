@@ -14,6 +14,7 @@ test('real postgres: original, repeated simulated clone and reconnect', async ()
   let pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
   await pool.query(await readFile('infra/001_initial.sql', 'utf8'));
   await pool.query(await readFile('infra/002_alerts.sql', 'utf8')); await pool.query(await readFile('infra/004_observation_sources.sql', 'utf8')); await pool.query(await readFile('infra/005_canaries.sql', 'utf8'));
+  await pool.query(await readFile('infra/019_alert_outbox_expiry.sql', 'utf8'));
   const project = 'test_' + crypto.randomUUID();
   try {
     assert.equal(await observe(pool, project, 'https://original.test', 'https://original.test/'), 'authorized');

@@ -1,14 +1,20 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import { budgetMayBeAvailable, lockBudget, recordBudget } from './notification-budget.js';
+import { reconcileF27 } from './notification-intents.js';
 
 export type LocalSender = (alertId: string) => Promise<void>;
 
 const maintenanceAfter = new WeakMap<Pool, number>();
+const reconciliationAfter = new WeakMap<Pool, number>();
 
 export async function deliverCtaAlert(db: Pool, send: LocalSender): Promise<boolean> {
   // Lease cleanup needs no reservation and must also run during budget backoff.
   // At most one sweep per minute per pool, including concurrent callers.
+  if (Date.now() >= (reconciliationAfter.get(db) ?? 0)) {
+    reconciliationAfter.set(db, Date.now() + 60_000);
+    await reconcileF27(db);
+  }
   if (Date.now() >= (maintenanceAfter.get(db) ?? 0)) {
     maintenanceAfter.set(db, Date.now() + 60_000);
     try {
