@@ -1,4 +1,5 @@
 # STATUS — AntiClone Personal
+- **F27 parcial em desenvolvimento:** alerta persistente por transi??o de CTA mapeado a revis?o, deduplicado at? reaprova??o; reten??o de 30 dias. Envio e retry pendentes; GS08 integral pendente.
 - **F25 parcial — PR #20:** reaprovação manual autenticada de âncora em revisão, com confirmação da observação e auditoria transacional; revisão Codex independente sem P0/P1/P2 remanescentes (evidência em `docs/PR20-REVIEW.md`). CI aprovada no código `6c56b70`, run 41750058855; resultado do HEAD documental final publicado no PR. GS08 integral e alertas pendentes; sem merge/deploy.
 - **F25 anterior:** comparação de URL observada em âncora mapeada, revisão somente do ponto; GS08 integral pendente.
 

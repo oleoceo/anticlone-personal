@@ -13,7 +13,7 @@ import { ctaDecision, publishCtaPolicy } from '../apps/cta-policy.js';
 test('authenticated inventory and offer-scoped mappings persist and isolate projects', async () => {
   assert.ok(process.env.TEST_DATABASE_URL);
   const db=new Pool({connectionString:process.env.TEST_DATABASE_URL});
-  for (const file of ['001_initial','002_alerts','003_projects','011_cta_inventory','012_cta_policy','013_cta_review']) await db.query((await readFile(`infra/${file}.sql`,'utf8')).replace(/^\uFEFF/,''));
+  for (const file of ['001_initial','002_alerts','003_projects','011_cta_inventory','012_cta_policy','013_cta_review','014_cta_drift_alerts']) await db.query((await readFile(`infra/${file}.sql`,'utf8')).replace(/^\uFEFF/,''));
   await db.query('CREATE TABLE IF NOT EXISTS admin_totp_replay (factor_id text PRIMARY KEY, last_counter bigint NOT NULL)');
   await db.query('CREATE TABLE IF NOT EXISTS admin_totp_codes (factor_id text NOT NULL, digest text NOT NULL, valid_until bigint NOT NULL, PRIMARY KEY (factor_id, digest))');
   const secret='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',salt='0123456789abcdef0123456789abcdef', factor=createHash('sha256').update(secret).digest('hex');
@@ -63,7 +63,12 @@ test('authenticated inventory and offer-scoped mappings persist and isolate proj
     const special=await (await post(p,'destinations',{offer:'premium15',url:origin+'/official-premium15'},token)).json() as {id:string};
     assert.equal((await post(p,'mappings',{pointId:popup.id,offer:'premium15',destinationId:special.id},token)).status,200);
     // A changed destination isolates only its mapped point.
-    assert.equal((await post(p,'inventory',{surface:'landing',candidates:[{...candidates[0],url:origin+'/changed'}, {...candidates[1],url:null}, candidates[2]]},token)).status,200);
+    const concurrent=await Promise.all([post(p,'inventory',{surface:'landing',candidates:[{...candidates[0],url:origin+'/changed'}, {...candidates[1],url:null}, candidates[2]]},token),post(p,'inventory',{surface:'landing',candidates:[{...candidates[0],url:origin+'/changed'}]},token)]);
+    assert.ok(concurrent.every(response=>response.status===200));
+    const alertRows=()=>db.query('SELECT point_id,reason FROM cta_drift_alerts WHERE project_id=$1 ORDER BY id',[p]);
+    assert.deepEqual((await alertRows()).rows,[{point_id:point,reason:'DESTINATION_CHANGED'}]);
+    await Promise.all([post(p,'inventory',{surface:'landing',candidates:[{...candidates[0],url:origin+'/changed'}]},token),post(p,'inventory',{surface:'landing',candidates:[{...candidates[0],url:origin+'/changed'}]},token)]);
+    assert.equal((await alertRows()).rowCount,1);
     const drifted=await (await get(p,token)).json() as Row[];
     assert.equal(drifted.find(x=>x.surface==='landing' && x.marker==='basic001')?.review_required,true);
     assert.equal(drifted.find(x=>x.marker==='premium1')?.review_required,false);
@@ -89,13 +94,16 @@ test('authenticated inventory and offer-scoped mappings persist and isolate proj
 
 
     assert.equal((await post(p,'inventory',{surface:'landing',candidates:[candidates[0],candidates[0]]},token)).status,200);
+    assert.deepEqual((await alertRows()).rows,[{point_id:point,reason:'DESTINATION_CHANGED'},{point_id:point,reason:'MARKER_COLLISION'}]);
     assert.equal((await post(p,'review',review,token)).status,400);
     assert.equal((await (await get(p,token)).json() as Row[]).find(x=>x.id===point)?.review_required,true);
     assert.equal((await post(p,'mappings',{pointId:point,offer:'basic',destinationId:dest.id},token)).status,400);
     assert.equal((await (await get(p,token)).json() as Row[]).find(x=>x.id===point)?.destination_id,dest.id);
     assert.equal((await (await get(q,token)).json() as Row[]).length,0);
     await db.query("UPDATE cta_observations SET observed_at=now()-interval '8 days' WHERE project_id=$1",[p]);
+    await db.query("UPDATE cta_drift_alerts SET created_at=now()-interval '31 days' WHERE project_id=$1 AND reason='DESTINATION_CHANGED'",[p]);
     await cleanupCta(db);
+    assert.deepEqual((await alertRows()).rows,[{point_id:point,reason:'MARKER_COLLISION'}]);
     assert.equal((await post(p,'inventory',{surface:'landing',candidates:[candidates[1]]},token)).status,200);
     assert.equal((await (await get(p,token)).json() as Row[]).find(x=>x.marker==='premium1')?.review_required,true);
     assert.equal((await (await get(p,token)).json() as Row[]).find(x=>x.id===point)?.destination_id,dest.id);
