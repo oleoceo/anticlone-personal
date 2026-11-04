@@ -35,6 +35,7 @@ test('CTA delivery is atomic, exclusive, bounded and recovers interrupted work',
         lease_until=CASE WHEN $2='PROCESSING' THEN now()-interval '1 minute' ELSE NULL END WHERE alert_id=$1`, [id,oldState,randomUUID()]);
     }
     await db.query(await readFile('infra/016_cta_local_smtp.sql','utf8'));
+    await db.query(await readFile('infra/018_notification_budget.sql','utf8'));
     assert.equal(await deliverCtaAlert(db, async()=>{ throw Error('history must not be sent'); }),false);
     const historical = await db.query('SELECT state,delivery_mode,result_kind FROM cta_alert_deliveries ORDER BY alert_id');
     assert.deepEqual(historical.rows, ['PENDING','PROCESSING','FAILED','DELIVERED'].map(s=>({state:s,delivery_mode:'SIMULATED',result_kind:s==='DELIVERED'?'SIMULATED':null})));
@@ -71,6 +72,7 @@ test('CTA delivery is atomic, exclusive, bounded and recovers interrupted work',
       await deliverCtaAlert(db,async()=>{throw Error('simulated');});
     }
     assert.deepEqual(await state(exhausted),{state:'FAILED',attempts:3});
+    await db.query("UPDATE notification_attempt_budget SET reserved_at=now()-interval '61 minutes'");
     const stale=await insert();
     let releaseStale!:()=>void, startedStale!:()=>void;
     const staleGate=new Promise<void>(r=>{releaseStale=r;});
@@ -104,6 +106,7 @@ test('CTA delivery is atomic, exclusive, bounded and recovers interrupted work',
       assert.deepEqual(await state(interrupted),{state:'DELIVERED',attempts:2});
     } finally { worker.kill(); await once(worker,'exit'); }
     assert.equal((await db.query('SELECT result_kind FROM cta_alert_deliveries WHERE alert_id=$1',[interrupted])).rows[0].result_kind,'SMTP_LOCAL_ACCEPTED');
+    await db.query("UPDATE notification_attempt_budget SET reserved_at=now()-interval '61 minutes'");
     const duplicate=await insert();
     await deliverCtaAlert(db,async id=>{await sendLocalCtaAlert(id,address.port); throw Error('interrupted after acceptance');});
     assert.deepEqual(await state(duplicate),{state:'PENDING',attempts:1});
@@ -112,6 +115,7 @@ test('CTA delivery is atomic, exclusive, bounded and recovers interrupted work',
     assert.deepEqual(await state(duplicate),{state:'DELIVERED',attempts:2});
     assert.equal(messages.filter(message=>message.includes(`<cta-alert-${duplicate}@example.test>`)).length,2);
     await new Promise<void>(resolve=>smtp.close(()=>resolve()));
+    await db.query("UPDATE notification_attempt_budget SET reserved_at=now()-interval '61 minutes'");
     const rejected=await insert();
     const rejectSmtp=new SMTPServer({authOptional:true,disabledCommands:['AUTH','STARTTLS'],onRcptTo(_address,_session,cb){cb(Error('rejected'));}});
     await new Promise<void>(resolve=>rejectSmtp.listen(0,'127.0.0.1',resolve));
