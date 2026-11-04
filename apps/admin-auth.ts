@@ -8,6 +8,7 @@ import { activatePolicy, saveDraft } from './protection-policy.js';
 import { importInventory, approveDestination, mapPoint, reviewPoint } from './cta-inventory.js';
 import { publishCtaPolicy } from './cta-policy.js';
 import { Conflict, getNotificationSettings, saveNotificationSettings, setNotificationPreference } from './notification-settings.js';
+import { handleAdminUi } from './admin-ui.js';
 
 // Laboratory-only: one process, one owner, ephemeral sessions and rate limit.
 export function createAdminServer(passwordRecord: string, totpSecret: string, db: Pool, now: () => number = Date.now) {
@@ -17,18 +18,23 @@ export function createAdminServer(passwordRecord: string, totpSecret: string, db
   const match = /^scrypt\$([a-f0-9]{32})\$([a-f0-9]{128})$/.exec(passwordRecord);
   if (!match) throw new Error('invalid administrator credential record');
   const salt = Buffer.from(match[1], 'hex'), expected = Buffer.from(match[2], 'hex');
-  const sessions = new Map<string, number>();
+  const sessions = new Map<string, { expiry: number; kind: 'bearer' | 'web'; csrf: string }>();
   let attempts = 0, windowStart = now(), pending = false;
   return http.createServer((req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    // No CORS and no browser-origin requests: this slice is a local API, not a UI.
-    if (req.headers.origin || req.headers['sec-fetch-site']) { res.writeHead(403).end(); return; }
-    if (req.url?.startsWith('/admin/') && req.url !== '/admin/login') {
+    const uiLogin = req.url === '/admin/ui/login' && req.method === 'POST';
+    if (req.url?.startsWith('/admin/ui/')) {
+      if (!handleAdminUi(req, res, db, sessions, now, uiLogin)) return;
+    } else {
+      // Preserve the existing bearer API browser-origin boundary.
+      if (req.headers.origin || req.headers['sec-fetch-site']) { res.writeHead(403).end(); return; }
+    }
+    if (!uiLogin && req.url?.startsWith('/admin/') && req.url !== '/admin/login') {
       const token = /^Bearer ([a-f0-9]{64})$/.exec(req.headers.authorization ?? '')?.[1];
       const key = token && createHash('sha256').update(token).digest('hex');
-      const expiry = key && sessions.get(key);
-      if (!key || !expiry || now() >= expiry) { if (key) sessions.delete(key); res.writeHead(401).end(); return; }
+      const session = key && sessions.get(key);
+      if (!key || !session || session.kind !== 'bearer' || now() >= session.expiry) { if (key && session && now() >= session.expiry) sessions.delete(key); res.writeHead(401).end(); return; }
       if (req.url === '/admin/notification-settings' && req.method === 'GET') {
         void getNotificationSettings(db).then(result=>res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify(result))).catch(()=>res.writeHead(503).end()); return;
       }
@@ -121,7 +127,7 @@ export function createAdminServer(passwordRecord: string, totpSecret: string, db
       }
       res.writeHead(404).end(); return;
     }
-    if (req.method !== 'POST' || req.url !== '/admin/login') { res.writeHead(404).end(); return; }
+    if (req.method !== 'POST' || (req.url !== '/admin/login' && !uiLogin)) { res.writeHead(404).end(); return; }
     if (now() - windowStart >= 60_000) { attempts = 0; windowStart = now(); }
     if (++attempts > 5 || pending) { res.writeHead(429).end(); return; }
     if (req.headers['content-type'] !== 'application/json') { res.writeHead(415).end(); return; }
@@ -159,7 +165,8 @@ export function createAdminServer(passwordRecord: string, totpSecret: string, db
       finally { client?.release(); }
       const token = randomBytes(32).toString('hex');
       // Only one active session; replacing it bounds storage and revokes previous tokens.
-      sessions.clear(); sessions.set(createHash('sha256').update(token).digest('hex'), now() + 15 * 60_000);
+      sessions.clear(); sessions.set(createHash('sha256').update(token).digest('hex'), { expiry: now() + 15 * 60_000, kind: uiLogin ? 'web' : 'bearer', csrf: randomBytes(32).toString('hex') });
+      if (uiLogin) { res.setHeader('Set-Cookie', [`admin_session=${token}; HttpOnly; SameSite=Strict; Path=/admin/ui/; Max-Age=900`, 'admin_login_csrf=; HttpOnly; SameSite=Strict; Path=/admin/ui/; Max-Age=0']); res.writeHead(204).end(); return; }
       res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ token, expiresIn: 900 }));
     });
   });
