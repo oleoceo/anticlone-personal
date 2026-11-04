@@ -33,7 +33,7 @@ test('notification intent failures preserve events and reconciliation survives r
     await db.query('ROLLBACK');
     await db.query('DELETE FROM cta_drift_alerts WHERE id=$1',[orphan]);
     await db.query(await readFile('infra/021_notification_intent_reconciliation.sql','utf8'));
-    await db.query(`CREATE FUNCTION reject_intent() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION USING ERRCODE='53100', MESSAGE='injected'; END $$`);
+    await db.query(`CREATE FUNCTION reject_intent() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION USING ERRCODE='55P03', MESSAGE='injected'; END $$`);
     await db.query('CREATE TRIGGER reject_outbox BEFORE INSERT ON alert_outbox FOR EACH ROW EXECUTE FUNCTION reject_intent()');
     assert.equal(await observe(db,'p','http://localhost','https://clone.test'),'observed');
     assert.equal((await db.query("SELECT 1 FROM incidents WHERE host='clone.test'")).rowCount,1);
@@ -63,6 +63,29 @@ test('notification intent failures preserve events and reconciliation survives r
     assert.equal((await db.query("SELECT count(*)::int AS n FROM cta_observations WHERE point_id<>$1 AND evidence<>'historical'",[point])).rows[0].n,2);
     assert.equal((await db.query('SELECT count(*)::int AS n FROM cta_alert_deliveries')).rows[0].n,1);
     await db.query('DROP TRIGGER reject_delivery ON cta_alert_deliveries');
+
+    // Infrastructure errors must reject the operation with no persisted success.
+    for (const code of ['53100','53200','53300']) {
+      await db.query(`CREATE OR REPLACE FUNCTION reject_infrastructure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION USING ERRCODE='${code}', MESSAGE='injected'; END $$`);
+      await db.query('CREATE TRIGGER reject_infrastructure BEFORE INSERT ON alert_outbox FOR EACH ROW EXECUTE FUNCTION reject_infrastructure()');
+      const host=`infrastructure-${code}.test`;
+      await assert.rejects(observe(db,'p','http://localhost',`https://${host}`), {code});
+      assert.equal((await db.query('SELECT 1 FROM incidents WHERE host=$1',[host])).rowCount,0);
+      assert.equal((await db.query('SELECT 1 FROM observations WHERE host=$1',[host])).rowCount,0);
+      await db.query('DROP TRIGGER reject_infrastructure ON alert_outbox');
+
+      await db.query('UPDATE cta_points SET review_required=false WHERE id=$1',[point]);
+      const beforeAlerts=(await db.query('SELECT id FROM cta_drift_alerts ORDER BY id')).rows;
+      const beforeDeliveries=(await db.query('SELECT alert_id FROM cta_alert_deliveries ORDER BY alert_id')).rows;
+      await db.query('CREATE TRIGGER reject_infrastructure BEFORE INSERT ON cta_alert_deliveries FOR EACH ROW EXECUTE FUNCTION reject_infrastructure()');
+      const url=`http://localhost/infrastructure-${code}`;
+      await assert.rejects(importInventory(db,'p',{surface:'landing',candidates:[{...candidate,url}]}), {code});
+      assert.equal((await db.query('SELECT review_required FROM cta_points WHERE id=$1',[point])).rows[0].review_required,false);
+      assert.equal((await db.query('SELECT 1 FROM cta_observations WHERE observed_url=$1',[url])).rowCount,0);
+      assert.deepEqual((await db.query('SELECT id FROM cta_drift_alerts ORDER BY id')).rows,beforeAlerts);
+      assert.deepEqual((await db.query('SELECT alert_id FROM cta_alert_deliveries ORDER BY alert_id')).rows,beforeDeliveries);
+      await db.query('DROP TRIGGER reject_infrastructure ON cta_alert_deliveries');
+    }
 
     await db.query(`CREATE FUNCTION reject_fatal() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='fatal'; END $$`);
     await db.query('CREATE TRIGGER reject_fatal BEFORE INSERT ON alert_outbox FOR EACH ROW EXECUTE FUNCTION reject_fatal()');

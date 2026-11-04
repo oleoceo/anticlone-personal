@@ -1,6 +1,8 @@
 import type { Pool, PoolClient } from 'pg';
 
-const recoverable = new Set(['53100', '53200', '53300', '55P03']);
+// Lock contention can be deferred after rolling back the intent savepoint.
+// Resource exhaustion must propagate and abort the enclosing transaction.
+const recoverable = new Set(['55P03']);
 export async function tryIntent(client: PoolClient, insert: () => Promise<unknown>): Promise<void> {
   await client.query('SAVEPOINT notification_intent');
   try {
