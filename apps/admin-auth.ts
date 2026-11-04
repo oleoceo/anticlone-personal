@@ -39,6 +39,11 @@ export function createAdminServer(passwordRecord: string, totpSecret: string, db
         const table = projectPath[2] === 'observations' ? 'observations' : 'incidents';
         void db.query(`SELECT * FROM ${table} WHERE project_id=$1 ORDER BY id LIMIT 100`, [projectPath[1]]).then(result => res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(result.rows))).catch(() => res.writeHead(503).end()); return;
       }
+      const alertPath = /^\/admin\/projects\/([a-zA-Z0-9_-]{1,64})\/cta\/alerts$/.exec(req.url ?? '');
+      if (req.method === 'GET' && alertPath) {
+        void db.query('SELECT id,point_id,reason,created_at FROM cta_drift_alerts WHERE project_id=$1 ORDER BY created_at DESC,id DESC LIMIT 100',[alertPath[1]])
+          .then(result => res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify(result.rows))).catch(() => res.writeHead(503).end()); return;
+      }
       const ctaPath = /^\/admin\/projects\/([a-zA-Z0-9_-]{1,64})\/cta(?:\/(inventory|destinations|mappings|policy|review))?$/.exec(req.url ?? '');
       if (ctaPath && req.method === 'GET' && !ctaPath[2]) {
         void db.query(`SELECT p.id,p.surface,p.marker,p.kind,p.offer,p.review_required,o.id AS observation_id,o.evidence,o.confidence,o.observed_url,o.observed_at,m.destination_id,d.url AS approved_url,
