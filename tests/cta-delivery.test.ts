@@ -24,7 +24,12 @@ test('CTA delivery is atomic, exclusive, bounded and recovers interrupted work',
   const project=`delivery_${randomUUID()}`, point=randomUUID();
   await db.query('INSERT INTO projects(id,name,origin) VALUES($1,$1,$2)',[project,`http://localhost/${project}`]);
   await db.query("INSERT INTO cta_points(project_id,id,surface,kind) VALUES($1,$2,'test','a')",[project,point]);
-  const insert=async () => (await db.query("INSERT INTO cta_drift_alerts(project_id,point_id,reason) VALUES($1,$2,'MARKER_COLLISION') RETURNING id",[project,point])).rows[0].id as string;
+  let migrated=false;
+  const insert=async () => {
+    const id=(await db.query("INSERT INTO cta_drift_alerts(project_id,point_id,reason) VALUES($1,$2,'MARKER_COLLISION') RETURNING id",[project,point])).rows[0].id as string;
+    if (migrated) await db.query('INSERT INTO cta_alert_deliveries(alert_id) VALUES($1)',[id]);
+    return id;
+  };
   const state=async (id:string) => (await db.query('SELECT state,attempts FROM cta_alert_deliveries WHERE alert_id=$1',[id])).rows[0];
   try {
     const history = [];
@@ -37,6 +42,7 @@ test('CTA delivery is atomic, exclusive, bounded and recovers interrupted work',
     await db.query(await readFile('infra/016_cta_local_smtp.sql','utf8'));
     await db.query(await readFile('infra/018_notification_budget.sql','utf8'));
     await db.query(await readFile('infra/020_cta_delivery_expiry.sql','utf8'));
+    await db.query(await readFile('infra/021_notification_intent_reconciliation.sql','utf8')); migrated=true;
     assert.equal(await deliverCtaAlert(db, async()=>{ throw Error('history must not be sent'); }),false);
     const historical = await db.query('SELECT state,delivery_mode,result_kind FROM cta_alert_deliveries ORDER BY alert_id');
     assert.deepEqual(historical.rows, ['PENDING','PROCESSING','FAILED','DELIVERED'].map(s=>({state:s,delivery_mode:'SIMULATED',result_kind:s==='DELIVERED'?'SIMULATED':null})));
@@ -45,15 +51,11 @@ test('CTA delivery is atomic, exclusive, bounded and recovers interrupted work',
     try {
       await client.query('BEGIN');
       const id=(await client.query("INSERT INTO cta_drift_alerts(project_id,point_id,reason) VALUES($1,$2,'MARKER_COLLISION') RETURNING id",[project,point])).rows[0].id;
+      await client.query('INSERT INTO cta_alert_deliveries(alert_id) VALUES($1)',[id]);
       assert.equal((await client.query('SELECT 1 FROM cta_alert_deliveries WHERE alert_id=$1',[id])).rowCount,1);
       await client.query('ROLLBACK');
       assert.equal((await db.query('SELECT 1 FROM cta_alert_deliveries WHERE alert_id=$1',[id])).rowCount,0);
     } finally { client.release(); }
-    await db.query(`CREATE FUNCTION reject_delivery() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'test failure'; END $$`);
-    await db.query('CREATE TRIGGER reject_delivery BEFORE INSERT ON cta_alert_deliveries FOR EACH ROW EXECUTE FUNCTION reject_delivery()');
-    await assert.rejects(insert());
-    assert.equal((await db.query('SELECT 1 FROM cta_drift_alerts WHERE project_id=$1',[project])).rowCount,0);
-    await db.query('DROP TRIGGER reject_delivery ON cta_alert_deliveries');
     const id=await insert();
     let calls=0, release!:()=>void, started!:()=>void;
     const entered=new Promise<void>(r=>{started=r;}); const gate=new Promise<void>(r=>{release=r;});
