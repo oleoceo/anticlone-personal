@@ -106,6 +106,13 @@ test('authenticated inventory and offer-scoped mappings persist and isolate proj
     assert.deepEqual(history.map(x=>x.reason),['MARKER_COLLISION','DESTINATION_CHANGED']);
     assert.ok(history.every(x=>x.point_id===point && x.created_at));
     assert.deepEqual(await (await fetch(`${base}/admin/projects/${q}/cta/alerts`,{headers})).json(),[]);
+    await db.query('INSERT INTO cta_points(project_id,id,surface,kind) VALUES($1,$2,$3,$4)',[q,crypto.randomUUID(),'other','a']);
+    await db.query("INSERT INTO cta_drift_alerts(project_id,point_id,reason) SELECT project_id,id,'MARKER_COLLISION' FROM cta_points WHERE project_id=$1",[q]);
+    assert.equal((await (await fetch(`${base}/admin/projects/${q}/cta/alerts`,{headers})).json() as unknown[]).length,1);
+    assert.equal((await (await fetch(alertUrl,{headers})).json() as unknown[]).length,2);
+    await db.query("UPDATE cta_drift_alerts SET created_at=now()+interval '1 day' WHERE id=$1",[history[1].id]);
+    assert.equal((await (await fetch(alertUrl,{headers})).json() as {id:string}[])[0].id,history[1].id);
+    await db.query("UPDATE cta_drift_alerts SET created_at=now()-interval '1 day' WHERE id=$1",[history[1].id]);
     await db.query(`INSERT INTO cta_drift_alerts(project_id,point_id,reason,created_at)
       SELECT $1,$2,'MARKER_COLLISION',now() FROM generate_series(1,101)`,[p,point]);
     const limited=await (await fetch(alertUrl,{headers})).json() as {id:string}[];
