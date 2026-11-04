@@ -54,7 +54,7 @@ export async function importInventory(db: Pool, project: string, body: unknown) 
     if (count.rows[0].n + rows.length > 1000) throw Error('inventory capacity');
     const markers = new Map<string,number>();
     for (const row of rows) if (row.marker) markers.set(row.marker,(markers.get(row.marker) ?? 0)+1);
-    for (const [marker, occurrences] of markers) if (occurrences > 1) await client.query('UPDATE cta_points SET review_required=true WHERE project_id=$1 AND surface=$2 AND marker=$3',[project,surface,marker]);
+    for (const [marker, occurrences] of markers) if (occurrences > 1) await client.query('UPDATE cta_points SET review_required=true, review_after_observation=COALESCE((SELECT max(id) FROM cta_observations WHERE project_id=$1),0) WHERE project_id=$1 AND surface=$2 AND marker=$3',[project,surface,marker]);
     for (const row of rows) {
       const unique = !!row.marker && markers.get(row.marker) === 1;
       let id: string | undefined;
@@ -69,7 +69,7 @@ export async function importInventory(db: Pool, project: string, body: unknown) 
       }
       // Unknown URLs are not evidence of a destination change.
       if (unique && row.kind === 'a' && row.url !== null) {
-        await client.query(`UPDATE cta_points p SET review_required=true
+        await client.query(`UPDATE cta_points p SET review_required=true, review_after_observation=COALESCE((SELECT max(id) FROM cta_observations WHERE project_id=$1),0)
           WHERE p.project_id=$1 AND p.id=$2
             AND EXISTS (SELECT 1 FROM cta_mappings m WHERE m.project_id=p.project_id AND m.point_id=p.id)
             AND (SELECT o.observed_url FROM cta_observations o WHERE o.project_id=p.project_id AND o.point_id=p.id AND o.confidence='HIGH' AND o.observed_url IS NOT NULL ORDER BY o.observed_at DESC,o.id DESC LIMIT 1) IS DISTINCT FROM $3`,[project,id,row.url]);
@@ -97,5 +97,26 @@ export async function mapPoint(db: Pool, project: string, body: unknown) {
     const d = await client.query('SELECT id FROM cta_destinations WHERE project_id=$1 AND offer=$2 AND id=$3',[project,row.offer,row.destinationId]); if (!d.rowCount) throw Error('destination not approved for offer');
     const point = await client.query('UPDATE cta_points SET offer=$3 WHERE project_id=$1 AND id=$2 AND offer IS NULL RETURNING id',[project,row.pointId,row.offer]); if (!point.rowCount) throw Error('point unavailable');
     await client.query('INSERT INTO cta_mappings(project_id,point_id,offer,destination_id) VALUES($1,$2,$3,$4)',[project,row.pointId,row.offer,row.destinationId]); await client.query('COMMIT');
+  } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+}
+
+// Confirm the exact latest retained observation and existing approved mapping.
+export async function reviewPoint(db: Pool, project: string, body: unknown) {
+  const row = fields(body,'destinationId,observationId,pointId');
+  const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
+  if (typeof row.pointId !== 'string' || !uuid.test(row.pointId) || typeof row.destinationId !== 'string' || !uuid.test(row.destinationId) || typeof row.observationId !== 'string' || !/^[1-9][0-9]{0,18}$/.test(row.observationId) || BigInt(row.observationId) > 9223372036854775807n) throw Error('invalid review');
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    const p = await client.query('SELECT origin FROM projects WHERE id=$1 FOR UPDATE',[project]);
+    if (!p.rowCount) throw Error('invalid project'); lab(p.rows[0].origin);
+    const result = await client.query(`SELECT p.offer,o.observed_url FROM cta_points p JOIN cta_mappings m ON m.project_id=p.project_id AND m.point_id=p.id
+      JOIN LATERAL (SELECT id,confidence,observed_url,observed_at FROM cta_observations WHERE project_id=p.project_id AND point_id=p.id ORDER BY observed_at DESC,id DESC LIMIT 1) o ON true
+      WHERE p.project_id=$1 AND p.id=$2 AND p.kind='a' AND p.marker IS NOT NULL AND p.review_required
+      AND m.destination_id=$3 AND o.id=$4::bigint AND o.id>p.review_after_observation AND o.confidence='HIGH' AND o.observed_url IS NOT NULL AND o.observed_at>=now()-interval '7 days'`,[project,row.pointId,row.destinationId,row.observationId]);
+    if (!result.rowCount) throw Error('review evidence or mapping unavailable');
+    await client.query('INSERT INTO cta_review_audit(project_id,point_id,observation_id,destination_id,offer,observed_url) VALUES($1,$2,$3,$4,$5,$6)',[project,row.pointId,row.observationId,row.destinationId,result.rows[0].offer,result.rows[0].observed_url]);
+    await client.query('UPDATE cta_points SET review_required=false WHERE project_id=$1 AND id=$2',[project,row.pointId]);
+    await client.query('COMMIT');
   } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
 }
