@@ -47,7 +47,7 @@ export async function setNotificationPreference(db:Pool, input:unknown) {
   const data=object(input);
   if (data.enabled === false) {
     if (Object.keys(data).join(',') !== 'enabled') throw new TypeError('invalid fields');
-    return mutate(db, async row=>({action:'disable',changed:['preference_requested'],values:row as Settings,requested:false}));
+    return mutate(db, async row=>row.requested ? {action:'disable',changed:['preference_requested'],values:row as Settings,requested:false} : null);
   }
   if (data.enabled !== true || Object.keys(data).sort().join(',') !== 'enabled,version') throw new TypeError('invalid fields');
   const v=version(data.version);
