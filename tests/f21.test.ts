@@ -48,7 +48,14 @@ test('F21: approved static anchors, entry precedence and fail-open in Chromium',
     let ready=false; for(let i=0;i<100;i++){try{if((await fetch('http://127.0.0.1:3000/runtime.js')).ok){ready=true;break;}}catch{} await new Promise(r=>setTimeout(r,100));} assert.ok(ready);
     browser=await chromium.launch({headless:true,args:['--host-resolver-rules=MAP localhost 127.0.0.1']});
     const page=await browser.newPage();
-    await page.addInitScript(()=>{addEventListener('submit',event=>{if ((event.target as HTMLElement).hasAttribute('data-cancel-test')) event.preventDefault();});});
+    await page.addInitScript(()=>{
+      const add = document.addEventListener.bind(document);
+      document.addEventListener = ((type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions) => {
+        add(type, listener, options);
+        if (type === 'click') document.documentElement.dataset.testCtaListener = 'installed';
+      }) as typeof document.addEventListener;
+      addEventListener('submit',event=>{if ((event.target as HTMLElement).hasAttribute('data-cancel-test')) event.preventDefault();});
+    });
     const decisions:string[]=[], backgroundRequests:string[]=[]; page.on('request',r=>{if(r.url().endsWith('/entry-decision')) decisions.push(r.url()); if(['fetch','xhr'].includes(r.resourceType())) backgroundRequests.push(r.url());});
     const check=async (selector:string,expected:string) => { await page.goto(clone+'/clone'); await page.waitForTimeout(300); const before=decisions.length; await page.locator(selector).click(); await page.waitForURL(expected); assert.equal(decisions.length,before); };
     await check('[data-anticlone-point="basic001"]',original+'/official-basic');
@@ -101,7 +108,8 @@ test('F21: approved static anchors, entry precedence and fail-open in Chromium',
     await page.goto(clone+'/clone'); await page.waitForTimeout(300);
     await page.evaluate(()=>{document.body.addEventListener('click',()=>history.pushState({},'', '/different'),{capture:true,once:true});});
     await page.locator('[data-anticlone-point="basic001"]').click(); await page.waitForURL(clone+'/clone-basic');
-    await page.goto(clone+'/clone'); await page.waitForTimeout(300);
+    await page.goto(clone+'/clone');
+    await page.waitForFunction(() => document.documentElement.dataset.testCtaListener === 'installed');
     await page.locator('[data-anticlone-point="basic001"]').evaluate(el=>el.addEventListener('click',event=>event.stopPropagation()));
     await page.locator('[data-anticlone-point="basic001"]').click(); await page.waitForURL(original+'/official-basic');
     await page.goto(clone+'/clone'); await page.waitForTimeout(300);

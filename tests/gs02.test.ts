@@ -31,6 +31,7 @@ test('GS02: browser visits, durable incident and test SMTP alert after restart',
   await db.query(await readFile('infra/001_initial.sql', 'utf8')); await db.query(await readFile('infra/002_alerts.sql', 'utf8')); await db.query(await readFile('infra/003_projects.sql', 'utf8')); await db.query(await readFile('infra/004_observation_sources.sql', 'utf8')); await db.query(await readFile('infra/005_canaries.sql', 'utf8')); await db.query(await readFile('infra/018_notification_budget.sql', 'utf8')); await db.query(await readFile('infra/019_alert_outbox_expiry.sql', 'utf8'));
   const project = 'gs02_' + crypto.randomUUID();
   const fixture = createServer(async (req, res) => {
+    if (req.url === '/checkout') { res.writeHead(200, {'content-type':'text/html'}).end('<h1>Checkout</h1>'); return; }
     const html = await readFile(req.url === '/clone' ? 'tests/fixtures/clone.html' : 'tests/fixtures/original.html', 'utf8');
     res.writeHead(200, {'content-type':'text/html'}).end(html);
   });
