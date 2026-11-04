@@ -31,7 +31,7 @@ test('GS08: real checkout drift isolates a CTA through authenticated review in C
     const adminUrl=`http://127.0.0.1:${(admin.address() as AddressInfo).port}`;
     const login=await fetch(`${adminUrl}/admin/login`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:'password',code:new TOTP({secret:Secret.fromBase32(secret)}).generate()})});
     assert.equal(login.status,200); const {token}=await login.json() as {token:string};
-    const html='<a data-anticlone-point="basic001" href="/changed">Basic</a><a data-anticlone-point="premium1" href="/native-premium">Premium</a><script src="http://127.0.0.1:3000/runtime.js"></script>';
+    let html='<a data-anticlone-point="basic001" href="/native-basic">Basic</a><a data-anticlone-point="premium1" href="/native-premium">Premium</a><script src="http://127.0.0.1:3000/runtime.js"></script>';
     fixture=createServer((req,res)=>res.writeHead(200,{'content-type':'text/html'}).end(req.url==='/clone'?html:'<h1>destination</h1>')).listen(0,'127.0.0.1'); await once(fixture,'listening');
     const port=(fixture.address() as AddressInfo).port, original=`http://127.0.0.1:${port}`, clone=`http://localhost:${port}`, project='gs08_'+randomUUID();
     await db.query('INSERT INTO projects(id,name,origin) VALUES($1,$1,$2)',[project,original]);
@@ -51,13 +51,21 @@ test('GS08: real checkout drift isolates a CTA through authenticated review in C
     let ready=false; for(let i=0;i<100;i++){try{if((await fetch('http://127.0.0.1:3000/runtime.js')).ok){ready=true;break;}}catch{} await new Promise(r=>setTimeout(r,100));} assert.ok(ready);
     browser=await chromium.launch({headless:true,args:['--host-resolver-rules=MAP localhost 127.0.0.1']});
     const page=await browser.newPage();
+    await page.addInitScript(()=>{
+      const add=document.addEventListener.bind(document);
+      document.addEventListener=((type:string,listener:EventListenerOrEventListenerObject,options?:boolean|AddEventListenerOptions)=>{
+        add(type,listener,options);
+        if(type==='click') document.documentElement.dataset.testCtaListener='installed';
+      }) as typeof document.addEventListener;
+    });
     const click=async (marker:string,expected:string)=>{
       const decision=page.waitForResponse(r=>r.url().endsWith('/entry-decision') && r.status()===200);
       await page.goto(clone+'/clone'); await decision;
-      await page.waitForTimeout(200);
+      await page.waitForFunction(()=>document.documentElement.dataset.testCtaListener==='installed');
       await page.locator(`[data-anticlone-point="${marker}"]`).click(); await page.waitForURL(expected);
     };
     await click('basic001',original+'/official-basic'); await click('premium1',original+'/official-premium');
+    html=html.replace('/native-basic','/changed');
     const changed=[{...candidates[0],url:clone+'/changed'},candidates[1]];
     await inventory(changed);
     await Promise.all([inventory(changed),inventory(changed)]);
