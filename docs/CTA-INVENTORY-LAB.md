@@ -30,7 +30,7 @@ Aplique também `infra/013_cta_review.sql`. Após examinar o contexto e a últim
 
 ## GS03: recorte e lacunas
 
-Teste proposto em `tests/gs03.test.ts`: quatro ofertas sinteticas, marcadores estaveis, inventario Chromium e mapeamento manual autenticado para destinos HTTP locais. Inclui dois pontos para uma oferta, textos iguais, mudanca de idioma, preco, moeda, ordem e estrutura. Sem marcador, sem mapeamento ou com colisao: preservar comportamento nativo. Exigir CI PostgreSQL/Chromium e revisao independente antes do fechamento laboratorial.
+Teste em `tests/gs03.test.ts`: quatro ofertas sinteticas, marcadores estaveis, inventario Chromium e mapeamento manual autenticado para destinos HTTP locais. Inclui dois pontos para uma oferta, textos iguais, mudanca de idioma, preco, moeda, ordem e estrutura. Sem marcador, sem mapeamento ou com colisao: preservar comportamento nativo. Recorte A demonstrado na CI 41911761424 em 6756c37 (39 testes, PostgreSQL/Chromium), com revisao independente `/root/gs03_review` sem achados remanescentes; gates do HEAD final no PR #34.
 
 | Caso | Situacao e limite |
 |---|---|

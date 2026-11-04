@@ -70,4 +70,4 @@ Tenants/organizações comerciais, memberships de clientes, checkout de assinatu
 3. Marcar explicitamente cobertura documental como `AUDITADA` apenas quando comparada; **não** marcar itens `V` sem teste de implementação.
 4. Não importar os modelos de tenancy ou o grafo M00–M11. A auditoria não deve virar reconstrução do SaaS.
 
-GS03 em validacao: `tests/gs03.test.ts` propoe quatro ofertas sinteticas marcadas. F19/F20/F21 continuam PARCIAL; oferta sem marcador e destinos externos reais pendentes, conforme `docs/CTA-INVENTORY-LAB.md`. Nao equivale a protecao operacional nem conclui GS17.
+GS03 laboratorial recorte A demonstrado: `tests/gs03.test.ts`, CI 41911761424 em 6756c37, PostgreSQL/Chromium. F19/F20/F21 continuam PARCIAL; oferta sem marcador e destinos externos reais pendentes, conforme `docs/CTA-INVENTORY-LAB.md`. Nao equivale a protecao operacional nem conclui GS17.
