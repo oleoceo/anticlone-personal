@@ -40,14 +40,14 @@ export async function saveNotificationSettings(db:Pool, input:unknown) {
     if (row.version !== data.version) throw new Conflict();
     const changed=names.filter(n=>row[n] !== data.settings[n]);
     if (!changed.length) return null;
-    return {action:'save',changed,values:data.settings,requested:false};
+    return {action:'save',changed:row.requested ? [...changed,'preference_requested'] : changed,values:data.settings,requested:false};
   });
 }
 export async function setNotificationPreference(db:Pool, input:unknown) {
   const data=object(input);
   if (data.enabled === false) {
     if (Object.keys(data).join(',') !== 'enabled') throw new TypeError('invalid fields');
-    return mutate(db, async row=>row.requested ? {action:'disable',changed:['preference_requested'],values:row as Settings,requested:false} : null);
+    return mutate(db, async row=>({action:'disable',changed:['preference_requested'],values:row as Settings,requested:false}));
   }
   if (data.enabled !== true || Object.keys(data).sort().join(',') !== 'enabled,version') throw new TypeError('invalid fields');
   const v=version(data.version);

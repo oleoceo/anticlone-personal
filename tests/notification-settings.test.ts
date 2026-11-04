@@ -53,8 +53,16 @@ test('global notification settings are authenticated, atomic, versioned and offl
     assert.equal(current.version,5); assert.equal(current.recipient,'new@example.test');
     const audit=await db.query('SELECT version,action,changed_fields FROM notification_settings_audit ORDER BY version');
     assert.deepEqual(audit.rows.map(r=>r.action),['save','enable','save','enable','disable']);
+    assert.ok(audit.rows[2].changed_fields.includes('preference_requested'));
     assert.equal(JSON.stringify(audit.rows).includes('example.test'),false);
     assert.equal(JSON.stringify(current).includes('password'),false);
+    await db.query('DROP TRIGGER reject_audit ON notification_settings_audit');
+    assert.equal((await request('/notification-settings/preference',{enabled:false},token)).status,200);
+    assert.equal((await request('/notification-settings/preference',{enabled:true,version:5},token)).status,409);
+    assert.equal((await request('/notification-settings/preference',{enabled:true,version:6},token)).status,200);
+    assert.equal((await request('/notification-settings/preference',{enabled:false},token)).status,200);
+    current=await (await request('/notification-settings',undefined,token)).json() as Record<string,unknown>;
+    assert.equal(current.preference_requested,false);
     assert.equal(connections,0);
     assert.equal((await db.query('SELECT COUNT(*)::int AS n FROM notification_settings')).rows[0].n,1);
     assert.ok(createHash('sha256').update(secret).digest('hex'));
