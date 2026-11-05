@@ -72,7 +72,7 @@ Este quadro complementa as provas acima, sem mudar criterios. `Parcial` signific
 | F05 · A | Parcial: gs02.test.ts | GS09 completo, CSP e navegadores suportados. |
 | F06 · A | Parcial: gs02.test.ts | Diagnostico best-effort de canarios e GS09/GS10 reais. |
 | F07 · A | Parcial: server.ts, https-gateway.test.ts | Alias persistido/versionado e compatibilidade de revisoes. |
-| F08 · A | Parcial: instalacao primaria e verificacao controlada limitada em tests/installation.test.ts | Matriz completa de capacidades, FULL/UNSUPPORTED e GS10 integral pendentes. |
+| F08 · A | Parcial: instalacao primaria e sinais nao autenticados em tests/installation.test.ts | Verificacao controlada, matriz completa de capacidades e GS10 integral pendentes. |
 | F09 · A | Parcial: pilot-observation.test.ts | Corroboracao e contexto operacional, sem confiar no Origin. |
 | F10 · A | Ausente: sem prova completa file/iframe | Matriz de transporte/sandbox com degradacao GS10. |
 | F11 · A | Parcial: detection.test.ts/gs02.test.ts | Evidencias operacionais e GS12 completos. |
