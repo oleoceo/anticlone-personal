@@ -84,10 +84,17 @@ test('CTA selection is authenticated, capture-scoped and never activates mitigat
     await importInventory(db,'p',{surface:'landing',candidates});
     const raceRow=(await db.query('SELECT c.id AS capture_id,o.id AS observation_id,o.point_id FROM cta_captures c JOIN cta_observations o ON o.capture_id=c.id WHERE c.is_current AND c.project_id=$1 ORDER BY o.id DESC LIMIT 1',['p'])).rows[0];
     const race={...body,captureId:raceRow.capture_id,observationId:String(raceRow.observation_id),pointId:raceRow.point_id};
-    const concurrent=await Promise.allSettled([importInventory(db,'p',{surface:'landing',candidates:[]}),selectObservation(db,race)]);
-    assert.equal(concurrent[0].status,'fulfilled');
-    if(concurrent[1].status==='rejected') assert.ok(concurrent[1].reason instanceof SelectionConflict);
+    const blocker=await db.connect();
+    try {
+      await blocker.query('BEGIN'); await blocker.query('SELECT id FROM projects WHERE id=$1 FOR UPDATE',['p']);
+      const waiters=async(n:number)=>{for(let i=0;i<200;i++){const result=await db.query("SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT origin FROM projects WHERE id=%FOR UPDATE'"); if(result.rows[0].n>=n)return; await new Promise(r=>setTimeout(r,10));} throw Error('lock waiters not observed');};
+      const importing=importInventory(db,'p',{surface:'landing',candidates:[]}); await waiters(1);
+      const selecting=assert.rejects(selectObservation(db,race),SelectionConflict); await waiters(2);
+      await blocker.query('COMMIT'); await importing; await selecting;
+    } finally {blocker.release();}
     await assert.rejects(selectObservation(db,race),SelectionConflict);
+    await page.goto(base+'/admin/ui/'); await page.getByLabel('Projeto').fill('p'); await page.getByLabel('Superfície').fill('landing'); await page.getByRole('button',{name:'Consultar CTAs'}).click();
+    await page.getByText('Seleções pendentes de capturas anteriores, desatualizadas e sem ativação: 1',{exact:false}).waitFor();
     const cookie=(await page.context().cookies(base)).find(c=>c.name==='admin_session'); assert.ok(cookie);
     const unauth=await fetch(base+'/admin/ui/cta-selection',{method:'POST',headers:{origin:base,'sec-fetch-site':'same-origin','content-type':'application/json'},body:JSON.stringify(body)}); assert.equal(unauth.status,403);
     const noCsrf=await fetch(base+'/admin/ui/cta-selection',{method:'POST',headers:{origin:base,'sec-fetch-site':'same-origin','content-type':'application/json',cookie:`admin_session=${cookie.value}`},body:JSON.stringify(body)}); assert.equal(noCsrf.status,403);

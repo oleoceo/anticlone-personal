@@ -67,7 +67,8 @@ async function inventory(db: Pool, body: unknown) {
     LEFT JOIN LATERAL (SELECT i.offer,d.url FROM cta_selection_intents i JOIN cta_destinations d ON d.project_id=i.project_id AND d.offer=i.offer AND d.id=i.destination_id WHERE i.capture_id=c.id AND i.observation_id=o.id ORDER BY i.id DESC LIMIT 1) intent ON true
     WHERE c.project_id=$1 AND c.surface=$2 AND c.is_current ORDER BY o.id`,[data.project,data.surface]);
   const destinations=await db.query('SELECT id,offer,url FROM cta_destinations WHERE project_id=$1 ORDER BY offer,id',[data.project]);
-  return {captureId:result.rows[0]?.capture_id ?? null,observations:result.rows.filter(r=>r.observation_id),destinations:destinations.rows};
+  const stale=await db.query('SELECT count(*)::int AS n FROM cta_selection_intents i JOIN cta_captures c ON c.id=i.capture_id WHERE i.project_id=$1 AND i.surface=$2 AND NOT c.is_current',[data.project,data.surface]);
+  return {captureId:result.rows[0]?.capture_id ?? null,observations:result.rows.filter(r=>r.observation_id),destinations:destinations.rows,stale:stale.rows[0].n};
 }
 
 const page = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Notificações</title><script src="/admin/ui/app.js" defer></script></head><body>
@@ -99,7 +100,7 @@ el('logout').addEventListener('click',async()=>{try{await request('logout',{});a
 let ctaData=null, ctaChoice=null, ctaScope=null;
 const ctaQuery=el('cta-query'), ctaSelect=el('cta-select');
 ctaQuery.addEventListener('submit',async e=>{e.preventDefault(); ctaChoice=null; ctaSelect.hidden=true; el('cta-list').replaceChildren(); el('cta-message').textContent='';
- try {ctaScope={project:ctaQuery.elements.project.value,surface:ctaQuery.elements.surface.value}; ctaData=await request('cta-inventory',ctaScope); el('capture').textContent='Captura vigente: '+(ctaData.captureId??'nenhuma');
+ try {ctaScope={project:ctaQuery.elements.project.value,surface:ctaQuery.elements.surface.value}; ctaData=await request('cta-inventory',ctaScope); el('capture').textContent='Captura vigente: '+(ctaData.captureId??'nenhuma')+' | Seleções pendentes de capturas anteriores, desatualizadas e sem ativação: '+ctaData.stale;
  for(const row of ctaData.observations) {const label=document.createElement('label'), radio=document.createElement('input'), detail=document.createElement('span'); radio.type='radio'; radio.name='cta'; radio.disabled=!row.selection_allowed || row.review_required || row.kind!=='a'; radio.addEventListener('change',()=>{ctaChoice=row; ctaSelect.hidden=false});
  detail.textContent=' CTA observado | '+row.kind+' | contexto não confiável: '+(row.visual_context??'indisponível')+' | URL: '+(row.observed_url??'indisponível')+' | marcador: '+(row.marker??'ausente')+' | observação: '+row.observation_id+' | '+row.observed_at+' | confiança: '+row.confidence+' | '+(row.pending_offer?'seleção pendente: '+row.pending_offer+' — '+row.pending_url:'sem seleção nesta captura')+(row.review_required?' | revisão necessária':'')+(!row.selection_allowed?' | conflito de identificação':'')+(row.marker?' | marcador não comprova identidade':' | CTA observado, mas ainda sem identidade suficiente para substituição.'); label.append(radio,detail); el('cta-list').append(label,document.createElement('br'));}
  ctaSelect.elements.destination.replaceChildren(); for(const d of ctaData.destinations) {const option=document.createElement('option');option.value=d.id;option.textContent=d.offer+' — '+d.url;ctaSelect.elements.destination.append(option)}
