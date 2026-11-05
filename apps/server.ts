@@ -10,6 +10,7 @@ import { ctaDecision } from './cta-policy.js';
 import { safeEvaluateRisk, assessObservation, recordRisk, stealthEligible, type RiskEvidence } from './risk.js';
 import { gatewayMode } from './gateway-mode.js';
 import { gatewayBoundary } from './gateway-boundary.js';
+import { recordInstallationClaim } from './installation.js';
 const boundary = gatewayBoundary(process.env);
 const connectionString = process.env.DATABASE_URL, project = process.env.PROJECT_ID;
 const smtpPort = Number(process.env.SMTP_PORT), port = Number(process.env.PORT ?? 3000);
@@ -39,6 +40,15 @@ const fallback = readFileSync('runtime/fallback.js');
 let windowStart = Date.now(), count = 0;
 let decisionWindowStart = Date.now(), decisionCount = 0;
 let refreshWindowStart = Date.now(), refreshCount = 0;
+const claimPending = new Set<string>();
+const claimAfter = new Map<string,number>();
+function recordClaim(origin: string, source: 'core' | 'fallback') {
+  if (origin !== normalizedOrigin || claimPending.has(source) || Date.now() < (claimAfter.get(source) ?? 0)) return;
+  claimPending.add(source);
+  // Bound database work and error logging even when the migration is not present.
+  claimAfter.set(source,Date.now()+60_000);
+  void recordInstallationClaim(pool,activeProject,origin,source).catch(() => process.stderr.write('installation claim unavailable\n')).finally(()=>claimPending.delete(source));
+}
 const server = http.createServer((req, res) => {
   if (!boundary(req, res)) return;
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -120,7 +130,11 @@ const server = http.createServer((req, res) => {
       if (!req.headers.origin || origin !== configuredOrigin(req.headers.origin)) throw new Error('origin mismatch');
     }
     catch { res.writeHead(400).end(); return; }
-    void observe(pool, activeProject, mode.origins, origin, req.url === '/observe/fallback' ? 'fallback' : 'core', evidence).then(result => res.writeHead(result === 'capacity' ? 429 : 204).end()).catch(() => res.writeHead(503).end());
+    const source = req.url === '/observe/fallback' ? 'fallback' : 'core';
+    void observe(pool, activeProject, mode.origins, origin, source, evidence).then(result => {
+      if (result === 'authorized') recordClaim(origin,source);
+      res.writeHead(result === 'capacity' ? 429 : 204).end();
+    }).catch(() => res.writeHead(503).end());
   });
 });
 server.requestTimeout = 5000; server.headersTimeout = 6000;
@@ -128,10 +142,17 @@ server.maxHeadersCount = 40;
 server.setTimeout(10_000, socket => socket.destroy());
 server.listen(port, '127.0.0.1');
 let busy = false;
+let installationCleanupAfter = 0;
 async function maintenance() {
   if (busy) return;
   busy = true;
-  try { await cleanup(pool, activeProject); await deliverOne(pool, activeProject, smtpPort); }
+  try {
+    await cleanup(pool, activeProject); await deliverOne(pool, activeProject, smtpPort);
+    if (Date.now() >= installationCleanupAfter) {
+      installationCleanupAfter = Date.now() + 60 * 60_000;
+      await pool.query("DELETE FROM installation_signals WHERE project_id=$1 AND last_observed_at < now()-interval '7 days'", [activeProject]).catch(() => process.stderr.write('installation retention unavailable\n'));
+    }
+  }
   catch { process.stderr.write('maintenance failed\n'); }
   finally { busy = false; }
 }

@@ -13,7 +13,7 @@ Legenda: **P** = planejada no Personal; **PARCIAL** = parte comprovada, capacida
 | F05 | Fallback independente com capacidades limitadas | 23-RUNTIME-PROTOCOL | GS09 parcial: fallback e canários em Chromium, tests/gs02.test.ts; CSP e outros navegadores pendentes | PARCIAL |
 | F06 | HTML Canary e CSS Canary best-effort | 23-RUNTIME-PROTOCOL, 02- Observacoes Tecnicas | GS09 parcial em Chromium, tests/gs02.test.ts, CI 41688461172; CSP e outros navegadores pendentes | PARCIAL |
 | F07 | Entrega de scripts, rotas públicas e alias persistido/versionado | 24-EDGE-DELIVERY-NETWORK, 02- Observacoes Tecnicas | GS01, GS10 | PARCIAL |
-| F08 | Verificação de instalação e degradação FULL/PARTIAL/UNSUPPORTED | 27-COMPATIBILITY-MATRIX, 12-MVP-SCOPE | GS10 | P |
+| F08 | Verificação de instalação e degradação FULL/PARTIAL/UNSUPPORTED | 27-COMPATIBILITY-MATRIX, 12-MVP-SCOPE | GS10: sinais nao autenticados em tests/installation.test.ts; verificacao controlada pendente | PARCIAL |
 | F09 | Contexto autorizado vs. execução em host não autorizado | 23-RUNTIME-PROTOCOL | Origem alegada comparada no servidor, original e cópia em tests/gs02.test.ts, CI 41680979048; sinais forjáveis | PARCIAL |
 | F10 | Contextos `file://`, iframe/sandbox quando possível, sem garantia | 23-RUNTIME-PROTOCOL | GS10 | P |
 | F11 | Observações duráveis com fonte e timestamps | 21-EVENT-MODEL, 25-INCIDENT-EVIDENCE-MODEL | GS02, GS12 | PARCIAL |
@@ -72,7 +72,7 @@ Este quadro complementa as provas acima, sem mudar criterios. `Parcial` signific
 | F05 · A | Parcial: gs02.test.ts | GS09 completo, CSP e navegadores suportados. |
 | F06 · A | Parcial: gs02.test.ts | Diagnostico best-effort de canarios e GS09/GS10 reais. |
 | F07 · A | Parcial: server.ts, https-gateway.test.ts | Alias persistido/versionado e compatibilidade de revisoes. |
-| F08 · A | Ausente: smoke de transporte nao e diagnostico universal | Modelo de instalacao e FULL/PARTIAL/UNSUPPORTED verificaveis (GS10). |
+| F08 · A | Parcial: instalacao primaria e sinais nao autenticados em tests/installation.test.ts | Verificacao controlada, matriz completa de capacidades e GS10 integral pendentes. |
 | F09 · A | Parcial: pilot-observation.test.ts | Corroboracao e contexto operacional, sem confiar no Origin. |
 | F10 · A | Ausente: sem prova completa file/iframe | Matriz de transporte/sandbox com degradacao GS10. |
 | F11 · A | Parcial: detection.test.ts/gs02.test.ts | Evidencias operacionais e GS12 completos. |

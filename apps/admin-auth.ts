@@ -9,6 +9,7 @@ import { importInventory, approveDestination, approveCommercial, mapPoint, revie
 import { publishCtaPolicy } from './cta-policy.js';
 import { Conflict, getNotificationSettings, saveNotificationSettings, setNotificationPreference } from './notification-settings.js';
 import { handleAdminUi } from './admin-ui.js';
+import { disableInstallation, enableInstallation, installationDiagnostic, InstallationOriginConflict } from './installation.js';
 
 // Laboratory-only: one process, one owner, ephemeral sessions and rate limit.
 export function createAdminServer(passwordRecord: string, totpSecret: string, db: Pool, now: () => number = Date.now) {
@@ -54,6 +55,11 @@ export function createAdminServer(passwordRecord: string, totpSecret: string, db
       }
       if (req.method === 'GET' && req.url === '/admin/projects') {
         void db.query('SELECT id, name, origin FROM projects ORDER BY name, id').then(result => res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(result.rows))).catch(() => res.writeHead(503).end()); return;
+      }
+      const installationPath = /^\/admin\/projects\/([a-zA-Z0-9_-]{1,64})\/installation(?:\/(disable))?$/.exec(req.url ?? '');
+      if (installationPath && (req.method === 'GET' || req.method === 'POST')) {
+        const operation = req.method === 'GET' ? installationDiagnostic(db,installationPath[1]) : installationPath[2] ? disableInstallation(db,installationPath[1]) : enableInstallation(db,installationPath[1]);
+        void operation.then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error:unknown)=>res.writeHead(error instanceof InstallationOriginConflict ? 409 : error instanceof TypeError ? 404 : 503).end()); return;
       }
       const riskPath = /^\/admin\/projects\/([a-zA-Z0-9_-]{1,64})\/risk-assessments$/.exec(req.url ?? '');
       if (req.method === 'GET' && riskPath) {
