@@ -3,7 +3,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import type { Pool } from 'pg';
 import { Conflict, getNotificationSettings, saveNotificationSettings, setNotificationPreference } from './notification-settings.js';
 import { approveCommercial, selectObservation, SelectionConflict } from './cta-inventory.js';
-import { disableInstallation, enableInstallation, installationDiagnostic } from './installation.js';
+import { disableInstallation, enableInstallation, installationDiagnostic, InstallationOriginConflict } from './installation.js';
 
 type Session = { expiry: number; kind: 'bearer' | 'web'; csrf: string };
 
@@ -51,7 +51,7 @@ export function handleAdminUi(req: IncomingMessage, res: ServerResponse, db: Poo
     if(rejected) return;
     let body:unknown; try { body=JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { res.writeHead(400).end(); return; }
     const operation=req.url === '/admin/ui/settings' ? saveNotificationSettings(db,body) : req.url === '/admin/ui/preference' ? setNotificationPreference(db,body) : req.url === '/admin/ui/cta-inventory' ? inventory(db,body) : req.url?.startsWith('/admin/ui/installation') ? installation(db,body,req.url) : req.url === '/admin/ui/cta-commercial' ? approveCommercial(db,body).then(()=>({state:'APPROVED'})) : selectObservation(db,body).then(()=>({state:'PENDING'}));
-    void operation.then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error:unknown)=>res.writeHead(error instanceof Conflict || error instanceof SelectionConflict ? 409 : error instanceof TypeError ? 400 : 503).end());
+    void operation.then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error:unknown)=>res.writeHead(error instanceof Conflict || error instanceof SelectionConflict || error instanceof InstallationOriginConflict ? 409 : error instanceof TypeError ? 400 : 503).end());
   }); return false;
 }
 
@@ -106,7 +106,7 @@ const installationSection=document.createElement('section');
 installationSection.innerHTML='<h2>Instalação — diagnóstico limitado</h2><p>Informe o ID do projeto. As alegações de navegador podem ser forjadas. Não há verificação controlada; elas não validam integridade nem proteção ativa.</p><form id="installation-form"><label>ID <input name="project" required></label><button>Consultar instalação</button><button type="button" id="installation-enable">Habilitar coleta da origem principal</button><button type="button" id="installation-disable">Desabilitar coleta</button></form><pre id="installation-result"></pre>';
 section.append(installationSection);
 const installationForm=el('installation-form');
-async function showInstallation(action) {try {const data=await request('installation'+action,{project:installationForm.elements.project.value});el('installation-result').textContent=JSON.stringify(data,null,2)} catch {el('installation-result').textContent='Consulta indisponível ou projeto inválido.'}}
+async function showInstallation(action) {try {const data=await request('installation'+action,{project:installationForm.elements.project.value});el('installation-result').textContent=JSON.stringify(data,null,2)} catch (error) {el('installation-result').textContent=error.status===409?'A origem do projeto mudou. A instalacao anterior foi preservada; a coleta nao foi habilitada para a nova origem.':'Consulta indisponivel ou projeto invalido.'}}
 installationForm.addEventListener('submit',e=>{e.preventDefault();void showInstallation('')});
 el('installation-enable').addEventListener('click',()=>void showInstallation('-enable'));
 el('installation-disable').addEventListener('click',()=>void showInstallation('-disable'));

@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 
+export class InstallationOriginConflict extends Error {}
+
 // Browser claims are forgeable. They are not controlled checks or proof of installation.
 export async function recordInstallationClaim(db: Pool, project: string, origin: string, source: 'core' | 'fallback'): Promise<void> {
   const client=await db.connect();
@@ -22,6 +24,7 @@ export async function enableInstallation(db: Pool, project: string) {
   if (!result.rowCount) {
     const existing = await db.query('SELECT id FROM installations WHERE project_id=$1', [project]);
     if (!existing.rowCount) throw new TypeError('unknown project');
+    throw new InstallationOriginConflict('installation origin differs from current project origin');
   }
   return installationDiagnostic(db,project);
 }

@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { compilePreviousCode, previousCodeSha } from './previous-code.js';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { spawn } from 'node:child_process';
@@ -8,13 +10,14 @@ import { Pool } from 'pg';
 import { chromium } from 'playwright';
 import { disableInstallation, enableInstallation, installationDiagnostic, recordInstallationClaim } from '../apps/installation.js';
 
-test('installation claims: upgrade, controlled browser, isolation and untrusted replay', {timeout:60000}, async () => {
+test('installation claims: upgrade, browser, isolation, replay and actual previous-code rollback', {timeout:120000}, async () => {
   assert.ok(process.env.TEST_DATABASE_URL);
   const root=new Pool({connectionString:process.env.TEST_DATABASE_URL});
   const schema='install_'+crypto.randomUUID().replaceAll('-','');
   await root.query(`CREATE SCHEMA ${schema}`);
   const options=`-c search_path=${schema}`;
   const db=new Pool({connectionString:process.env.TEST_DATABASE_URL,options});
+  let previousDirectory: string | undefined;
   let child: ReturnType<typeof spawn> | undefined;
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
   const site=createServer((_req,res)=>res.writeHead(200,{'content-type':'text/html'}).end(`<a href="/checkout">Checkout</a><script src="http://127.0.0.1:3000/runtime.js"></script><script src="http://127.0.0.1:3000/fallback.js"></script>`));
@@ -49,10 +52,29 @@ test('installation claims: upgrade, controlled browser, isolation and untrusted 
     assert.equal((await installationDiagnostic(db,'two')).signals.length,0);
     assert.equal((await enableInstallation(db,'two')).installation?.enabled,true);
     await page.locator('a').click(); assert.equal(new URL(page.url()).pathname,'/checkout');
-    // Old code can still read its pre-migration data after the additive upgrade.
-    assert.equal((await db.query("SELECT origin FROM projects WHERE id='one'")).rows[0].origin,origin);
+    // Stop the new process, then execute the actual pre-025 application against this upgraded database.
+    child.kill(); await once(child,'exit');
+    const persisted=await db.query('SELECT * FROM installations ORDER BY project_id');
+    const signals=await db.query('SELECT * FROM installation_signals ORDER BY project_id,source');
+    previousDirectory=await compilePreviousCode();
+    assert.equal(previousCodeSha,'73bee1c25507ca617df09e243a08b80ab99484d7');
+    child=spawn(process.execPath,[join(previousDirectory,'dist/apps/server.js')],{cwd:previousDirectory,env:{...process.env,PGOPTIONS:options,DATABASE_URL:process.env.TEST_DATABASE_URL,PROJECT_ID:'one',ALLOWED_ORIGIN:origin,PORT:'3000',SMTP_PORT:'1'},stdio:'ignore'});
+    let ready=false;
+    for (let i=0;i<100;i++) {try {if ((await fetch('http://127.0.0.1:3000/healthz')).ok) {ready=true;break;}} catch { /* startup */ } await new Promise(r=>setTimeout(r,50));}
+    assert.ok(ready,'previous application starts on the 025 schema');
+    const oldRuntime=await fetch('http://127.0.0.1:3000/runtime.js'); assert.equal(oldRuntime.status,200);
+    const oldFallback=page.waitForResponse(r=>r.url().endsWith('/observe/fallback'));
+    await page.goto(origin); assert.equal((await oldFallback).status(),204);
+    await page.locator('a').click(); assert.equal(new URL(page.url()).pathname,'/checkout');
+    // Old observation writes remain operational; new opt-in data is untouched.
+    const observed=await fetch('http://127.0.0.1:3000/observe',{method:'POST',headers:{'content-type':'text/plain',origin:'http://rollback-copy.test'},body:'http://rollback-copy.test'});
+    assert.equal(observed.status,204);
+    assert.equal((await db.query("SELECT count(*)::int n FROM observations WHERE host='rollback-copy.test'")).rows[0].n,1);
+    assert.deepEqual((await db.query('SELECT * FROM installations ORDER BY project_id')).rows,persisted.rows);
+    assert.deepEqual((await db.query('SELECT * FROM installation_signals ORDER BY project_id,source')).rows,signals.rows);
   } finally {
     await browser?.close(); if(child && child.exitCode===null) {child.kill(); await once(child,'exit');}
+    if(previousDirectory) await rm(previousDirectory,{recursive:true,force:true});
     if(site.listening) await new Promise<void>(resolve=>site.close(()=>resolve()));
     await db.end(); await root.query(`DROP SCHEMA ${schema} CASCADE`); await root.end();
   }
