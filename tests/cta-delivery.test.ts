@@ -19,7 +19,7 @@ test('CTA delivery is atomic, exclusive, bounded and recovers interrupted work',
   await admin.query(`CREATE SCHEMA ${schema}`);
   const options=`-c search_path=${schema}`;
   const db = new Pool({connectionString:process.env.TEST_DATABASE_URL, options});
-  for (const name of ['003_projects','011_cta_inventory','014_cta_drift_alerts','015_cta_alert_deliveries'])
+  for (const name of ['003_projects','011_cta_inventory','022_cta_capture_selection','014_cta_drift_alerts','015_cta_alert_deliveries'])
     await db.query((await readFile(`infra/${name}.sql`,'utf8')).replace(/^\uFEFF/,''));
   const project=`delivery_${randomUUID()}`, point=randomUUID();
   await db.query('INSERT INTO projects(id,name,origin) VALUES($1,$1,$2)',[project,`http://localhost/${project}`]);
