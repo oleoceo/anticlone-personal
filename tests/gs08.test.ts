@@ -33,7 +33,7 @@ test('GS08: real checkout drift isolates a CTA through authenticated review in C
     const adminUrl=`http://127.0.0.1:${(admin.address() as AddressInfo).port}`;
     const login=await fetch(`${adminUrl}/admin/login`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:'password',code:new TOTP({secret:Secret.fromBase32(secret)}).generate()})});
     assert.equal(login.status,200); const {token}=await login.json() as {token:string};
-    let html='<a data-anticlone-point="basic001" href="/native-basic">Basic</a><a data-anticlone-point="premium1" href="/native-premium">Premium</a><script src="http://127.0.0.1:3000/runtime.js"></script>';
+    let html='<button id="ordinary">Open</button><input id="field"><a data-anticlone-point="basic001" href="/native-basic">Basic</a><a data-anticlone-point="premium1" href="/native-premium">Premium</a><script src="http://127.0.0.1:3000/runtime.js"></script>';
     fixture=createServer((req,res)=>res.writeHead(200,{'content-type':'text/html'}).end(req.url==='/clone'?html:'<h1>destination</h1>')).listen(0,'127.0.0.1'); await once(fixture,'listening');
     const port=(fixture.address() as AddressInfo).port, original=`http://127.0.0.1:${port}`, clone=`http://localhost:${port}`, project='gs08_'+randomUUID();
     await db.query('INSERT INTO projects(id,name,origin) VALUES($1,$1,$2)',[project,original]);
@@ -178,8 +178,32 @@ test('GS08: real checkout drift isolates a CTA through authenticated review in C
     assert.equal((await post('policy',{enabled:false,surface:'landing',pathname:'/clone',allocation})).status,200);
     await native();
     assert.equal((await post('policy',{enabled:true,surface:'landing',pathname:'/clone',allocation})).status,200);
+    // Real delayed decisions survive ordinary interactions and an early native CTA click.
+    for (const interaction of ['pointer','keyboard','early'] as const) {
+      const visitor=await browser.newPage();
+      await visitor.route('**/entry-decision',async route=>{
+        const response=await route.fetch();
+        await visitor.waitForTimeout(200);
+        if(interaction==='pointer') await visitor.locator('#ordinary').click();
+        if(interaction==='keyboard') { await visitor.locator('#field').focus(); await visitor.keyboard.press('A'); }
+        if(interaction==='early') {
+          await visitor.evaluate(()=>document.querySelector('[data-anticlone-point="premium1"]')!.addEventListener('click',event=>event.preventDefault(),{once:true}));
+          await visitor.locator('[data-anticlone-point="premium1"]').click();
+          assert.equal(await visitor.locator('[data-anticlone-point="premium1"]').getAttribute('href'),'/native-premium');
+        }
+        await route.fulfill({response});
+      });
+      const response=visitor.waitForResponse(r=>r.url().endsWith('/entry-decision'));
+      await visitor.goto(clone+'/clone');
+      assert.equal((await (await response).json() as {action:string}).action,'REPLACE_CONVERSION');
+      await visitor.waitForTimeout(100);
+      assert.equal(await visitor.locator('[data-anticlone-point="premium1"]').getAttribute('href'),'/native-premium');
+      await visitor.locator('[data-anticlone-point="premium1"]').click();
+      await visitor.waitForURL(original+'/official-premium');
+      await visitor.close();
+    }
     // Delay fresh real decisions; only the invalid-payload case alters the response.
-    for (const invalidation of ['invalid','early','abandon','navigation','query'] as const) {
+    for (const invalidation of ['invalid','abandon','navigation','query'] as const) {
       const negative=await browser.newPage();
       await negative.addInitScript(()=>{
         const add=document.addEventListener.bind(document);
@@ -188,7 +212,6 @@ test('GS08: real checkout drift isolates a CTA through authenticated review in C
       await negative.route('**/entry-decision',async route=>{
         const response=await route.fetch();
         await new Promise(resolve=>setTimeout(resolve,250));
-        if(invalidation==='early') await negative.evaluate(()=>{const node=document.querySelector('[data-anticlone-point="premium1"]')!;node.addEventListener('click',event=>event.preventDefault(),{once:true});node.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true}));});
         if(invalidation==='abandon') await negative.evaluate(()=>dispatchEvent(new Event('pagehide')));
         if(invalidation==='navigation') await negative.evaluate(()=>{history.pushState({},'', '/different');history.replaceState({},'', '/clone');});
         if(invalidation==='query') await negative.evaluate(()=>{history.pushState({},'', '/clone?changed=1');history.replaceState({},'', '/clone');});
@@ -201,7 +224,7 @@ test('GS08: real checkout drift isolates a CTA through authenticated review in C
       await negative.goto(clone+'/clone');
       await response; await negative.waitForTimeout(100);
       assert.equal(await negative.evaluate(()=>document.documentElement.dataset.testCtaListener ?? null),null,invalidation);
-      if(invalidation!=='early') {await negative.locator('[data-anticlone-point="premium1"]').click();await negative.waitForURL(clone+'/native-premium');}
+      await negative.locator('[data-anticlone-point="premium1"]').click();await negative.waitForURL(clone+'/native-premium');
       await negative.close();
     }
 
