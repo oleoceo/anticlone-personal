@@ -61,6 +61,7 @@ test('GS06 integration: persisted policy, controlled LOW and original', {timeout
     });
     const timedResponse=timed.waitForResponse(r=>r.url().endsWith('/entry-decision'));
     await timed.goto(clone+'/clone'); await timedResponse;
+    await timed.unrouteAll({behavior:'wait'});
     await timed.waitForTimeout(100);
     assert.equal(timed.url(),clone+'/clone');
     await timed.getByText('next',{exact:true}).click(); await timed.waitForURL(clone+'/next');
