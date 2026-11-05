@@ -24,9 +24,9 @@ export async function cleanup(pool: Pool, project: string): Promise<void> {
   const expired = await pool.query(`DELETE FROM incidents WHERE project_id = $1 AND last_seen < now() - interval '30 days' RETURNING id`, [project]);
   if (expired.rowCount) process.stderr.write(`Expired ${expired.rowCount} inactive incident(s) and associated alerts under retention policy\n`);
 }
-export async function observe(pool: Pool, project: string, allowedOrigin: string, input: string, source: 'core' | 'fallback' = 'core', evidence?: unknown): Promise<'authorized' | 'observed' | 'capacity'> {
+export async function observe(pool: Pool, project: string, allowedOrigin: string | readonly string[], input: string, source: 'core' | 'fallback' = 'core', evidence?: unknown): Promise<'authorized' | 'observed' | 'capacity'> {
   const origin = configuredOrigin(input), host = hostFromUrl(origin);
-  if (origin === allowedOrigin) return 'authorized';
+  if (typeof allowedOrigin === 'string' ? origin === allowedOrigin : allowedOrigin.includes(origin)) return 'authorized';
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
