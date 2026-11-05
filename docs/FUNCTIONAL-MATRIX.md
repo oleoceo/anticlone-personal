@@ -71,3 +71,5 @@ Tenants/organizações comerciais, memberships de clientes, checkout de assinatu
 4. Não importar os modelos de tenancy ou o grafo M00–M11. A auditoria não deve virar reconstrução do SaaS.
 
 GS03 laboratorial recorte A demonstrado: `tests/gs03.test.ts`, CI 41911761424 em 6756c37, PostgreSQL/Chromium. F19/F20/F21 continuam PARCIAL; oferta sem marcador e destinos externos reais pendentes, conforme `docs/CTA-INVENTORY-LAB.md`. Nao equivale a protecao operacional nem conclui GS17.
+
+Interpretador comercial isolado (recorte F25/F41): `tests/commercial-interpreter.test.ts` demonstra parsing monet?rio exato e significado comercial limitado em Chromium localhost; sem associa??o, persist?ncia ou integra??o de prote??o. Formatos/limites em `docs/COMMERCIAL-INTERPRETER-LAB.md`. N?o conclui F25/F41 nem GS17; prot?tipo contextual anterior permanece BLOCKED. Revis?o e CI do SHA final no PR.
