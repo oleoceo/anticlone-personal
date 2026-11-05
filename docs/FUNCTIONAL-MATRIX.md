@@ -72,4 +72,4 @@ Tenants/organizações comerciais, memberships de clientes, checkout de assinatu
 
 GS03 laboratorial recorte A demonstrado: `tests/gs03.test.ts`, CI 41911761424 em 6756c37, PostgreSQL/Chromium. F19/F20/F21 continuam PARCIAL; oferta sem marcador e destinos externos reais pendentes, conforme `docs/CTA-INVENTORY-LAB.md`. Nao equivale a protecao operacional nem conclui GS17.
 
-Interpretador comercial isolado (recorte F25/F41): `tests/commercial-interpreter.test.ts` demonstra parsing monet?rio exato e significado comercial limitado em Chromium localhost; sem associa??o, persist?ncia ou integra??o de prote??o. Formatos/limites em `docs/COMMERCIAL-INTERPRETER-LAB.md`. N?o conclui F25/F41 nem GS17; prot?tipo contextual anterior permanece BLOCKED. Revis?o e CI do SHA final no PR.
+Interpretador comercial isolado (recorte F25/F41): `tests/commercial-interpreter.test.ts` demonstra parsing monetario exato e significado limitado em Chromium localhost; sem associacao, persistencia ou integracao de protecao. Limites em `docs/COMMERCIAL-INTERPRETER-LAB.md`. Nao conclui F25/F41 nem GS17; prototipo contextual anterior permanece BLOCKED. Revisao e CI do SHA final no PR.

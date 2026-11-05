@@ -6,7 +6,7 @@ export const currencies = Object.freeze({
 });
 type Currency = keyof typeof currencies;
 export type Meaning = 'PRICE_CURRENT' | 'PRICE_PREVIOUS' | 'SAVINGS' | 'INSTALLMENT' | 'RECURRING' | 'UNKNOWN';
-export interface TextEvidence { text: string; struck?: boolean }
+export interface TextEvidence { text: string; struck?: boolean; mixedStrike?: boolean }
 export interface Candidate {
   raw: string; currency: Currency | null; minorUnits: string | null; scale: number | null;
   status: 'RESOLVED' | 'UNRESOLVED' | 'REJECTED'; meaning: Meaning;
@@ -72,7 +72,9 @@ export function interpretText(input: TextEvidence): Candidate[] {
     const numeric = raw.replace(tag, '').trim();
     const values = amounts(numeric, currencies[currency].scale);
     if (values.length !== 1) return { ...candidate, status: values.length ? 'UNRESOLVED' : 'REJECTED', reason: values.length ? 'Ambiguous numeric format' : 'Invalid grouping, precision or amount limit' };
-    const classification = matches.length === 1 ? classify(before+'@'+after, input.struck === true) : { meaning: 'UNKNOWN' as const, reason: 'Multiple amounts in one text run' };
+    // A numeric continuation across an unsupported Unicode separator is never a new amount.
+    if (matches.length === 1 && (/^[^\p{L}\p{N}]*\d/u.test(after) || /\d[^\p{L}\p{N}]*$/u.test(before))) return { ...candidate, status: 'REJECTED', reason: 'Unsupported numeric continuation' };
+    const classification = matches.length === 1 && !input.mixedStrike ? classify(before+'@'+after, input.struck === true) : { meaning: 'UNKNOWN' as const, reason: 'Multiple amounts or mixed strike-through evidence' };
     return { ...candidate, minorUnits: values[0], status: 'RESOLVED', ...classification };
   });
 }
@@ -81,31 +83,44 @@ export function interpretText(input: TextEvidence): Candidate[] {
 export function collectVisibleText(): { status: 'COMPLETE' | 'LIMIT_EXCEEDED'; runs: TextEvidence[] } {
   const runs: TextEvidence[] = [];
   let visited = 0, size = 0, exceeded = false;
-  function walk(element: Element, inheritedStrike: boolean): void {
-    if (++visited > 20000) { exceeded = true; return; }
-    const style = getComputedStyle(element);
-    if (['SCRIPT','STYLE','NOSCRIPT','TEMPLATE','INPUT','TEXTAREA','SELECT'].includes(element.tagName) || style.display === 'none' || style.visibility !== 'visible' || Number(style.opacity) === 0 || element.getClientRects().length === 0) return;
-    const struck = inheritedStrike || ['DEL','S'].includes(element.tagName) || style.textDecorationLine.includes('line-through');
-    let text = '', allStruck = true;
-    const flush = () => { if (text.trim()) { runs.push({text: text.trim(), struck: allStruck}); size += text.length; } text = ''; allStruck = true; };
-    function inline(parent: Element, strike: boolean): void {
-      for (const child of parent.childNodes) {
-        if (++visited > 20000 || size + text.length > 20000) { exceeded = true; return; }
-        if (child.nodeType === Node.TEXT_NODE) {
-          const value = child.textContent ?? '';
-          text += value;
-          if (value.trim() && !strike) allStruck = false;
-        } else if (child instanceof Element) {
-          const css = getComputedStyle(child);
-          if (['SCRIPT','STYLE','NOSCRIPT','TEMPLATE','INPUT','TEXTAREA','SELECT'].includes(child.tagName) || css.display === 'none' || css.visibility !== 'visible' || Number(css.opacity) === 0 || child.getClientRects().length === 0) continue;
-          if (child.tagName === 'BR' || css.display !== 'inline') { flush(); walk(child, strike); }
-          else inline(child, strike || ['DEL','S'].includes(child.tagName) || css.textDecorationLine.includes('line-through'));
-        }
+  function visible(element: Element): boolean {
+    const css = getComputedStyle(element);
+    return !['SCRIPT','STYLE','NOSCRIPT','TEMPLATE','INPUT','TEXTAREA','SELECT'].includes(element.tagName) && css.display !== 'none' && css.visibility === 'visible' && Number(css.opacity) !== 0 && element.getClientRects().length > 0;
+  }
+  function capture(root: Element): void {
+    let text = '', allStruck = true, anyStruck = false;
+    function walk(node: Node, strike: boolean, depth: number): void {
+      if (++visited > 20000 || depth > 64) { exceeded = true; return; }
+      if (node.nodeType === Node.TEXT_NODE) {
+        const value = node.textContent ?? '';
+        if (value.trim()) { allStruck &&= strike; anyStruck ||= strike; }
+        text += value;
+        if (size + text.length > 20000) exceeded = true;
+      } else if (node instanceof Element && visible(node)) {
+        const css = getComputedStyle(node);
+        const struck = strike || ['DEL','S'].includes(node.tagName) || css.textDecorationLine.includes('line-through');
+        const block = css.display !== 'inline' || node.tagName === 'BR';
+        if (block) text += ' ';
+        for (const child of node.childNodes) { if (exceeded) break; walk(child, struck, depth + 1); }
+        if (block) text += ' ';
       }
     }
-    inline(element, struck);
-    flush();
+    let ancestorStrike = false;
+    for (let ancestor = root.parentElement; ancestor; ancestor = ancestor.parentElement) {
+      if (!visible(ancestor)) return;
+      ancestorStrike ||= ['DEL','S'].includes(ancestor.tagName) || getComputedStyle(ancestor).textDecorationLine.includes('line-through');
+    }
+    walk(root, ancestorStrike, 0);
+    size += text.length;
+    if (text.trim()) runs.push({text: text.trim(), struck: allStruck, mixedStrike: anyStruck && !allStruck});
   }
-  if (document.body) walk(document.body, false);
+  if (document.body && visible(document.body)) {
+    // Retain complete top-level containers. Never discard qualifiers across nested blocks/BR.
+    const body = document.body;
+    const hasLooseText = [...body.childNodes].some(n => n.nodeType === Node.TEXT_NODE && n.textContent?.trim());
+    const hasInline = [...body.children].some(e => visible(e) && getComputedStyle(e).display === 'inline');
+    if (hasLooseText || hasInline) capture(body);
+    else for (const child of body.children) { if (exceeded) break; capture(child); }
+  }
   return exceeded || size > 20000 || runs.length > 256 ? {status:'LIMIT_EXCEEDED', runs:[]} : {status:'COMPLETE', runs};
 }

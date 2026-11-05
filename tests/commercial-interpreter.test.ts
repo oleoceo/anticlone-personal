@@ -45,7 +45,7 @@ test('meaning requires complete bounded evidence and never promotes qualifiers t
   const rows=interpretText({text:'De USD 100 por USD 90'}); assert.equal(rows.length,2); assert.ok(rows.every(r=>r.meaning==='UNKNOWN'));
 });
 test('Chromium localhost rendered extraction is read-only and isolated from active commercial import', async () => {
-  const html=`<!doctype html><meta charset="utf-8"><p>Preço: R$ 1.234,56</p><p><s>USD 100</s></p><p>Agora USD 90</p><p>Economize <b>USD 10</b></p><p>12x de BRL 10</p><p>USD 10/month</p><p>USD 10 e EUR 20</p><p hidden>Price USD 999</p><p style="opacity:0">Price USD 998</p><script type="application/json">"Price USD 997"</script><a href="/native" aria-describedby="price">Buy</a><p id="price" itemscope itemtype="https://schema.org/Offer">Price GBP 10</p>`;
+  const html=`<!doctype html><meta charset="utf-8"><p>Preço: R$ 1.234,56</p><p><s>USD 100</s></p><p>Agora USD 90</p><p>Economize <b>USD 10</b></p><p>12x de BRL 10</p><p>USD 10/month</p><p>USD 10 e EUR 20</p><p hidden>Price USD 999</p><p style="opacity:0">Price USD 998</p><script type="application/json">"Price USD 997"</script><p><a href="/native" aria-describedby="price">Buy</a></p><p id="price" itemscope itemtype="https://schema.org/Offer">Price GBP 10</p>`;
   const server=createServer((_req,res)=>res.writeHead(200,{'content-type':'text/html; charset=utf-8'}).end(html)).listen(0,'127.0.0.1'); await once(server,'listening');
   const browser=await chromium.launch({headless:true});
   try {
@@ -58,8 +58,23 @@ test('Chromium localhost rendered extraction is read-only and isolated from acti
     assert.equal(rows.length,9); assert.deepEqual(rows.slice(0,6).map(r=>r.meaning),['PRICE_CURRENT','PRICE_PREVIOUS','PRICE_CURRENT','SAVINGS','INSTALLMENT','RECURRING']);
     assert.ok(rows.every(r=>!r.raw.includes('99'))); assert.equal(requests,0); assert.equal(await page.content(),before);
     assert.equal(await page.evaluate(()=>(window as unknown as {mutations:number}).mutations),0);
+    for (const fragment of ['<p>Price <s>USD 100</s></p>', '<p>Price USD <s>100</s></p>', '<p>Price USD 10<br>/month</p>', '<p>Price USD 10 <span style="display:block">per month</span></p>', '<div>Economia <p>Price USD 100</p></div>', '<span>Economia</span><p>Price USD 100</p>']) {
+      await page.setContent(fragment);
+      const capture = await page.evaluate(collectVisibleText);
+      const rows = capture.runs.flatMap(interpretText);
+      assert.equal(rows.length,1,fragment); assert.equal(rows[0].meaning,'UNKNOWN',fragment);
+    }
+    await page.setContent('<div>'.repeat(100)+'Price USD 10'+'</div>'.repeat(100));
+    assert.deepEqual(await page.evaluate(collectVisibleText),{status:'LIMIT_EXCEEDED',runs:[]});
     await page.setContent('<p>'+ 'x'.repeat(20001) +'</p>'); assert.deepEqual(await page.evaluate(collectVisibleText),{status:'LIMIT_EXCEEDED',runs:[]});
   } finally { await browser.close(); server.close(); }
+});
+test('unsupported Unicode separators never resolve partial amounts in either currency position', () => {
+  for (const separator of ['\u2019','\uff0c','\u00b7','\u2009','\u066b','_']) {
+    for (const text of [`Price: USD 1${separator}234.56`, `Price: 1${separator}234.56 USD`]) {
+      const rows=interpretText({text}); assert.ok(rows.length,text); assert.ok(rows.every(r=>r.minorUnits===null && r.meaning==='UNKNOWN'),text);
+    }
+  }
 });
 test('module has no imports, persistence, policy or production callers', async () => {
   const source=await readFile('apps/commercial-interpreter.ts','utf8');
