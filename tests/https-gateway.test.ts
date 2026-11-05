@@ -45,8 +45,9 @@ test('HTTPS Nginx + PostgreSQL + Chromium: install, spoofing, limits, outage and
   await root.query(`CREATE SCHEMA ${schema}`);
   const options = `-c search_path=${schema}`;
   const db = new Pool({connectionString:process.env.TEST_DATABASE_URL,options});
-  for (const file of ['001_initial','002_alerts','003_projects','004_observation_sources','005_canaries','008_traffic_observations','009_risk_assessments','024_risk_evidence','018_notification_budget','019_alert_outbox_expiry']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
+  for (const file of ['001_initial','002_alerts','003_projects','004_observation_sources','005_canaries','008_traffic_observations','009_risk_assessments','024_risk_evidence','018_notification_budget','019_alert_outbox_expiry','025_installation_signals']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
   await db.query("INSERT INTO projects VALUES('https','HTTPS','https://owner.test')");
+  await db.query("INSERT INTO installations(project_id,id,origin) VALUES('https',$1,'https://owner.test')",[crypto.randomUUID()]);
   await writeFile(gatewayEnv,Object.entries({PGOPTIONS:options,DATABASE_URL:process.env.TEST_DATABASE_URL,PROJECT_ID:'https',SMTP_PORT:'1',PORT:'3000',GATEWAY_MODE:'PILOT_OBSERVE',GATEWAY_TRANSPORT:'HTTPS_PROXY',PUBLIC_GATEWAY_HOST:'gateway.test',PILOT_ORIGINS:'["https://owner.test"]'}).map(([key,value])=>`${key}=${value}`).join('\n'),{mode:0o600});
   execFileSync('openssl',['req','-x509','-newkey','rsa:2048','-nodes','-keyout',join(dir,'privkey.pem'),'-out',join(dir,'fullchain.pem'),'-days','1','-subj','/CN=gateway.test','-addext','subjectAltName=DNS:gateway.test'],{stdio:'ignore'});
   execFileSync(process.execPath,['dist/apps/https-config.js',join(dir,'nginx.conf')],{env:{...process.env,PUBLIC_GATEWAY_HOST:'gateway.test'},stdio:'pipe'});
@@ -98,6 +99,12 @@ test('HTTPS Nginx + PostgreSQL + Chromium: install, spoofing, limits, outage and
     assert.deepEqual(await decision.json(),{action:'OBSERVE_ONLY'});
     assert.equal((await db.query("SELECT host FROM incidents WHERE project_id='https'")).rows[0].host,'copy.test');
     await page.locator('a').click(); assert.equal(new URL(page.url()).pathname,'/checkout');
+    await context.grantPermissions(['local-network-access'],{origin:'https://owner.test'});
+    await page.route('https://owner.test/**',route=>route.fulfill({contentType:'text/html',body:'<a href="/checkout">Native</a><script src="https://gateway.test/runtime.js"></script>'}));
+    const ownerObservation=page.waitForResponse(r=>r.url()==='https://gateway.test/observe');
+    await page.goto('https://owner.test/'); assert.equal((await ownerObservation).status(),204);
+    for (let i=0;i<100;i++) {if ((await db.query("SELECT 1 FROM installation_signals WHERE project_id='https' AND source='core'")).rowCount) break; await new Promise(r=>setTimeout(r,50));}
+    assert.equal((await db.query("SELECT count(*)::int n FROM installation_signals WHERE project_id='https' AND source='core'")).rows[0].n,1);
     const statuses = await Promise.all(Array.from({length:35},async()=> (await api.get('https://gateway.test/runtime.js')).status()));
     assert.ok(statuses.includes(429));
     // Let the proxy burst refill, then verify an actual upstream outage.

@@ -3,6 +3,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import type { Pool } from 'pg';
 import { Conflict, getNotificationSettings, saveNotificationSettings, setNotificationPreference } from './notification-settings.js';
 import { approveCommercial, selectObservation, SelectionConflict } from './cta-inventory.js';
+import { disableInstallation, enableInstallation, installationDiagnostic } from './installation.js';
 
 type Session = { expiry: number; kind: 'bearer' | 'web'; csrf: string };
 
@@ -37,7 +38,7 @@ export function handleAdminUi(req: IncomingMessage, res: ServerResponse, db: Poo
     }
     res.writeHead(404).end(); return false;
   }
-  if (req.method !== 'POST' || !['/admin/ui/login','/admin/ui/logout','/admin/ui/settings','/admin/ui/preference','/admin/ui/cta-inventory','/admin/ui/cta-selection','/admin/ui/cta-commercial'].includes(req.url ?? '')) { res.writeHead(404).end(); return false; }
+  if (req.method !== 'POST' || !['/admin/ui/login','/admin/ui/logout','/admin/ui/settings','/admin/ui/preference','/admin/ui/cta-inventory','/admin/ui/cta-selection','/admin/ui/cta-commercial','/admin/ui/installation','/admin/ui/installation-enable','/admin/ui/installation-disable'].includes(req.url ?? '')) { res.writeHead(404).end(); return false; }
   if (req.headers.origin !== origin || site !== 'same-origin' || req.headers['content-type'] !== 'application/json') { res.writeHead(403).end(); return false; }
   const expected = login ? cookie('admin_login_csrf') : valid ? session.csrf : undefined;
   if (!expected || !/^[a-f0-9]{64}$/.test(expected) || req.headers['x-csrf-token'] !== expected) { res.writeHead(403).end(); return false; }
@@ -49,9 +50,15 @@ export function handleAdminUi(req: IncomingMessage, res: ServerResponse, db: Poo
   req.on('end',()=>{
     if(rejected) return;
     let body:unknown; try { body=JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { res.writeHead(400).end(); return; }
-    const operation=req.url === '/admin/ui/settings' ? saveNotificationSettings(db,body) : req.url === '/admin/ui/preference' ? setNotificationPreference(db,body) : req.url === '/admin/ui/cta-inventory' ? inventory(db,body) : req.url === '/admin/ui/cta-commercial' ? approveCommercial(db,body).then(()=>({state:'APPROVED'})) : selectObservation(db,body).then(()=>({state:'PENDING'}));
+    const operation=req.url === '/admin/ui/settings' ? saveNotificationSettings(db,body) : req.url === '/admin/ui/preference' ? setNotificationPreference(db,body) : req.url === '/admin/ui/cta-inventory' ? inventory(db,body) : req.url?.startsWith('/admin/ui/installation') ? installation(db,body,req.url) : req.url === '/admin/ui/cta-commercial' ? approveCommercial(db,body).then(()=>({state:'APPROVED'})) : selectObservation(db,body).then(()=>({state:'PENDING'}));
     void operation.then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error:unknown)=>res.writeHead(error instanceof Conflict || error instanceof SelectionConflict ? 409 : error instanceof TypeError ? 400 : 503).end());
   }); return false;
+}
+
+async function installation(db: Pool, body: unknown, action: string) {
+  if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).join(',') !== 'project' || typeof (body as {project?:unknown}).project !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test((body as {project:string}).project)) throw new TypeError('invalid project');
+  const project = (body as {project:string}).project;
+  return action.endsWith('-enable') ? enableInstallation(db,project) : action.endsWith('-disable') ? disableInstallation(db,project) : installationDiagnostic(db,project);
 }
 
 async function inventory(db: Pool, body: unknown) {
@@ -95,6 +102,14 @@ function hasUnsavedChanges() {return snapshotOf(Object.fromEntries(names.map(nam
 function updateEnablement() {const dirty=hasUnsavedChanges(); el('unsaved').textContent='Salve as alterações antes de solicitar habilitação.'; el('unsaved').hidden=!dirty; el('enable').disabled=dirty||status!=='configured_disabled'}
 const el=id=>document.getElementById(id), login=el('login'), config=el('config'), section=el('settings'), message=el('message');
 const say=text=>{message.textContent=text};
+const installationSection=document.createElement('section');
+installationSection.innerHTML='<h2>Instalação — diagnóstico limitado</h2><p>Informe o ID do projeto. As alegações de navegador podem ser forjadas. Não há verificação controlada; elas não validam integridade nem proteção ativa.</p><form id="installation-form"><label>ID <input name="project" required></label><button>Consultar instalação</button><button type="button" id="installation-enable">Habilitar coleta da origem principal</button><button type="button" id="installation-disable">Desabilitar coleta</button></form><pre id="installation-result"></pre>';
+section.append(installationSection);
+const installationForm=el('installation-form');
+async function showInstallation(action) {try {const data=await request('installation'+action,{project:installationForm.elements.project.value});el('installation-result').textContent=JSON.stringify(data,null,2)} catch {el('installation-result').textContent='Consulta indisponível ou projeto inválido.'}}
+installationForm.addEventListener('submit',e=>{e.preventDefault();void showInstallation('')});
+el('installation-enable').addEventListener('click',()=>void showInstallation('-enable'));
+el('installation-disable').addEventListener('click',()=>void showInstallation('-disable'));
 async function request(path,body) { const r=await fetch('/admin/ui/'+path,{method:body===undefined?'GET':'POST',headers:body===undefined?{}:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:body===undefined?undefined:JSON.stringify(body)}); if(!r.ok) {const e=new Error();e.status=r.status;throw e} return r.status===204?null:r.json() }
 async function bootstrap() {const b=await request('bootstrap'); csrf=b.csrf; login.hidden=b.authenticated; section.hidden=!b.authenticated; if(b.authenticated) await load()}
 function show(data,updateFields=true) {const snapshot=snapshotOf(data); if(updateFields || known===snapshot) version=data.version; if(updateFields) {known=snapshot; for(const name of names) config.elements[name].value=data[name]??''} el('status').textContent=({incomplete:'Configuração incompleta',configured_disabled:'Configurada / desativada',enablement_requested:'Habilitação solicitada — envio não operacional'})[data.status]; status=data.status; updateEnablement(); el('disable').disabled=!data.preference_requested}
