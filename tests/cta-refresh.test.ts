@@ -73,8 +73,18 @@ test('CTA refresh preserves independent mapping and expires locally', {timeout:9
       assert.equal(target,expected); assert.equal(requests,before,'no network in click');
       await page.clock.runFor(1);
     };
+    const navigate=async (marker:string, expected:string)=>{
+      const anchor=page.locator(`[data-anticlone-point="${marker}"]`);
+      await anchor.evaluate(node=>node.setAttribute('target','_blank'));
+      const before=requests, popup=page.waitForEvent('popup');
+      await anchor.click(); const opened=await popup;
+      await opened.waitForURL(expected); assert.equal(requests,before,'no network in click');
+      await opened.close(); await anchor.evaluate(node=>node.removeAttribute('target')); await page.clock.runFor(1);
+    };
     await click('basic001',original+'/official-basic');
     await click('premium1',original+'/official-premium');
+    await navigate('basic001',original+'/official-basic');
+    await navigate('premium1',original+'/official-premium');
     await inventory([{...candidates[0],url:clone+'/changed'},candidates[1]]);
     assert.equal((await db.query('SELECT review_required FROM cta_points WHERE project_id=$1 AND marker=$2',[project,'basic001'])).rows[0].review_required,true);
     const refreshed=page.waitForResponse(r=>r.url().endsWith('/cta-refresh'));
@@ -82,6 +92,12 @@ test('CTA refresh preserves independent mapping and expires locally', {timeout:9
     await page.clock.runFor(1);
     await click('basic001',clone+'/native-basic');
     await click('premium1',original+'/official-premium');
+    await navigate('basic001',clone+'/native-basic');
+    await navigate('premium1',original+'/official-premium');
+    assert.equal((await post('policy',{enabled:true,surface:'landing',pathname:'/clone',allocation:{PAID_ATTRIBUTED:0,ORGANIC:0,REFERRAL:0,DIRECT_UNKNOWN:0}})).status,200);
+    const excluded=page.waitForResponse(r=>r.url().endsWith('/cta-refresh'));
+    await page.clock.fastForward(60000); await excluded; await page.clock.runFor(1);
+    await click('premium1',clone+'/native-premium');
     assert.equal((await post('policy',{enabled:false,surface:'landing',pathname:'/clone',allocation})).status,200);
     const disabled=page.waitForResponse(r=>r.url().endsWith('/cta-refresh'));
     await page.clock.fastForward(60000); await disabled;
@@ -89,6 +105,19 @@ test('CTA refresh preserves independent mapping and expires locally', {timeout:9
     assert.equal((await post('policy',{enabled:true,surface:'landing',pathname:'/clone',allocation})).status,200);
     const enabled=page.waitForResponse(r=>r.url().endsWith('/cta-refresh'));
     await page.clock.fastForward(60000); await enabled; await page.clock.runFor(1);
+    await click('premium1',original+'/official-premium');
+    const restart=async (risk:string)=>{
+      app!.kill('SIGTERM'); await once(app!,'exit');
+      app=spawn(process.execPath,['dist/apps/server.js'],{env:{...process.env,PGOPTIONS:options,DATABASE_URL:process.env.TEST_DATABASE_URL,PROJECT_ID:project,SMTP_PORT:'25252',PORT:'3000',LAB_CONTROLLED_ORIGIN:clone,LAB_CONTROLLED_RISK:risk},stdio:['ignore','ignore','inherit']});
+      let online=false; for(let i=0;i<100;i++){try{if((await fetch('http://127.0.0.1:3000/runtime.js')).ok){online=true;break;}}catch{} await new Promise(r=>setTimeout(r,100));} assert.ok(online);
+    };
+    await restart('');
+    const uncertain=page.waitForResponse(r=>r.url().endsWith('/cta-refresh'));
+    await page.clock.fastForward(60000); await uncertain; await page.clock.runFor(1);
+    await click('premium1',clone+'/native-premium');
+    await restart('LOW');
+    const low=page.waitForResponse(r=>r.url().endsWith('/cta-refresh'));
+    await page.clock.fastForward(60000); await low; await page.clock.runFor(1);
     await click('premium1',original+'/official-premium');
     await page.route('**/cta-refresh',route=>route.fulfill({status:200,body:'invalid json'}));
     const invalid=page.waitForResponse(r=>r.url().endsWith('/cta-refresh'));
@@ -133,6 +162,19 @@ test('CTA refresh preserves independent mapping and expires locally', {timeout:9
       let href=''; window.addEventListener('click',event=>{href=node.href;event.preventDefault();},{once:true}); node.click(); return href;
     });
     assert.equal(observed,clone+'/native-basic','late initial response must not restore suspended mapping');
+    await delayed.clock.runFor(1);
+    const independent=await delayed.evaluate(()=>{
+      const node=document.querySelector<HTMLAnchorElement>('[data-anticlone-point="premium1"]')!;
+      let href=''; window.addEventListener('click',event=>{href=node.href;event.preventDefault();},{once:true}); node.click(); return href;
+    });
+    assert.equal(independent,original+'/official-premium');
+    await delayed.clock.runFor(1);
+    await delayed.evaluate(()=>{history.pushState({},'', '/other'); history.pushState({},'', '/clone');});
+    const afterRoute=await delayed.evaluate(()=>{
+      const node=document.querySelector<HTMLAnchorElement>('[data-anticlone-point="premium1"]')!;
+      let href=''; window.addEventListener('click',event=>{href=node.href;event.preventDefault();},{once:true}); node.click(); return href;
+    });
+    assert.equal(afterRoute,clone+'/native-premium');
     await delayed.close();
   } finally {
     if (browser) await browser.close();
