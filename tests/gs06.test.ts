@@ -51,6 +51,21 @@ test('GS06 integration: persisted policy, controlled LOW and original', {timeout
     assert.ok(!JSON.stringify(requests).includes('privatevalue'));
     await saveDraft(db,project,{enabled:true,approved_destination:original+'/approved',stealth:true,allocation:{PAID_ATTRIBUTED:100,ORGANIC:100,REFERRAL:100,DIRECT_UNKNOWN:100}}); await activatePolicy(db,project);
     await page.goto(clone+'/clone'); await page.waitForURL(original+'/approved'); await page.waitForTimeout(400); assert.equal(page.url(),original+'/approved');
+    // Interaction before the request cancels a valid redirect even within the entry deadline.
+    const interacted=await browser.newPage();
+    await interacted.addInitScript(()=>{
+      const fetchOriginal=window.fetch.bind(window);
+      window.fetch=(...args)=>{
+        if(String(args[0]).endsWith('/entry-decision')) dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));
+        return fetchOriginal(...args);
+      };
+    });
+    const quick=interacted.waitForResponse(r=>r.url().endsWith('/entry-decision'));
+    await interacted.goto(clone+'/clone');
+    assert.equal((await (await quick).json() as {action:string}).action,'PAGE_REDIRECT');
+    assert.ok(await interacted.evaluate(()=>performance.now()<150),'decision must arrive within entry deadline');
+    await interacted.waitForTimeout(200); assert.equal(interacted.url(),clone+'/clone');
+    await interacted.close();
     // A valid redirect delivered after the entry deadline must leave native navigation usable.
     const timed=await browser.newPage();
     await timed.route('**/entry-decision',async route=>{

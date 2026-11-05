@@ -181,25 +181,36 @@ test('GS08: real checkout drift isolates a CTA through authenticated review in C
     // Real delayed decisions survive ordinary interactions and an early native CTA click.
     for (const interaction of ['pointer','keyboard','early'] as const) {
       const visitor=await browser.newPage();
+      await visitor.addInitScript(()=>{
+        const add=document.addEventListener.bind(document);
+        document.addEventListener=((type:string,listener:EventListenerOrEventListenerObject,options?:boolean|AddEventListenerOptions)=>{add(type,listener,options);if(type==='click') document.documentElement.dataset.testCtaListener='installed';}) as typeof document.addEventListener;
+      });
+      let requests=0;
+      visitor.on('request',request=>{if(request.url().endsWith('/entry-decision')) requests++;});
       await visitor.route('**/entry-decision',async route=>{
         const response=await route.fetch();
         await visitor.waitForTimeout(200);
         if(interaction==='pointer') await visitor.locator('#ordinary').click();
         if(interaction==='keyboard') { await visitor.locator('#field').focus(); await visitor.keyboard.press('A'); }
         if(interaction==='early') {
-          await visitor.evaluate(()=>document.querySelector('[data-anticlone-point="premium1"]')!.addEventListener('click',event=>event.preventDefault(),{once:true}));
+          await visitor.locator('[data-anticlone-point="premium1"]').evaluate(node=>node.setAttribute('target','_blank'));
+          const popup=visitor.waitForEvent('popup');
           await visitor.locator('[data-anticlone-point="premium1"]').click();
-          assert.equal(await visitor.locator('[data-anticlone-point="premium1"]').getAttribute('href'),'/native-premium');
+          const nativePage=await popup; await nativePage.waitForURL(clone+'/native-premium');
+          await nativePage.close();
+          await visitor.locator('[data-anticlone-point="premium1"]').evaluate(node=>node.removeAttribute('target'));
         }
         await route.fulfill({response});
       });
       const response=visitor.waitForResponse(r=>r.url().endsWith('/entry-decision'));
       await visitor.goto(clone+'/clone');
       assert.equal((await (await response).json() as {action:string}).action,'REPLACE_CONVERSION');
-      await visitor.waitForTimeout(100);
+      await visitor.waitForFunction(()=>document.documentElement.dataset.testCtaListener==='installed');
+      assert.equal(requests,1);
       assert.equal(await visitor.locator('[data-anticlone-point="premium1"]').getAttribute('href'),'/native-premium');
       await visitor.locator('[data-anticlone-point="premium1"]').click();
       await visitor.waitForURL(original+'/official-premium');
+      assert.equal(requests,1);
       await visitor.close();
     }
     // Delay fresh real decisions; only the invalid-payload case alters the response.
