@@ -19,7 +19,7 @@ test('declared indicators are validated and never corroboration or risk', () => 
 test('postgres: project isolation, daily deduplication and retention', async () => {
   assert.ok(process.env.TEST_DATABASE_URL);
   const db = new Pool({connectionString:process.env.TEST_DATABASE_URL});
-  for (const file of ['001_initial','002_alerts','004_observation_sources','005_canaries','008_traffic_observations','009_risk_assessments','019_alert_outbox_expiry']) await db.query(await readFile(`infra/${file}.sql`, 'utf8'));
+  for (const file of ['001_initial','002_alerts','004_observation_sources','005_canaries','008_traffic_observations','009_risk_assessments','024_risk_evidence','019_alert_outbox_expiry']) await db.query(await readFile(`infra/${file}.sql`, 'utf8'));
   const a = 'traffic_' + crypto.randomUUID(), b = a + '_b';
   try {
     for (const project of [a,b]) for (const evidence of [{clickId:'abc',clickKey:'gclid'}, {medium:'cpc'}, {referrerHost:'google.com'}, {referrerHost:'example.test'}, {}]) {
