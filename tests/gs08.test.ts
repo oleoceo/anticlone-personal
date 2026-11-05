@@ -53,17 +53,46 @@ test('GS08: real checkout drift isolates a CTA through authenticated review in C
     browser=await chromium.launch({headless:true,args:['--host-resolver-rules=MAP localhost 127.0.0.1']});
     const page=await browser.newPage();
     await page.addInitScript(()=>{
+      const now=performance.now.bind(performance);
+      const ticks:number[]=[];
+      Object.defineProperty(performance,'now',{value:()=>{const value=now(); ticks.push(value); return value;}});
+      Object.defineProperty(window,'__gs08Ticks',{value:ticks});
+      const events:{event:string;time:number}[]=[];
+      Object.defineProperty(window,'__gs08Events',{value:events});
+      document.addEventListener('load',event=>{if (event.target instanceof HTMLScriptElement && new URL(event.target.src).pathname==='/core.js') events.push({event:'core-load',time:now()});},true);
+      const originalFetch=window.fetch.bind(window);
+      window.fetch=(...args)=>{const request=originalFetch(...args); if (String(args[0]).endsWith('/entry-decision')) {events.push({event:'decision-request',time:now()}); void request.then(()=>events.push({event:'decision-response',time:now()}),()=>events.push({event:'decision-failed',time:now()}));} return request;};
       const add=document.addEventListener.bind(document);
       document.addEventListener=((type:string,listener:EventListenerOrEventListenerObject,options?:boolean|AddEventListenerOptions)=>{
         add(type,listener,options);
-        if(type==='click') document.documentElement.dataset.testCtaListener='installed';
+        if(type==='click') {document.documentElement.dataset.testCtaListener='installed'; events.push({event:'listener-installed',time:now()});}
       }) as typeof document.addEventListener;
     });
+    const failures:string[]=[];
+    page.on('pageerror', error=>failures.push(`pageerror: ${error.name}`));
+    page.on('requestfailed', request=>{if (/\/(?:core\.js|runtime\.js|entry-decision)$/.test(new URL(request.url()).pathname)) failures.push(`requestfailed: ${new URL(request.url()).pathname}: ${request.failure()?.errorText}`);});
+    let navigation=0;
     const click=async (marker:string,expected:string)=>{
-      const decision=page.waitForResponse(r=>r.url().endsWith('/entry-decision') && r.status()===200);
-      await page.goto(clone+'/clone'); await decision;
-      await page.waitForFunction(()=>document.documentElement.dataset.testCtaListener==='installed');
-      await page.locator(`[data-anticlone-point="${marker}"]`).click(); await page.waitForURL(expected);
+      navigation++;
+      let status:number|undefined;
+      let body:{action?:string;mappings?:{marker:string}[]}|undefined;
+      try {
+        const decision=page.waitForResponse(r=>r.url().endsWith('/entry-decision'));
+        await page.goto(clone+'/clone');
+        const response=await decision;
+        status=response.status();
+        body=await response.json() as {action?:string;mappings?:{marker:string}[]};
+        assert.equal(status,200);
+        assert.equal(body.action,'REPLACE_CONVERSION');
+        assert.ok(body.mappings?.some(row=>row.marker==='premium1'), 'independent CTA must remain eligible');
+        await page.waitForFunction(()=>document.documentElement.dataset.testCtaListener==='installed');
+        await page.locator(`[data-anticlone-point="${marker}"]`).click(); await page.waitForURL(expected);
+      } catch (error) {
+        const timing=await page.evaluate(()=>({now:performance.now(),readyState:document.readyState,listener:document.documentElement.dataset.testCtaListener ?? null,ticks:(window as unknown as {__gs08Ticks:number[]}).__gs08Ticks,events:(window as unknown as {__gs08Events:unknown[]}).__gs08Events,resources:performance.getEntriesByType('resource').filter(entry=>/\/(?:core\.js|runtime\.js|entry-decision)$/.test(new URL(entry.name).pathname)).map(entry=>({path:new URL(entry.name).pathname,start:entry.startTime,duration:entry.duration}))})).catch(()=>null);
+        const points=await db.query('SELECT marker,review_required FROM cta_points WHERE project_id=$1 ORDER BY marker',[project]);
+        console.error('GS08 diagnostic',JSON.stringify({navigation,marker,status,body,premiumEligible:body?.mappings?.some(row=>row.marker==='premium1') ?? false,timing,failures,points:points.rows}));
+        throw error;
+      }
     };
     await click('basic001',original+'/official-basic'); await click('premium1',original+'/official-premium');
     html=html.replace('/native-basic','/changed');
