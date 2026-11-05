@@ -25,7 +25,11 @@ async function stop(child: ChildProcess) {
 
 test('GS02: browser visits, durable incident and test SMTP alert after restart', { timeout: 90000 }, async () => {
   assert.ok(process.env.TEST_DATABASE_URL, 'TEST_DATABASE_URL required');
-  const db = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
+  const root = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
+  const schema = 'gs02_' + crypto.randomUUID().replaceAll('-','');
+  await root.query(`CREATE SCHEMA ${schema}`);
+  const options = `-c search_path=${schema}`;
+  const db = new Pool({ connectionString: process.env.TEST_DATABASE_URL, options });
   await db.query(await readFile('infra/008_traffic_observations.sql', 'utf8'));
   await db.query(await readFile('infra/009_risk_assessments.sql', 'utf8'));
   await db.query(await readFile('infra/001_initial.sql', 'utf8')); await db.query(await readFile('infra/002_alerts.sql', 'utf8')); await db.query(await readFile('infra/003_projects.sql', 'utf8')); await db.query(await readFile('infra/004_observation_sources.sql', 'utf8')); await db.query(await readFile('infra/005_canaries.sql', 'utf8')); await db.query(await readFile('infra/018_notification_budget.sql', 'utf8')); await db.query(await readFile('infra/019_alert_outbox_expiry.sql', 'utf8'));
@@ -42,7 +46,7 @@ test('GS02: browser visits, durable incident and test SMTP alert after restart',
   const original = 'http://127.0.0.1:' + fixturePort, clone = 'http://localhost:' + fixturePort;
   await db.query("INSERT INTO incidents(project_id,host) VALUES($1,'legacy.test')", [project]);
   await db.query("INSERT INTO observations(project_id,host) VALUES($1,'legacy.test')", [project]);
-  const start = () => spawn(process.execPath, ['dist/apps/server.js'], { env: {...process.env, DATABASE_URL: process.env.TEST_DATABASE_URL, PROJECT_ID: project, ALLOWED_ORIGIN: original, SMTP_PORT: String(smtpPort), PORT: String(apiPort)}, stdio:['ignore','ignore','inherit'] });
+  const start = () => spawn(process.execPath, ['dist/apps/server.js'], { env: {...process.env, PGOPTIONS:options, DATABASE_URL: process.env.TEST_DATABASE_URL, PROJECT_ID: project, ALLOWED_ORIGIN: original, SMTP_PORT: String(smtpPort), PORT: String(apiPort)}, stdio:['ignore','ignore','inherit'] });
   let app = start();
   const messages: string[] = [];
   let smtp: SMTPServer | undefined;
@@ -177,7 +181,7 @@ test('GS02: browser visits, durable incident and test SMTP alert after restart',
     assert.equal((await db.query('SELECT id FROM observations WHERE project_id=$1',[project])).rowCount,2);
     process.stderr.write('GS02: restarting after SMTP failure\n');
     await stop(app); await db.end();
-    const reconnected = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
+    const reconnected = new Pool({ connectionString: process.env.TEST_DATABASE_URL, options });
     try {
       smtp = new SMTPServer({ authOptional:true, disabledCommands:['STARTTLS','AUTH'], onData(stream, _session, callback) { let message=''; stream.on('data', chunk => { message += String(chunk); }); stream.on('end', () => { messages.push(message); callback(); }); } });
       await new Promise<void>((resolve, reject) => {
@@ -248,5 +252,6 @@ test('GS02: browser visits, durable incident and test SMTP alert after restart',
     if (browser) await browser.close(); await stop(app); if (smtp) await new Promise<void>(resolve => smtp!.close(() => resolve()));
     await new Promise<void>(resolve => fixture.close(() => resolve()));
     if (!db.ended) await db.end();
+    await root.query(`DROP SCHEMA ${schema} CASCADE`); await root.end();
   }
 });
