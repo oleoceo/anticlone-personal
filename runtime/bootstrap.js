@@ -4,14 +4,14 @@
     if (!source) return;
     const deadline = performance.now() + 150;
     let redirectPending = true, redirectInteracted = false, abandoned = false, suspended = false;
-    let suspendCtas = () => {}, resumeCtas = () => {};
+    let suspendCtas = () => {}, resumeCtas = () => {}, startCore = () => {}, coreLoaded = false, coreStarted = false;
     const initialPath = location.pathname, initialSearch = location.search;
     const validContext = () => !abandoned && !suspended && location.pathname === initialPath && location.search === initialSearch;
     const abandon = () => { abandoned = true; cancelRedirect(); };
     const cancelRedirect = () => { redirectPending = false; redirectInteracted = true; };
     setTimeout(() => { redirectPending = false; }, 150);
     addEventListener('pagehide', event => { cancelRedirect(); if (event.persisted) { suspended = true; suspendCtas(); } else abandon(); });
-    addEventListener('pageshow', event => { if (event.persisted && suspended && !abandoned) { suspended = false; if (validContext()) resumeCtas(); else abandon(); } });
+    addEventListener('pageshow', event => { if (event.persisted && suspended && !abandoned) { suspended = false; if (validContext()) { if (coreStarted) resumeCtas(); else if (coreLoaded) startCore(); } else abandon(); } });
     addEventListener('beforeunload', cancelRedirect);
     addEventListener('pointerdown', cancelRedirect, {once:true, capture:true});
     addEventListener('keydown', cancelRedirect, {once:true, capture:true});
@@ -78,8 +78,10 @@
     const core = document.createElement('script');
     core.src = new URL('/core.js', source).href;
     core.async = true;
-    core.onload = () => {
+    startCore = () => {
       if (!validContext()) return;
+      if (coreStarted) return;
+      coreStarted = true;
       try {
         let session = sessionStorage.getItem('anticlone.lab.session');
         if (!session) { const bytes = crypto.getRandomValues(new Uint8Array(16)); session = Array.from(bytes, x => x.toString(16).padStart(2, '0')).join(''); sessionStorage.setItem('anticlone.lab.session', session); }
@@ -96,11 +98,17 @@
         const stored = sessionStorage.getItem('anticlone.lab.attribution');
         if (stored === null) sessionStorage.setItem('anticlone.lab.attribution', JSON.stringify(signals));
         else { const initial = JSON.parse(stored); if (!initial || typeof initial !== 'object' || Array.isArray(initial)) return; Object.keys(signals).forEach(key => delete signals[key]); Object.assign(signals, initial); }
-        let inFlight = false, sequence = 0, lastAttempt = Date.now(), backoff = refreshIntervalMs, failed = false, controller;
+        let inFlight = false, sequence = 0, lastAttempt = Date.now(), backoff = refreshIntervalMs, failed = false, controller, returnTimer;
         const expired = () => !activeCtas || Date.now() < activeCtas.startedWall || Date.now() - activeCtas.startedWall >= ctaTtlMs || performance.now() - activeCtas.startedMono >= ctaTtlMs;
         const refresh = (onReturn = false) => {
           const elapsed = Date.now() - lastAttempt;
-          if (!validContext() || document.hidden || inFlight || elapsed < 0 || (failed ? elapsed < backoff : elapsed < (onReturn && expired() ? 5000 : refreshIntervalMs))) return;
+          if (!validContext() || document.hidden || inFlight || elapsed < 0) return;
+          const delay = failed ? backoff : onReturn && expired() ? 5000 : refreshIntervalMs;
+          if (elapsed < delay) {
+            if (onReturn && expired() && !returnTimer) returnTimer = setTimeout(() => { returnTimer = undefined; refresh(true); }, delay - elapsed);
+            return;
+          }
+          if (returnTimer) { clearTimeout(returnTimer); returnTimer = undefined; }
           inFlight = true; const id = ++sequence, wall = Date.now(), mono = performance.now(); lastAttempt = wall;
           controller = new AbortController();
           const requestController = controller, timeout = setTimeout(() => requestController.abort(), 5000);
@@ -110,7 +118,7 @@
             .catch(() => { if (id === sequence) { activeCtas = null; failed = true; backoff = Math.min(backoff * 2, 240000); } })
             .finally(() => { clearTimeout(timeout); if (id === sequence) { inFlight = false; controller = undefined; } });
         };
-        suspendCtas = () => { activeCtas = null; ++sequence; if (controller) controller.abort(); inFlight = false; controller = undefined; };
+        suspendCtas = () => { activeCtas = null; ++sequence; if (controller) controller.abort(); if (returnTimer) clearTimeout(returnTimer); returnTimer = undefined; inFlight = false; controller = undefined; };
         resumeCtas = () => refresh(true);
         const timer = setInterval(() => refresh(), refreshIntervalMs);
         addEventListener('pagehide', event => { if (!event.persisted) { clearInterval(timer); suspendCtas(); } });
@@ -130,6 +138,7 @@
           }).catch(cancelRedirect);
       } catch (_) { cancelRedirect(); }
     };
+    core.onload = () => { coreLoaded = true; startCore(); };
     document.head.appendChild(core);
   } catch (_) { /* Leave the page operational. */ }
 })();
