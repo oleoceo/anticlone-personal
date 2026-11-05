@@ -65,3 +65,5 @@ PR #45 — compatibilidade de manutencao em schemas legados (delta sobre 692f7c5
 - Falhas reais permanecem DATABASE_ERROR com codigo seguro e pausa de 60s; opt-in e regras de ativacao anteriores preservados.
 - Regressao nova: 5/5 testes passaram (quatro combinacoes de schema, retencao/isolamento, ausencia de erros repetidos, falha inesperada e recuperacao).
 - Validacao local: 63 testes aprovados, 1 HTTPS reservado para CI; lint/typecheck/build e 9 testes Python passaram. Revisao /root/legacy_maintenance_review favoravel ao delta, sem bloqueios; CI final no PR. F44 PARCIAL, NOT_VERIFIED e OBSERVE_ONLY preservados.
+- BLOCKED publicacao/CI: git push origin feat/f44-conservative-correlation rejeitado duas vezes com remote: fatal error in commit_refs_rules; codigo testado/revisado 95306649d52728754f05740d64537c51fd58174f, remoto/PR45 ainda 692f7c5.
+- Diagnostico independente /root/legacy_maintenance_review: commit valido, push=true, branch protected=false; APIs rules/rulesets 403 por plano, sem prova de regra bloqueante. Sem correcao local segura; investigar erro no GitHub e retomar push normal na mesma branch quando resolvido. CI antiga nao valida novo delta.
