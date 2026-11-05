@@ -62,9 +62,11 @@ test('HTTPS Nginx + PostgreSQL + Chromium: install, spoofing, limits, outage and
     for (let i=0;i<100&&!ready;i++) {try {ready=(await rawGet('http://127.0.0.1:3000/healthz',authority)).status===200;} catch {/* startup */} if (!ready) await new Promise(r=>setTimeout(r,50));}
     assert.ok(ready);
     assert.equal((await fetch('http://127.0.0.1:3000/runtime.js')).status,400);
-    execFileSync('docker',['run','-d','--name',container,'--network','host','--read-only','--tmpfs','/tmp','--tmpfs','/var/cache/nginx','--tmpfs','/var/run','--cap-drop','ALL','--cap-add','NET_BIND_SERVICE','--cap-add','SETUID','--cap-add','SETGID','--cap-add','CHOWN','--security-opt','no-new-privileges:true','-v',`${dir}/nginx.conf:/etc/nginx/nginx.conf:ro`,'-v',`${dir}:/run/tls:ro`,'nginx:1.28-alpine'],{stdio:'pipe'});
+    execFileSync('docker',['run','-d','--name',container,'--network','host','--read-only','--tmpfs','/tmp','--tmpfs','/var/cache/nginx','--cap-drop','ALL','--cap-add','NET_BIND_SERVICE','--cap-add','SETUID','--cap-add','SETGID','--cap-add','CHOWN','--security-opt','no-new-privileges:true','-v',`${dir}/nginx.conf:/etc/nginx/nginx.conf:ro`,'-v',`${dir}:/run/tls:ro`,'nginx:1.28-alpine'],{stdio:'pipe'});
     browser = await chromium.launch({args:['--no-proxy-server','--host-resolver-rules=MAP gateway.test 127.0.0.1']});
     const context = await browser.newContext({ignoreHTTPSErrors:true}); // synthetic certificate only
+    // The synthetic public fixture reaches loopback TLS; real public deployments do not.
+    await context.grantPermissions(['local-network-access'],{origin:'https://copy.test'});
     const api = context.request;
     for (let i=0;i<100;i++) {try {if ((await api.get('https://gateway.test/healthz')).ok()) break;} catch {/* startup */} await new Promise(r=>setTimeout(r,50));}
     // Read the synthetic CA through a root helper: private directory is root-owned.
@@ -82,12 +84,18 @@ test('HTTPS Nginx + PostgreSQL + Chromium: install, spoofing, limits, outage and
     const oversized = await api.post('https://gateway.test/observe',{headers:{origin:'https://copy.test','content-type':'text/plain'},data:'x'.repeat(2049)});
     assert.equal(oversized.status(),413);
     const page = await context.newPage();
+    const diagnostics: string[] = [];
+    page.on('requestfailed',req=>{if(diagnostics.length<20) diagnostics.push(`${new URL(req.url()).pathname}: ${req.failure()?.errorText}`);});
+    page.on('console',msg=>{if(msg.type()==='error' && diagnostics.length<20) diagnostics.push(msg.text().slice(0,300));});
     await page.route('https://copy.test/**',route=>route.fulfill({contentType:'text/html',body:'<a href="/checkout">Native</a><script src="https://gateway.test/runtime.js"></script>'}));
-    const observation = page.waitForResponse(r=>r.url()==='https://gateway.test/observe');
-    const decision = page.waitForResponse(r=>r.url()==='https://gateway.test/entry-decision');
-    await page.goto('https://copy.test/');
-    assert.equal((await observation).status(),204);
-    assert.deepEqual(await (await decision).json(),{action:'OBSERVE_ONLY'});
+    const responses = Promise.all([
+      page.waitForResponse(r=>r.url()==='https://gateway.test/observe'),
+      page.waitForResponse(r=>r.url()==='https://gateway.test/entry-decision'),
+      page.goto('https://copy.test/')
+    ]).catch(error=>{throw Error(JSON.stringify(diagnostics),{cause:error});});
+    const [observation,decision] = await responses;
+    assert.equal(observation.status(),204);
+    assert.deepEqual(await decision.json(),{action:'OBSERVE_ONLY'});
     assert.equal((await db.query("SELECT host FROM incidents WHERE project_id='https'")).rows[0].host,'copy.test');
     await page.locator('a').click(); assert.equal(new URL(page.url()).pathname,'/checkout');
     const statuses = await Promise.all(Array.from({length:35},async()=> (await api.get('https://gateway.test/runtime.js')).status()));

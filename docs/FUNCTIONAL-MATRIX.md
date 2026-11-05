@@ -8,18 +8,18 @@ Legenda: **P** = planejada no Personal; **PARCIAL** = parte comprovada, capacida
 |---|---|---|---|---|
 | F01 | Vários projetos próprios e identidade estável independente da URL | 12-MVP-SCOPE, 14-DOMAIN-MODEL | GS16, GS01; cadastro e isolamento local em tests/projects.test.ts, CI 41677878620 | PARCIAL |
 | F02 | Múltiplas origens autorizadas, preview/staging e pathnames | 12-MVP-SCOPE, 23-RUNTIME-PROTOCOL | Lista exata HTTPS em PILOT_OBSERVE: tests/pilot-observation.test.ts, PostgreSQL/Chromium local; pathnames e GS01 integral pendentes, docs/PILOT-OBSERVATION.md | PARCIAL |
-| F03 | Instalação universal HTML/React/Vite/WordPress quando permitido | 12-MVP-SCOPE, 27-COMPATIBILITY-MATRIX | GS01, GS10 | P |
+| F03 | Instalação universal HTML/React/Vite/WordPress quando permitido | 12-MVP-SCOPE, 27-COMPATIBILITY-MATRIX | GS01, GS10 | PARCIAL |
 | F04 | Bootstrap pequeno + Core Runtime | 23-RUNTIME-PROTOCOL | Carregamento e falha em Chromium, tests/gs02.test.ts, CI 41680979048; instalação limitada a laboratório | PARCIAL |
 | F05 | Fallback independente com capacidades limitadas | 23-RUNTIME-PROTOCOL | GS09 parcial: fallback e canários em Chromium, tests/gs02.test.ts; CSP e outros navegadores pendentes | PARCIAL |
 | F06 | HTML Canary e CSS Canary best-effort | 23-RUNTIME-PROTOCOL, 02- Observacoes Tecnicas | GS09 parcial em Chromium, tests/gs02.test.ts, CI 41688461172; CSP e outros navegadores pendentes | PARCIAL |
-| F07 | Entrega de scripts, rotas públicas e alias persistido/versionado | 24-EDGE-DELIVERY-NETWORK, 02- Observacoes Tecnicas | GS01, GS10 | P |
+| F07 | Entrega de scripts, rotas públicas e alias persistido/versionado | 24-EDGE-DELIVERY-NETWORK, 02- Observacoes Tecnicas | GS01, GS10 | PARCIAL |
 | F08 | Verificação de instalação e degradação FULL/PARTIAL/UNSUPPORTED | 27-COMPATIBILITY-MATRIX, 12-MVP-SCOPE | GS10 | P |
 | F09 | Contexto autorizado vs. execução em host não autorizado | 23-RUNTIME-PROTOCOL | Origem alegada comparada no servidor, original e cópia em tests/gs02.test.ts, CI 41680979048; sinais forjáveis | PARCIAL |
 | F10 | Contextos `file://`, iframe/sandbox quando possível, sem garantia | 23-RUNTIME-PROTOCOL | GS10 | P |
-| F11 | Observações duráveis com fonte e timestamps | 21-EVENT-MODEL, 25-INCIDENT-EVIDENCE-MODEL | GS02, GS12 | P |
-| F12 | Incidente por host/projeto, lifecycle e falso positivo | 25-INCIDENT-EVIDENCE-MODEL | GS02, GS12 | P |
-| F13 | Avaliação probabilística do provável operador e sinal de confiança | 25-INCIDENT-EVIDENCE-MODEL, 01- Decisoes Tecnicas | GS05, GS12 | P |
-| F14 | Modo Invisível/Stealth de observação sem mitigação visível | 20-POLICY-ENGINE, 00- O anticlone | GS05 | P |
+| F11 | Observações duráveis com fonte e timestamps | 21-EVENT-MODEL, 25-INCIDENT-EVIDENCE-MODEL | GS02, GS12 | PARCIAL |
+| F12 | Incidente por host/projeto, lifecycle e falso positivo | 25-INCIDENT-EVIDENCE-MODEL | GS02, GS12 | PARCIAL |
+| F13 | Avaliação probabilística do provável operador e sinal de confiança | 25-INCIDENT-EVIDENCE-MODEL, 01- Decisoes Tecnicas | GS05, GS12 | PARCIAL |
+| F14 | Modo Invisível/Stealth de observação sem mitigação visível | 20-POLICY-ENGINE, 00- O anticlone | GS05 | PARCIAL |
 | F15 | Captura de tráfego por PAID, ORGANIC, REFERRAL, DIRECT_UNKNOWN | 20-POLICY-ENGINE, 22-METRIC-DICTIONARY | Presença diária declarada em laboratório: tests/traffic.test.ts e tests/gs02.test.ts; GS04 pendente | PARCIAL |
 | F16 | Dados de UTM/click-ID/referrer e atribuição com incerteza | 21-EVENT-MODEL, 22-METRIC-DICTIONARY | Sinais mínimos validados e fonte sem valores brutos: tests/traffic.test.ts e tests/gs02.test.ts; GS12 pendente | PARCIAL |
 | F17 | Redirecionamento de página para destino aprovado | 20-POLICY-ENGINE, 23-RUNTIME-PROTOCOL | GS06 integrado em Chromium: destino aprovado e LOW controlado, CI 41691788658; LOW é configuração de laboratório, não classificador real | PARCIAL |
@@ -33,19 +33,19 @@ Legenda: **P** = planejada no Personal; **PARCIAL** = parte comprovada, capacida
 | F25 | Mudança material de checkout e REVIEW_REQUIRED somente no ponto | 26-CONVERSION-SURFACES-DRIFT | Laboratório: drift por destino/colisão isolado ao ponto e reaprovação autenticada com auditoria em tests/cta-inventory.test.ts; regressão Chromium em tests/f21.test.ts; CI 41750058855 (6c56b70) e 41752363089 (4c6a848). GS08 laboratorial em tests/gs08.test.ts (CI 41903843908, revisao favoravel no PR #33); fixture ate 021 verifica intencao F27 SMTP_LOCAL sem trigger legado, gates do novo HEAD no PR; capacidade integral pendente | PARCIAL |
 | F26 | Alerta de clone por host, deduplicação e histórico | 31-NOTIFICATIONS-EMAIL-TEMPLATES, 00- O anticlone | Laboratório: GS02 em tests/gs02.test.ts; hosts e reconexão em tests/detection.test.ts; orçamento, expiração e reconciliação em tests/notification-budget.test.ts, tests/notification-expiry.test.ts e tests/notification-intents.test.ts. GS13 demonstrado em laboratorio no PR #32 (CI 41899147841); entrega externa e capacidade integral pendentes | PARCIAL |
 | F27 | Alerta de mudança de CTA, deduplicação e retry | 31-NOTIFICATIONS-EMAIL-TEMPLATES | Laboratório: tests/cta-inventory.test.ts, tests/cta-delivery.test.ts e tests/cta-local-smtp.test.ts; orçamento, expiração e reconciliação em tests/notification-budget.test.ts, tests/notification-expiry.test.ts e tests/notification-intents.test.ts; SIMULATED preservado. GS13 demonstrado em laboratorio no PR #32 (CI 41899147841); GS08 laboratorial em tests/gs08.test.ts (CI 41903843908, revisao favoravel no PR #33); fixture ate 021 verifica intencao F27 SMTP_LOCAL sem trigger legado, gates do novo HEAD no PR; entrega externa e capacidade integral pendentes | PARCIAL |
-| F28 | Painel de incidentes, evidências, filtros e auditoria | 25-INCIDENT-EVIDENCE-MODEL, 45-PROJECT-WORKSPACE-UX | GS12 | P |
+| F28 | Painel de incidentes, evidências, filtros e auditoria | 25-INCIDENT-EVIDENCE-MODEL, 45-PROJECT-WORKSPACE-UX | GS12 | PARCIAL |
 | F29 | Métricas de sessões, ações, redirecionamentos e fontes reais | 22-METRIC-DICTIONARY | GS14 | P |
 | F30 | Estimativa recuperada rotulada; conversão ≠ venda | 22-METRIC-DICTIONARY, 01- Decisoes Tecnicas | GS14 | P |
 | F31 | Webhook mínimo de checkout com autenticação e idempotência | 33-INTEGRATIONS-WEBHOOKS-ADAPTIVE-MAPPING | GS14 | P |
 | F32 | DNS/ASN/hosting externo separado do IP do visitante | 25-INCIDENT-EVIDENCE-MODEL, 16-SECURITY-PRINCIPLES | GS12 | P |
-| F33 | Segurança do gateway: body, spoofing, rate, replay, validação | 16-SECURITY-PRINCIPLES, 02- Observacoes Tecnicas | GS11 | P |
+| F33 | Segurança do gateway: body, spoofing, rate, replay, validação | 16-SECURITY-PRINCIPLES, 02- Observacoes Tecnicas | tests/https-gateway.test.ts: headers, limites, corpo e falha upstream; GS11 integral (replay/queue/SSRF) pendente; gates no PR | PARCIAL |
 | F34 | Admin único, login seguro, MFA, sessão e trilha de alterações | 18-AUTHENTICATION-AUTHORIZATION (simplificado) | GS16; senha, sessão e TOTP com prevenção de replay implementados e testados em laboratório: tests/admin-auth.test.ts e tests/admin-totp.test.ts; faltam trilha de auditoria e requisitos de produção | PARCIAL |
-| F35 | Persistência PostgreSQL, fila/outbox e dedup a reinício | 12-MVP-SCOPE, 29-DATABASE-PERSISTENCE | GS02, GS13 | P |
+| F35 | Persistência PostgreSQL, fila/outbox e dedup a reinício | 12-MVP-SCOPE, 29-DATABASE-PERSISTENCE | GS02, GS13 | PARCIAL |
 | F36 | Histórico preservado com projeto pausado/arquivado | 12-MVP-SCOPE, 34-PRIVACY-DATA-RETENTION | GS15 | P |
-| F37 | Proteção de privacidade, minimização e retenção | 34-PRIVACY-DATA-RETENTION | GS15 | P |
-| F38 | Backups, recuperação e deploy/rollback verificados | 36-BACKUP-DISASTER-RECOVERY, 38-CI-CD-MIGRATIONS-RELEASE | GS16 | P |
-| F39 | Testes navegador e performance reais, sem números inventados | 27-COMPATIBILITY-MATRIX, 28-PERFORMANCE-BUDGETS-BENCHMARKS | GS10, GS16 | P |
-| F40 | Um painel responsivo de projetos, proteção, conversões e incidentes | 12-MVP-SCOPE, 39-INFORMATION-ARCHITECTURE | GS16 | P |
+| F37 | Proteção de privacidade, minimização e retenção | 34-PRIVACY-DATA-RETENTION | GS15 | PARCIAL |
+| F38 | Backups, recuperação e deploy/rollback verificados | 36-BACKUP-DISASTER-RECOVERY, 38-CI-CD-MIGRATIONS-RELEASE | Imagem/Compose e smoke HTTPS em tests/https-gateway.test.ts; backup/restore e rollback VPS de GS16 pendentes, sem deploy | PARCIAL |
+| F39 | Testes navegador e performance reais, sem números inventados | 27-COMPATIBILITY-MATRIX, 28-PERFORMANCE-BUDGETS-BENCHMARKS | GS10, GS16 | PARCIAL |
+| F40 | Um painel responsivo de projetos, proteção, conversões e incidentes | 12-MVP-SCOPE, 39-INFORMATION-ARCHITECTURE | GS16 | PARCIAL |
 | F41 | Identidade de CTA por marcador estável ou correspondência estrutural com confiança; candidato novo ou incerto exige revisão antes de substituir | 26-CONVERSION-SURFACES-DRIFT §§3, 12, 23 | Laboratorio: marcador por superficie e sugestoes estruturais sem associacao automatica, tests/cta-inventory.test.ts, CI 41726344521; GS17 integral pendente | PARCIAL |
 | F42 | Propagação configurável de atribuição por allowlist nos destinos de página e CTA, sem repasse arbitrário de parâmetros | 20-POLICY-ENGINE §13, 26-CONVERSION-SURFACES-DRIFT §17 | GS18 | P |
 | F43 | Política publicada versionada e determinística: precedência de stealth/segurança, fases de entrada e interação e rejeição de conflitos ambíguos | 20-POLICY-ENGINE §§4, 8–9, 14, 18 | Laboratório: publicação autenticada, versões imutáveis e ativação transacional comprovadas em tests/policy-admin.test.ts, tests/protection-policy.test.ts e tests/gs06.test.ts; CI 41697907777. F43 e GS19 completos ainda dependem do motor geral de precedência, fases de interação e demais cenários; políticas legadas exigem republicação. | PARCIAL |

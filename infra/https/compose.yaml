@@ -50,7 +50,7 @@ services:
       - ${NGINX_CONFIG:?set rendered config path}:/etc/nginx/nginx.conf:ro
       - ${TLS_DIRECTORY:?set private certificate directory}:/run/tls:ro
     read_only: true
-    tmpfs: [/tmp, /var/cache/nginx, /var/run]
+    tmpfs: [/tmp, /var/cache/nginx]
     cap_drop: [ALL]
     cap_add: [NET_BIND_SERVICE, SETUID, SETGID, CHOWN]
     security_opt: [no-new-privileges:true]
