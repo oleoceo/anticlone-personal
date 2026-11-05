@@ -55,6 +55,11 @@ export function createAdminServer(passwordRecord: string, totpSecret: string, db
       if (req.method === 'GET' && req.url === '/admin/projects') {
         void db.query('SELECT id, name, origin FROM projects ORDER BY name, id').then(result => res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(result.rows))).catch(() => res.writeHead(503).end()); return;
       }
+      const riskPath = /^\/admin\/projects\/([a-zA-Z0-9_-]{1,64})\/risk-assessments$/.exec(req.url ?? '');
+      if (req.method === 'GET' && riskPath) {
+        void db.query(`SELECT host,day,evidence_kind,evidence_provenance,evidence_reliability,level,evaluator_version,source,reason,confidence,observed_at FROM risk_assessment_days WHERE project_id=$1 AND observed_at >= now()-interval '7 days' ORDER BY observed_at DESC,host LIMIT 100`, [riskPath[1]])
+          .then(result => res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify(result.rows))).catch(() => res.writeHead(503).end()); return;
+      }
       const projectPath = /^\/admin\/projects\/([a-zA-Z0-9_-]{1,64})\/(observations|incidents)$/.exec(req.url ?? '');
       if (req.method === 'GET' && projectPath) {
         const table = projectPath[2] === 'observations' ? 'observations' : 'incidents';

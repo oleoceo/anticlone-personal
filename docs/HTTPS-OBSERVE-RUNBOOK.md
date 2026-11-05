@@ -21,7 +21,7 @@ O proxy limita 2 requisicoes/s por IP com burst 20, 10 conexoes por IP, corpo de
 
 ## Instalacao autorizada e smoke
 
-Somente depois de autorizacao para operacao, portas e credenciais: iniciar apenas postgres com `docker compose -p anticlone-pilot -f infra/https/compose.yaml up -d postgres`. O volume novo executa SQL 001-023 em ordem uma unica vez. Nao apontar a banco legado, nao executar novamente SQL 016/021 em volume existente. Falha de inicializacao exige investigar o primeiro erro e preservar volume; nao executar down -v. Este PR nao implementa migrador de upgrade ou restore.
+Somente depois de autorizacao para operacao, portas e credenciais: iniciar apenas postgres com `docker compose -p anticlone-pilot -f infra/https/compose.yaml up -d postgres`. O volume novo executa SQL 001-024 em ordem uma unica vez. Nao apontar a banco legado, nao executar novamente SQL 016/021 em volume existente. Falha de inicializacao exige investigar o primeiro erro e preservar volume; nao executar down -v. Este PR nao implementa migrador de upgrade ou restore.
 
 Cadastrar o projeto via API administrativa local autenticada (contrato existente em `docs/ADMIN-AUTH-LAB.md`), ou provisionamento parametrizado sob controle do dono, antes de iniciar gateway. PROJECT_ID e origem persistida precisam corresponder a PILOT_ORIGINS. A interface administrativa atual continua laboratorial; nao publicar seu login. O gateway recusa projeto inexistente ou configuracao LAB no modo piloto.
 
@@ -35,7 +35,7 @@ No navegador real: confirmar runtime/core 200, /observe 204, /entry-decision OBS
 
 Antes da primeira publicacao, ensaiar em ambiente isolado o mesmo smoke, interrupcao do gateway (502 e navegacao nativa), reinicio e rollback para imagem anterior. A CI testa TLS sintetico/Nginx/PostgreSQL/Chromium; nao certifica o certificado/DNS/firewall da VPS. Backup/restore operacional permanece gate separado antes da operacao completa.
 
-Se smoke falhar, parar apenas proxy e gateway com `docker compose -p anticlone-pilot -f infra/https/compose.yaml stop proxy gateway`; manter banco e volume. Para rollback deste PR (sem migration nova), restaurar GATEWAY_IMAGE e NGINX_CONFIG anteriores aprovados e recriar gateway/proxy; repetir smoke. Se a versao anterior nao suportar HTTPS_PROXY, manter publicacao parada em vez de remover o bloqueio de encaminhamento. Nunca desativar OBSERVE_ONLY como rollback. Nao reverter esquema nem apagar volume. Para atualizar certificado, validar arquivos, `nginx -t` e reload do proxy; falha exige preservar certificado anterior valido. Logs de acesso estao desativados; logs operacionais rotacionados podem conter dados de rede em erros, acesso privado e retencao local curta. Nao enviar logs brutos sem revisao.
+Se smoke falhar, parar apenas proxy e gateway com `docker compose -p anticlone-pilot -f infra/https/compose.yaml stop proxy gateway`; manter banco e volume. Para rollback do gateway, restaurar GATEWAY_IMAGE e NGINX_CONFIG anteriores aprovados e recriar gateway/proxy; repetir smoke. Se a versao anterior nao suportar HTTPS_PROXY, manter publicacao parada em vez de remover o bloqueio de encaminhamento. Nunca desativar OBSERVE_ONLY como rollback. Nao reverter esquema nem apagar volume. Para atualizar certificado, validar arquivos, `nginx -t` e reload do proxy; falha exige preservar certificado anterior valido. Logs de acesso estao desativados; logs operacionais rotacionados podem conter dados de rede em erros, acesso privado e retencao local curta. Nao enviar logs brutos sem revisao.
 
 ## Evidencia reproduzivel
 

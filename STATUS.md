@@ -1,4 +1,5 @@
 # STATUS — AntiClone Personal
+- **Risco/Stealth F13/F14/F43 parciais:** procedencia limitada e gate comum em entrada e refresh, com LOW apenas laboratorial; `docs/RISK-STEALTH.md`. GS05/GS19 integrais e protecao ativa continuam pendentes. Validacao, revisao detached e CI HTTPS do SHA final devem constar no PR.
 - **Publicacao HTTPS em preparacao (F33/F07/F38 parciais):** branch baseada em 9a9995a; Nginx TLS com rotas publicas, headers sobrescritos, Node loopback, limites e timeouts, imagem/Compose Linux e smoke sem publicar. OBSERVE_ONLY preservado; admin privado separado.
 - **Prova HTTPS:** tests/https-gateway.test.ts; fronteira unitaria local e integracao Nginx/PostgreSQL/Chromium obrigatoria na CI Linux. Resultado do SHA final e revisao independente registrados no PR; nao considerar pronto antes desses gates.
 - **Conclusao global:** quadro A/B/C por F01-F45 na matriz; GS01-GS21 preservados. Nenhuma entrega integral declarada. Proximo impedimento: classificador operacional de risco/Stealth; publicacao real ainda exige autorizacao e verificacao operacional, depois destinos externos aprovados.

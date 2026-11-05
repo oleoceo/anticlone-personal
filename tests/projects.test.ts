@@ -15,6 +15,7 @@ test('projects: authenticated creation, unique origins and isolated evidence', a
   const db = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
   await db.query(await readFile('infra/008_traffic_observations.sql', 'utf8'));
   await db.query(await readFile('infra/009_risk_assessments.sql', 'utf8'));
+  await db.query(await readFile('infra/024_risk_evidence.sql', 'utf8'));
   for (const path of ['infra/001_initial.sql', 'infra/002_alerts.sql', 'infra/003_projects.sql', 'infra/004_observation_sources.sql', 'infra/005_canaries.sql', 'infra/018_notification_budget.sql', 'infra/019_alert_outbox_expiry.sql']) await db.query(await readFile(path, 'utf8'));
   await db.query('CREATE TABLE IF NOT EXISTS admin_totp_replay (factor_id text PRIMARY KEY, last_counter bigint NOT NULL)');
   await db.query('CREATE TABLE IF NOT EXISTS admin_totp_codes (factor_id text NOT NULL, digest text NOT NULL, valid_until bigint NOT NULL, PRIMARY KEY (factor_id, digest))');
@@ -29,6 +30,7 @@ test('projects: authenticated creation, unique origins and isolated evidence', a
   const children: ChildProcess[] = [];
   try {
     assert.equal((await fetch(`${base}/admin/projects`)).status, 401);
+    assert.equal((await fetch(`${base}/admin/projects/example/risk-assessments`)).status, 401);
     const login = await fetch(`${base}/admin/login`, { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify({password:'password', code:new TOTP({secret:Secret.fromBase32(secret)}).generate()}) });
     assert.equal(login.status, 200);
     const {token} = await login.json() as {token:string};
@@ -47,6 +49,7 @@ test('projects: authenticated creation, unique origins and isolated evidence', a
       ids.push((await response.json() as {id:string}).id);
     }
     assert.notEqual(ids[0], ids[1]);
+    assert.equal((await fetch(`${base}/admin/projects/${ids[0]}/risk-assessments`, {headers:{...headers,origin:'https://attacker.test'}})).status, 403);
     assert.equal((await create('duplicate', originA.toUpperCase() + ':443/')).status, 409);
     assert.equal((await create('invalid', 'https://example.test/path')).status, 400);
     const ports: number[] = [];
@@ -64,6 +67,19 @@ test('projects: authenticated creation, unique origins and isolated evidence', a
       }
       assert.ok(ready);
     }
+    const observation = await fetch(`http://127.0.0.1:${ports[0]}/observe`, {method:'POST',headers:{origin:'https://clone.test','content-type':'text/plain'},body:JSON.stringify({origin:'https://clone.test',signals:{medium:'cpc'}})});
+    assert.equal(observation.status, 204);
+    const decision = await fetch(`http://127.0.0.1:${ports[0]}/entry-decision`, {method:'POST',headers:{origin:'https://clone.test','content-type':'text/plain'},body:JSON.stringify({session:'a'.repeat(32),signals:{medium:'cpc'}})});
+    assert.deepEqual(await decision.json(), {action:'OBSERVE_ONLY'});
+    const riskA = await fetch(`${base}/admin/projects/${ids[0]}/risk-assessments`, {headers});
+    const riskB = await fetch(`${base}/admin/projects/${ids[1]}/risk-assessments`, {headers});
+    const diagnostic = await riskA.json() as {level:string;evidence_kind:string;evidence_provenance:string;evidence_reliability:string}[];
+    assert.equal(diagnostic.length, 1);
+    assert.equal(diagnostic[0].level, 'UNCERTAIN');
+    assert.equal(diagnostic[0].evidence_kind, 'paid_utm');
+    assert.equal(diagnostic[0].evidence_provenance, 'browser');
+    assert.equal(diagnostic[0].evidence_reliability, 'uncorroborated');
+    assert.equal((await riskB.json() as unknown[]).length, 0);
     const claim = (port:number, body:string, path='/observe') => fetch(`http://127.0.0.1:${port}${path}`, {method:'POST', headers:{origin:'https://clone.test','content-type':'text/plain'}, body});
     assert.equal((await claim(ports[0], JSON.stringify({projectId:ids[1],origin:'https://clone.test'}))).status, 400);
     assert.equal((await claim(ports[0], 'https://clone.test', `/observe?projectId=${ids[1]}`)).status, 404);
@@ -82,6 +98,7 @@ test('projects: authenticated creation, unique origins and isolated evidence', a
       if (child.exitCode === null && child.signalCode === null) { child.kill('SIGTERM'); await once(child, 'exit'); }
     }
     for (const id of [...ids, legacy]) {
+      await db.query('DELETE FROM risk_assessment_days WHERE project_id=$1', [id]);
       await db.query('DELETE FROM observations WHERE project_id=$1', [id]);
       await db.query('DELETE FROM observation_days WHERE project_id=$1', [id]);
       await db.query('DELETE FROM incidents WHERE project_id=$1', [id]);

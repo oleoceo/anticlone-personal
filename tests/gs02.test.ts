@@ -32,6 +32,7 @@ test('GS02: browser visits, durable incident and test SMTP alert after restart',
   const db = new Pool({ connectionString: process.env.TEST_DATABASE_URL, options });
   await db.query(await readFile('infra/008_traffic_observations.sql', 'utf8'));
   await db.query(await readFile('infra/009_risk_assessments.sql', 'utf8'));
+  await db.query(await readFile('infra/024_risk_evidence.sql', 'utf8'));
   await db.query(await readFile('infra/001_initial.sql', 'utf8')); await db.query(await readFile('infra/002_alerts.sql', 'utf8')); await db.query(await readFile('infra/003_projects.sql', 'utf8')); await db.query(await readFile('infra/004_observation_sources.sql', 'utf8')); await db.query(await readFile('infra/005_canaries.sql', 'utf8')); await db.query(await readFile('infra/018_notification_budget.sql', 'utf8')); await db.query(await readFile('infra/019_alert_outbox_expiry.sql', 'utf8'));
   const project = 'gs02_' + crypto.randomUUID();
   const fixture = createServer(async (req, res) => {

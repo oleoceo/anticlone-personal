@@ -27,7 +27,7 @@ test('pilot browser: multiple exact origins, untrusted copy, uncertain decisions
   await root.query(`CREATE SCHEMA ${schema}`);
   const options = `-c search_path=${schema}`;
   const db = new Pool({connectionString:process.env.TEST_DATABASE_URL,options});
-  for (const file of ['001_initial','002_alerts','003_projects','004_observation_sources','005_canaries','008_traffic_observations','009_risk_assessments','018_notification_budget','019_alert_outbox_expiry']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
+  for (const file of ['001_initial','002_alerts','003_projects','004_observation_sources','005_canaries','008_traffic_observations','009_risk_assessments','024_risk_evidence','018_notification_budget','019_alert_outbox_expiry']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
   await db.query("INSERT INTO projects VALUES('pilot','Pilot','https://owner.test')");
   for (const file of ['007_protection_policy','010_policy_allocation','012_cta_policy']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
   const allocation = {PAID_ATTRIBUTED:100,ORGANIC:100,REFERRAL:100,DIRECT_UNKNOWN:100};
@@ -67,9 +67,10 @@ test('pilot browser: multiple exact origins, untrusted copy, uncertain decisions
     }
     const incidents = await db.query('SELECT host FROM incidents ORDER BY host');
     assert.deepEqual(incidents.rows,[{host:'copy.test'},{host:'owner.test.evil.test'}]);
-    const risks = await db.query('SELECT level,source FROM risk_assessment_days');
+    const risks = await db.query('SELECT level,source,evidence_kind,evidence_provenance,evidence_reliability FROM risk_assessment_days');
     assert.equal(risks.rowCount,4);
     assert.ok(risks.rows.every(row => row.level==='UNCERTAIN' && row.source==='server_default'));
+    assert.ok(risks.rows.every(row => row.evidence_kind==='paid_utm' && row.evidence_provenance==='browser' && row.evidence_reliability==='uncorroborated'));
     const page = await browser.newPage();
     await page.route('https://gateway.test/**', route => route.abort());
     await page.route('https://owner.test/**', route => route.fulfill({contentType:'text/html',body:'<a href="/checkout">Native</a><script src="https://gateway.test/runtime.js"></script>'}));

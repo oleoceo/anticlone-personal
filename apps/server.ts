@@ -7,7 +7,7 @@ import { classifyTraffic } from './traffic.js';
 import { entryDecision, approvedDestination } from './page-redirect.js';
 import { validateAllocation } from './allocation.js';
 import { ctaDecision } from './cta-policy.js';
-import { safeEvaluateRisk, recordRisk } from './risk.js';
+import { safeEvaluateRisk, assessObservation, recordRisk, stealthEligible, type RiskEvidence } from './risk.js';
 import { gatewayMode } from './gateway-mode.js';
 import { gatewayBoundary } from './gateway-boundary.js';
 const boundary = gatewayBoundary(process.env);
@@ -24,7 +24,7 @@ if (legacyOrigin) {
   await pool.query('INSERT INTO projects(id,name,origin) VALUES($1,$1,$2) ON CONFLICT (id) DO NOTHING', [activeProject, legacyOrigin]);
 }
 await pool.query('SELECT project_id, host, day, traffic_class, evidence, certainty, source, observed_at FROM traffic_observation_days LIMIT 0');
-await pool.query('SELECT project_id,host,day,level,evaluator_version,source,reason,confidence,observed_at FROM risk_assessment_days LIMIT 0');
+await pool.query('SELECT project_id,host,day,level,evaluator_version,source,reason,confidence,evidence_kind,evidence_provenance,evidence_reliability,observed_at FROM risk_assessment_days LIMIT 0');
 const projectRow = await pool.query('SELECT origin FROM projects WHERE id=$1', [activeProject]);
 if (projectRow.rowCount !== 1) throw new Error('unknown project');
 const normalizedOrigin = configuredOrigin(projectRow.rows[0].origin);
@@ -74,13 +74,13 @@ const server = http.createServer((req, res) => {
     req.on('data', (chunk: Buffer) => { if (rejected) return; bodyBytes += chunk.length; body += chunk.toString('utf8'); if (bodyBytes > 2048) { rejected = true; body = ''; res.writeHead(413).end(); } });
     req.on('end', () => {
     if (rejected) return;
-    let session: unknown; let trafficClass: string;
-    try { const input: unknown = JSON.parse(body); if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).sort().join(',') !== 'session,signals') throw Error('invalid'); const fields = input as Record<string, unknown>; session = fields.session; trafficClass = classifyTraffic(fields.signals, origin).trafficClass; } catch { res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify({action:'OBSERVE_ONLY'})); return; }
+    let session: unknown; let trafficClass: string; let evidence: RiskEvidence;
+    try { const input: unknown = JSON.parse(body); if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).sort().join(',') !== 'session,signals') throw Error('invalid'); const fields = input as Record<string, unknown>; session = fields.session; const traffic = classifyTraffic(fields.signals, origin); trafficClass = traffic.trafficClass; evidence = {source:'browser',reliability:'uncorroborated',trafficClass,kind:traffic.evidence}; } catch { res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify({action:'OBSERVE_ONLY'})); return; }
     void (async () => {
-      const assessment = safeEvaluateRisk(controlledOrigin === origin && origin !== normalizedOrigin && process.env.LAB_CONTROLLED_RISK === 'LOW');
+      const assessment = safeEvaluateRisk(controlledOrigin === origin && origin !== normalizedOrigin && process.env.LAB_CONTROLLED_RISK === 'LOW', fixture => assessObservation(evidence, fixture));
       if (!assessment) return {action:'OBSERVE_ONLY'};
-      await recordRisk(pool, activeProject, new URL(origin).hostname, assessment);
-      if (mode.pilot) return {action:'OBSERVE_ONLY'};
+      await recordRisk(pool, activeProject, new URL(origin).hostname, assessment, evidence);
+      if (!stealthEligible(assessment, mode.pilot)) return {action:'OBSERVE_ONLY'};
       const result = await pool.query('SELECT v.version,v.enabled,v.approved_destination,v.allocation FROM active_protection_policies a JOIN protection_policy_versions v ON v.project_id=a.project_id AND v.version=a.version WHERE a.project_id=$1 AND v.stealth=true', [activeProject]);
       const entryPolicy = result.rows[0];
       // Invalid enabled entry policy is an evaluation failure, not permission to continue.
