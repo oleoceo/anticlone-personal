@@ -14,20 +14,20 @@ test('exact international monetary grammars and exponents', () => {
     ['Price: USD 1,234.56','USD','123456'],['Price: 1.234,56 USD','USD','123456'],
     ['Price: € 1 234,56','EUR','123456'],['Price: EUR 1\u202f234.56','EUR','123456'],
     ['Price: £ 1,234.56','GBP','123456'],["Price: GBP 1'234.56",'GBP','123456'],
-    ['Price: JPY 1,234','JPY','1234'],['Price: ¥ 1.234','JPY','1234'],
+    ['Price: JPY 1,234','JPY','1234'],['Price: JP¥ 1.234','JPY','1234'],
     ['Price: KWD 1,234.567','KWD','1234567'],['Price: 1.234,567 KWD','KWD','1234567'],
     ['Price: USD 999999999999999999.99','USD','99999999999999999999'],
     ['Price: KWD 0.001','KWD','1'],['Price: JPY 0','JPY','0'],
   ]) { const row=one(text); assert.equal(row.currency,code,text); assert.equal(row.minorUnits,minor,text); assert.equal(row.meaning,'PRICE_CURRENT',text); }
 });
 test('reject invalid grouping, precision, boundaries and hostile input without partial numbers', () => {
-  for (const text of ['USD 12,34.56','BRL 1.23,45','EUR 1,23,456.78','GBP 01,234.56','JPY 12.50','KWD 12.50','USD 12.3456','USD 1 23.45','USD 1,234 567.89','USD 9999999999999999999','USD 10%','-USD 10','USD 10.00abc','USD 10..00','USD 1.234.56','USD 01','USD 10_000','USD 10?50','USD 10?00']) {
+  for (const text of ['USD 12,34.56','BRL 1.23,45','EUR 1,23,456.78','GBP 01,234.56','JPY 12.50','KWD 12.50','USD 12.3456','USD 1 23.45','USD 1,234 567.89','USD 9999999999999999999','USD 10%','-USD 10','USD 10.00abc','USD 10..00','USD 1.234.56','USD 01','USD 10_000','USD 10\u066b50','USD 10\u066c00']) {
     const rows=interpretText({text}); assert.ok(rows.length,text); assert.ok(rows.every(r=>r.status!=='RESOLVED'),text);
   }
   for (const text of ['tel +55 (11) 99999-9999','50% off, 12 units','123.45','\u202eUSD 10','USD 10\u0000', 'x'.repeat(513)]) assert.deepEqual(interpretText({text}),[],text);
   assert.deepEqual(interpretText(null as never),[]);
   assert.equal(one('$ 10.00').status,'UNRESOLVED');
-  assert.equal(one('? 10').status,'UNRESOLVED');
+  assert.equal(one('\u00a5 10').status,'UNRESOLVED');
   assert.equal(one('USD 10 EUR').status,'UNRESOLVED');
   assert.equal(one('KWD 1.234').status,'UNRESOLVED');
 });
