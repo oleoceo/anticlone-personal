@@ -3,13 +3,27 @@
     const source = document.currentScript && document.currentScript.src;
     if (!source) return;
     const deadline = performance.now() + 150;
-    let pending = true, interacted = false;
+    let pending = true, interacted = false, abandoned = false;
+    const initialPath = location.pathname, initialSearch = location.search;
+    const validContext = () => !abandoned && location.pathname === initialPath && location.search === initialSearch;
+    const abandon = () => { abandoned = true; cancel(); };
     const cancel = () => { pending = false; interacted = true; };
     setTimeout(() => { pending = false; }, 150);
-    addEventListener('pagehide', cancel, {once:true});
-    addEventListener('beforeunload', cancel, {once:true});
+    addEventListener('pagehide', abandon, {once:true});
+    addEventListener('beforeunload', abandon, {once:true});
     addEventListener('pointerdown', cancel, {once:true, capture:true});
     addEventListener('keydown', cancel, {once:true, capture:true});
+    addEventListener('click', cancel, {once:true, capture:true});
+    addEventListener('popstate', () => { if (!validContext()) abandon(); });
+    // A pathname transition permanently invalidates this navigation's prepared decision.
+    for (const method of ['pushState', 'replaceState']) {
+      const original = history[method];
+      history[method] = function (...args) {
+        const result = original.apply(this, args);
+        if (!validContext()) abandon();
+        return result;
+      };
+    }
     // Delegate clicks so approved markers can appear after the initial document load.
     const prepareCtas = decision => {
       try {
@@ -24,7 +38,7 @@
           mappings.set(row.marker, {kind:row.kind, destination:target.href});
         }
         const install = () => {
-          if (interacted || location.pathname !== decision.pathname) return;
+          if (interacted || !validContext() || location.pathname !== decision.pathname) return;
           document.addEventListener('click', event => {
             try {
               if (!(event.target instanceof Element)) return;
@@ -33,7 +47,7 @@
               const activate = currentEvent => {
                 if (currentEvent !== event) return;
                 try {
-                  if (event.defaultPrevented || location.pathname !== decision.pathname || !node.isConnected || !node.hasAttribute('href')) return;
+                  if (event.defaultPrevented || !validContext() || location.pathname !== decision.pathname || !node.isConnected || !node.hasAttribute('href')) return;
                   const marker = node.getAttribute('data-anticlone-point');
                   if (mappings.get(marker)?.kind !== 'a') return;
                   const current = Array.from(document.querySelectorAll('[data-anticlone-point]'));
@@ -57,7 +71,7 @@
     core.src = new URL('/core.js', source).href;
     core.async = true;
     core.onload = () => {
-      if (!pending || performance.now() >= deadline) return;
+      if (interacted || !validContext()) return;
       try {
         let session = sessionStorage.getItem('anticlone.lab.session');
         if (!session) { const bytes = crypto.getRandomValues(new Uint8Array(16)); session = Array.from(bytes, x => x.toString(16).padStart(2, '0')).join(''); sessionStorage.setItem('anticlone.lab.session', session); }
@@ -77,9 +91,10 @@
         fetch(new URL('/entry-decision', source).href, { method:'POST', headers:{'Content-Type':'text/plain'}, body:JSON.stringify({session,signals}), cache: 'no-store' })
           .then(response => { if (!response.ok) throw new Error('decision unavailable'); return response.json(); })
           .then(decision => {
+            if (interacted || !validContext()) return;
+            if (decision.action === 'REPLACE_CONVERSION') { prepareCtas(decision); return; }
             if (!pending || performance.now() >= deadline) return;
             pending = false;
-            if (decision.action === 'REPLACE_CONVERSION') { prepareCtas(decision); return; }
             if (decision.action !== 'PAGE_REDIRECT' || !Number.isSafeInteger(decision.version) || decision.version < 1 || typeof decision.destination !== 'string') return;
             const target = new URL(decision.destination);
             if (!['http:', 'https:'].includes(target.protocol) || target.username || target.password || target.hash || target.href === location.href || target.origin === location.origin) return;

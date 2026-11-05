@@ -9,6 +9,7 @@ import type { AddressInfo } from 'node:net';
 import { Pool } from 'pg';
 import { chromium } from 'playwright';
 import { Secret, TOTP } from 'otpauth';
+import { selected } from '../apps/allocation.js';
 import { createAdminServer } from '../apps/admin-auth.js';
 
 const allocation={PAID_ATTRIBUTED:100,ORGANIC:100,REFERRAL:100,DIRECT_UNKNOWN:100};
@@ -53,17 +54,46 @@ test('GS08: real checkout drift isolates a CTA through authenticated review in C
     browser=await chromium.launch({headless:true,args:['--host-resolver-rules=MAP localhost 127.0.0.1']});
     const page=await browser.newPage();
     await page.addInitScript(()=>{
+      const now=performance.now.bind(performance);
+      let listenerReady:()=>void=()=>{};
+      Object.defineProperty(window,'__gs08ListenerReady',{value:new Promise<void>(resolve=>{listenerReady=resolve;})});
+      const events:{event:string;time:number}[]=[];
+      Object.defineProperty(window,'__gs08Events',{value:events});
+      document.addEventListener('load',event=>{if (event.target instanceof HTMLScriptElement && new URL(event.target.src).pathname==='/core.js') events.push({event:'core-load',time:now()});},true);
+      const originalFetch=window.fetch.bind(window);
+      window.fetch=(...args)=>{const request=originalFetch(...args); if (String(args[0]).endsWith('/entry-decision')) {events.push({event:'decision-request',time:now()}); void request.then(()=>events.push({event:'decision-response',time:now()}),()=>events.push({event:'decision-failed',time:now()}));} return request;};
       const add=document.addEventListener.bind(document);
       document.addEventListener=((type:string,listener:EventListenerOrEventListenerObject,options?:boolean|AddEventListenerOptions)=>{
         add(type,listener,options);
-        if(type==='click') document.documentElement.dataset.testCtaListener='installed';
+        if(type==='click') {document.documentElement.dataset.testCtaListener='installed'; events.push({event:'listener-installed',time:now()}); listenerReady();}
       }) as typeof document.addEventListener;
     });
+    const failures:string[]=[];
+    page.on('pageerror', error=>failures.push(`pageerror: ${error.name}`));
+    page.on('requestfailed', request=>{if (/\/(?:core\.js|runtime\.js|entry-decision)$/.test(new URL(request.url()).pathname)) failures.push(`requestfailed: ${new URL(request.url()).pathname}: ${request.failure()?.errorText}`);});
+    let navigation=0;
     const click=async (marker:string,expected:string)=>{
-      const decision=page.waitForResponse(r=>r.url().endsWith('/entry-decision') && r.status()===200);
-      await page.goto(clone+'/clone'); await decision;
-      await page.waitForFunction(()=>document.documentElement.dataset.testCtaListener==='installed');
-      await page.locator(`[data-anticlone-point="${marker}"]`).click(); await page.waitForURL(expected);
+      navigation++;
+      let status:number|undefined;
+      let body:{action?:string;mappings?:{marker:string}[]}|undefined;
+      try {
+        const decision=page.waitForResponse(r=>r.url().endsWith('/entry-decision'));
+        await page.goto(clone+'/clone');
+        const response=await decision;
+        status=response.status();
+        body=await response.json() as {action?:string;mappings?:{marker:string}[]};
+        assert.equal(status,200);
+        assert.equal(body.action,'REPLACE_CONVERSION');
+        assert.ok(body.mappings?.some(row=>row.marker==='premium1'), 'independent CTA must remain eligible');
+        await page.evaluate(()=> (window as unknown as {__gs08ListenerReady:Promise<void>}).__gs08ListenerReady);
+        assert.equal(await page.evaluate(()=>document.documentElement.dataset.testCtaListener),'installed');
+        await page.locator(`[data-anticlone-point="${marker}"]`).click(); await page.waitForURL(expected);
+      } catch (error) {
+        const timing=await page.evaluate(()=>({now:performance.now(),readyState:document.readyState,listener:document.documentElement.dataset.testCtaListener ?? null,events:(window as unknown as {__gs08Events:unknown[]}).__gs08Events,resources:performance.getEntriesByType('resource').filter(entry=>/\/(?:core\.js|runtime\.js|entry-decision)$/.test(new URL(entry.name).pathname)).map(entry=>({path:new URL(entry.name).pathname,start:entry.startTime,duration:entry.duration}))})).catch(()=>null);
+        const points=await db.query('SELECT marker,review_required FROM cta_points WHERE project_id=$1 ORDER BY marker',[project]);
+        console.error('GS08 diagnostic',JSON.stringify({navigation,marker,status,body,premiumEligible:body?.mappings?.some(row=>row.marker==='premium1') ?? false,timing,failures,points:points.rows}));
+        throw error;
+      }
     };
     await click('basic001',original+'/official-basic'); await click('premium1',original+'/official-premium');
     html=html.replace('/native-basic','/changed');
@@ -75,6 +105,47 @@ test('GS08: real checkout drift isolates a CTA through authenticated review in C
     const point=points.find(x=>x.marker==='basic001').id;
     assert.deepEqual((await db.query('SELECT point_id,reason FROM cta_drift_alerts WHERE project_id=$1',[project])).rows,[{point_id:point,reason:'DESTINATION_CHANGED'}]);
     assert.deepEqual((await db.query('SELECT d.delivery_mode FROM cta_alert_deliveries d JOIN cta_drift_alerts a ON a.id=d.alert_id WHERE a.project_id=$1',[project])).rows,[{delivery_mode:'SMTP_LOCAL'}]);
+    // Delay real server delivery; all GS08 scenarios use the real browser clock.
+    const late=await browser.newPage();
+    await late.addInitScript(()=>{
+      const json=Response.prototype.json;
+      Response.prototype.json=function(){
+        const result=json.call(this);
+        if (this.url.endsWith('/entry-decision')) void result.then(()=>requestAnimationFrame(()=>{document.documentElement.dataset.testDecisionProcessed='yes';}));
+        return result;
+      };
+      const add=document.addEventListener.bind(document);
+      document.addEventListener=((type:string,listener:EventListenerOrEventListenerObject,options?:boolean|AddEventListenerOptions)=>{
+        add(type,listener,options);
+        if(type==='click') document.documentElement.dataset.testCtaListener='installed';
+      }) as typeof document.addEventListener;
+    });
+    let lateStatus=0, lateBody:{action?:string;version?:number;mappings?:{marker:string}[]}|undefined, heldMs=0;
+    await late.route('**/entry-decision',async route=>{
+      const response=await route.fetch();
+      lateStatus=response.status(); lateBody=await response.json() as typeof lateBody;
+      const start=await late.evaluate(()=>performance.now());
+      await late.waitForFunction(t=>performance.now()-t>=150,start);
+      heldMs=await late.evaluate(t=>performance.now()-t,start);
+      await route.fulfill({response});
+    });
+    const lateResponse=late.waitForResponse(r=>r.url().endsWith('/entry-decision'));
+    await late.goto(clone+'/clone'); await lateResponse;
+    assert.equal(lateStatus,200); assert.equal(lateBody?.action,'REPLACE_CONVERSION');
+    assert.ok(lateBody?.mappings?.some(row=>row.marker==='premium1'));
+    assert.ok(heldMs>=150);
+    // A frame after JSON consumption lets the runtime's promise reactions complete before any click.
+    await late.waitForFunction(()=>document.documentElement.dataset.testDecisionProcessed==='yes');
+    console.info(`GS08 late response held ${heldMs.toFixed(1)} ms after server response`);
+    assert.equal(await late.evaluate(()=>document.documentElement.dataset.testCtaListener),'installed');
+    assert.equal(await late.locator('[data-anticlone-point="premium1"]').getAttribute('href'),'/native-premium');
+    await late.locator('[data-anticlone-point="premium1"]').click();
+    await late.waitForURL(original+'/official-premium');
+    await late.goto(clone+'/clone');
+    await late.waitForFunction(()=>document.documentElement.dataset.testDecisionProcessed==='yes');
+    await late.locator('[data-anticlone-point="basic001"]').click();
+    await late.waitForURL(clone+'/changed');
+    await late.close();
     await click('basic001',clone+'/changed'); await click('premium1',original+'/official-premium');
     const observation=(await db.query("SELECT id,confidence FROM cta_observations WHERE project_id=$1 AND point_id=$2 ORDER BY observed_at DESC,id DESC LIMIT 1",[project,point])).rows[0];
     assert.equal(observation.confidence,'HIGH');
@@ -85,6 +156,60 @@ test('GS08: real checkout drift isolates a CTA through authenticated review in C
     assert.deepEqual((await db.query('SELECT point_id,observation_id,destination_id,observed_url FROM cta_review_audit WHERE project_id=$1',[project])).rows,[{point_id:point,observation_id:observation.id,destination_id:destinations.basic001,observed_url:clone+'/changed'}]);
     assert.deepEqual((await state()).rows,[{marker:'basic001',review_required:false,destination_id:destinations.basic001},{marker:'premium1',review_required:false,destination_id:destinations.premium1}]);
     await click('basic001',original+'/official-basic'); await click('premium1',original+'/official-premium');
+    // Negative decisions still come from the real server and persisted policy.
+    const native=async()=>{
+      const response=page.waitForResponse(r=>r.url().endsWith('/entry-decision'));
+      await page.goto(clone+'/clone');
+      assert.equal((await (await response).json() as {action:string}).action,'OBSERVE_ONLY');
+      await page.waitForTimeout(100);
+      assert.equal(await page.evaluate(()=>document.documentElement.dataset.testCtaListener ?? null),null);
+      await page.locator('[data-anticlone-point="premium1"]').click(); await page.waitForURL(clone+'/native-premium');
+    };
+    assert.equal((await post('policy',{enabled:true,surface:'landing',pathname:'/clone',allocation:{...allocation,DIRECT_UNKNOWN:0}})).status,200);
+    await native();
+    const half={...allocation,DIRECT_UNKNOWN:50};
+    assert.equal((await post('policy',{enabled:true,surface:'landing',pathname:'/clone',allocation:half})).status,200);
+    const version=(await db.query('SELECT version FROM active_cta_policies WHERE project_id=$1',[project])).rows[0].version as number;
+    let excluded='';
+    for(let i=0;i<100;i++){const candidate=i.toString(16).padStart(32,'0');if(!selected(candidate,'REPLACE_CONVERSION',version,half,'DIRECT_UNKNOWN')) {excluded=candidate;break;}}
+    assert.ok(excluded);
+    await page.addInitScript(session=>sessionStorage.setItem('anticlone.lab.session',session),excluded);
+    await native();
+    assert.equal((await post('policy',{enabled:false,surface:'landing',pathname:'/clone',allocation})).status,200);
+    await native();
+    assert.equal((await post('policy',{enabled:true,surface:'landing',pathname:'/clone',allocation})).status,200);
+    // Delay fresh real decisions; only the invalid-payload case alters the response.
+    for (const invalidation of ['invalid','early','abandon','navigation','query'] as const) {
+      const negative=await browser.newPage();
+      await negative.addInitScript(()=>{
+        const add=document.addEventListener.bind(document);
+        document.addEventListener=((type:string,listener:EventListenerOrEventListenerObject,options?:boolean|AddEventListenerOptions)=>{add(type,listener,options);if(type==='click') document.documentElement.dataset.testCtaListener='installed';}) as typeof document.addEventListener;
+      });
+      await negative.route('**/entry-decision',async route=>{
+        const response=await route.fetch();
+        await new Promise(resolve=>setTimeout(resolve,250));
+        if(invalidation==='early') await negative.evaluate(()=>{const node=document.querySelector('[data-anticlone-point="premium1"]')!;node.addEventListener('click',event=>event.preventDefault(),{once:true});node.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true}));});
+        if(invalidation==='abandon') await negative.evaluate(()=>dispatchEvent(new Event('pagehide')));
+        if(invalidation==='navigation') await negative.evaluate(()=>{history.pushState({},'', '/different');history.replaceState({},'', '/clone');});
+        if(invalidation==='query') await negative.evaluate(()=>{history.pushState({},'', '/clone?changed=1');history.replaceState({},'', '/clone');});
+        const body=await response.json() as {action:string;version:number};
+        assert.equal(body.action,'REPLACE_CONVERSION');
+        if(invalidation==='invalid') await route.fulfill({response,json:{...body,version:0}});
+        else await route.fulfill({response});
+      });
+      const response=negative.waitForResponse(r=>r.url().endsWith('/entry-decision'));
+      await negative.goto(clone+'/clone');
+      await response; await negative.waitForTimeout(100);
+      assert.equal(await negative.evaluate(()=>document.documentElement.dataset.testCtaListener ?? null),null,invalidation);
+      if(invalidation!=='early') {await negative.locator('[data-anticlone-point="premium1"]').click();await negative.waitForURL(clone+'/native-premium');}
+      await negative.close();
+    }
+
+    app.kill('SIGTERM'); await once(app,'exit');
+    app=spawn(process.execPath,['dist/apps/server.js'],{env:{...process.env,PGOPTIONS:options,DATABASE_URL:process.env.TEST_DATABASE_URL,PROJECT_ID:project,SMTP_PORT:'25252',PORT:'3000',LAB_CONTROLLED_ORIGIN:clone,LAB_CONTROLLED_RISK:''},stdio:['ignore','ignore','inherit']});
+    let restarted=false; for(let i=0;i<100;i++){try{if((await fetch('http://127.0.0.1:3000/runtime.js')).ok){restarted=true;break;}}catch{} await new Promise(r=>setTimeout(r,100));} assert.ok(restarted);
+    await native();
+    assert.ok((await db.query("SELECT 1 FROM risk_assessment_days WHERE project_id=$1 AND level='UNCERTAIN'",[project])).rowCount);
   } finally {
     if (browser) await browser.close();
     if (app && app.exitCode===null && app.signalCode===null) {app.kill('SIGTERM'); await once(app,'exit');}
