@@ -11,6 +11,7 @@ import { safeEvaluateRisk, assessObservation, recordRisk, stealthEligible, type 
 import { gatewayMode } from './gateway-mode.js';
 import { gatewayBoundary } from './gateway-boundary.js';
 import { recordInstallationClaim } from './installation.js';
+import { recordDegradationClaim, degradationState, maintainDegradation } from './degradation.js';
 const boundary = gatewayBoundary(process.env);
 const connectionString = process.env.DATABASE_URL, project = process.env.PROJECT_ID;
 const smtpPort = Number(process.env.SMTP_PORT), port = Number(process.env.PORT ?? 3000);
@@ -133,6 +134,11 @@ const server = http.createServer((req, res) => {
     const source = req.url === '/observe/fallback' ? 'fallback' : 'core';
     void observe(pool, activeProject, mode.origins, origin, source, evidence).then(result => {
       if (result === 'authorized') recordClaim(origin,source);
+      if (!mode.pilot && controlledOrigin && origin === controlledOrigin && origin !== normalizedOrigin) {
+        void recordDegradationClaim(pool,activeProject,new URL(origin).hostname,source)
+          .then(() => degradationState(pool,activeProject,new URL(origin).hostname))
+          .catch(() => process.stderr.write('degradation correlation unavailable\n'));
+      }
       res.writeHead(result === 'capacity' ? 429 : 204).end();
     }).catch(() => res.writeHead(503).end());
   });
@@ -147,6 +153,7 @@ async function maintenance() {
   if (busy) return;
   busy = true;
   try {
+    await maintainDegradation(pool, activeProject).catch(() => process.stderr.write('degradation maintenance unavailable\n'));
     await cleanup(pool, activeProject); await deliverOne(pool, activeProject, smtpPort);
     if (Date.now() >= installationCleanupAfter) {
       installationCleanupAfter = Date.now() + 60 * 60_000;

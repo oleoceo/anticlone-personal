@@ -1,5 +1,6 @@
 # STATUS — AntiClone Personal
-- **F08 PARCIAL / GS10 pendente (PR #44):** armazenamento opt-in e consulta NOT_VERIFIED; conflito de origem retorna 409, sem reconfiguracao silenciosa. Regressoes admin de autenticacao/sessao/CSRF e rollback real do codigo 73bee1c contra migration 025. Navegador controlado BLOCKED para fatia posterior: isolamento verificavel, UDP/WebRTC e egress deny-by-default. F44/F45 nao iniciadas. Evidencias de testes, revisao independente e CI HTTPS do SHA final no PR; sem merge/deploy.
+- **F08/GS10 BLOCKED (laboratorio):** Chromium sem --no-sandbox falha com perfil seccomp padrao Docker (No usable sandbox); diagnostico independente reproduziu unshare EPERM. Com seccomp=unconfined inicia, mas a fronteira nao foi comprovada. Perfil restritivo, mediador e testes HTTPS/WebRTC pendentes; NOT_VERIFIED preservado.
+- **F08 PARCIAL / GS10 pendente (PR #44):** armazenamento opt-in e consulta NOT_VERIFIED; conflito de origem retorna 409, sem reconfiguracao silenciosa. Regressoes admin de autenticacao/sessao/CSRF e rollback real do codigo 73bee1c contra migration 025. Navegador controlado BLOCKED para fatia posterior: isolamento verificavel, UDP/WebRTC e egress deny-by-default. F44 em recorte separado; F45 nao iniciada. Evidencias de testes, revisao independente e CI HTTPS do SHA final no PR; sem merge/deploy.
 - **Risco/Stealth F13/F14/F43 parciais:** procedencia limitada e gate comum em entrada e refresh, com LOW apenas laboratorial; `docs/RISK-STEALTH.md`. GS05/GS19 integrais e protecao ativa continuam pendentes. Validacao, revisao detached e CI HTTPS do SHA final devem constar no PR.
 - **Publicacao HTTPS em preparacao (F33/F07/F38 parciais):** branch baseada em 9a9995a; Nginx TLS com rotas publicas, headers sobrescritos, Node loopback, limites e timeouts, imagem/Compose Linux e smoke sem publicar. OBSERVE_ONLY preservado; admin privado separado.
 - **Prova HTTPS:** tests/https-gateway.test.ts; fronteira unitaria local e integracao Nginx/PostgreSQL/Chromium obrigatoria na CI Linux. Resultado do SHA final e revisao independente registrados no PR; nao considerar pronto antes desses gates.
@@ -51,3 +52,10 @@
 - **F21 parcial:** ancoras estaticas aprovadas em laboratorio; PostgreSQL e Chromium na CI 41730953550 (b79f29b), GS03 integral e F22 pendentes. Revisao independente do codigo em /root/f21_review; parecer condicionado a CI final.
 
 Estados: IMPLEMENTADO E TESTADO — refresh laboratorial do PR #38; IMPLEMENTADO PARCIALMENTE — F21/F25/F27/F41; REDUZIDO POR DECISÃO DOCUMENTADA — formulários (D07); PENDENTE — reconhecimento comercial adversarial e checkout externo; BLOQUEADO — nenhum bloqueio geral estabelecido.
+
+F44/GS20 — recorte laboratorial (PARCIAL): Core/fallback reais no gateway; canarios e GS20 integral pendentes, sem F45.
+- Janela explicita: baseline Core 30–10 min (2 buckets), ausencia Core 10 min, 2 buckets fallback e ultimo <2 min; atual UNKNOWN fora dela, historico separado por 7 dias.
+- Sinais nao autenticados; nenhuma identidade/adulteracao confirmada; NOT_VERIFIED preservado. Eventos 24h, deduplicacao por minuto e teto 10 mil/projeto por tabela.
+- PostgreSQL/Chromium: ambos, interrupcao, expiracao, historico, retomada, negativos/spoofing e retencao periodica sem trafego/isolamento passaram; regressao 58/58 (HTTPS Linux na CI), lint/typecheck/build e 9 testes documentais passaram.
+
+- Revisao independente /root/f44_review favoravel; sem P0/P1, delta degradation 70f594e / server 6fbb7d9; CI HTTPS final registrada no PR.
