@@ -7,7 +7,7 @@ import { once } from 'node:events';
 import { spawn } from 'node:child_process';
 import type { AddressInfo } from 'node:net';
 import { Pool } from 'pg';
-import { chromium } from 'playwright';
+import { chromium, type Page } from 'playwright';
 import { Secret, TOTP } from 'otpauth';
 import { selected } from '../apps/allocation.js';
 import { createAdminServer } from '../apps/admin-auth.js';
@@ -185,7 +185,7 @@ test('GS08: real checkout drift isolates a CTA through authenticated review in C
         const add=document.addEventListener.bind(document);
         document.addEventListener=((type:string,listener:EventListenerOrEventListenerObject,options?:boolean|AddEventListenerOptions)=>{add(type,listener,options);if(type==='click') document.documentElement.dataset.testCtaListener='installed';}) as typeof document.addEventListener;
       });
-      let requests=0;
+      let requests=0, nativePage:Page|undefined;
       visitor.on('request',request=>{if(request.url().endsWith('/entry-decision')) requests++;});
       await visitor.route('**/entry-decision',async route=>{
         const response=await route.fetch();
@@ -196,8 +196,7 @@ test('GS08: real checkout drift isolates a CTA through authenticated review in C
           await visitor.locator('[data-anticlone-point="premium1"]').evaluate(node=>node.setAttribute('target','_blank'));
           const popup=visitor.waitForEvent('popup');
           await visitor.locator('[data-anticlone-point="premium1"]').click();
-          const nativePage=await popup; await nativePage.waitForURL(clone+'/native-premium');
-          await nativePage.close();
+          nativePage=await popup; await nativePage.waitForURL(clone+'/native-premium');
           await visitor.locator('[data-anticlone-point="premium1"]').evaluate(node=>node.removeAttribute('target'));
         }
         await route.fulfill({response});
@@ -207,6 +206,7 @@ test('GS08: real checkout drift isolates a CTA through authenticated review in C
       assert.equal((await (await response).json() as {action:string}).action,'REPLACE_CONVERSION');
       await visitor.waitForFunction(()=>document.documentElement.dataset.testCtaListener==='installed');
       assert.equal(requests,1);
+      if(nativePage) { assert.equal(nativePage.url(),clone+'/native-premium'); await nativePage.close(); }
       assert.equal(await visitor.locator('[data-anticlone-point="premium1"]').getAttribute('href'),'/native-premium');
       await visitor.locator('[data-anticlone-point="premium1"]').click();
       await visitor.waitForURL(original+'/official-premium');
