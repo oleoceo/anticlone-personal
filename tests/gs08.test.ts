@@ -57,6 +57,8 @@ test('GS08: real checkout drift isolates a CTA through authenticated review in C
     await page.clock.pauseAt(new Date('2025-01-01T00:00:01Z'));
     await page.addInitScript(()=>{
       const now=performance.now.bind(performance);
+      let listenerReady:()=>void=()=>{};
+      Object.defineProperty(window,'__gs08ListenerReady',{value:new Promise<void>(resolve=>{listenerReady=resolve;})});
       const events:{event:string;time:number}[]=[];
       Object.defineProperty(window,'__gs08Events',{value:events});
       document.addEventListener('load',event=>{if (event.target instanceof HTMLScriptElement && new URL(event.target.src).pathname==='/core.js') events.push({event:'core-load',time:now()});},true);
@@ -65,7 +67,7 @@ test('GS08: real checkout drift isolates a CTA through authenticated review in C
       const add=document.addEventListener.bind(document);
       document.addEventListener=((type:string,listener:EventListenerOrEventListenerObject,options?:boolean|AddEventListenerOptions)=>{
         add(type,listener,options);
-        if(type==='click') {document.documentElement.dataset.testCtaListener='installed'; events.push({event:'listener-installed',time:now()});}
+        if(type==='click') {document.documentElement.dataset.testCtaListener='installed'; events.push({event:'listener-installed',time:now()}); listenerReady();}
       }) as typeof document.addEventListener;
     });
     const failures:string[]=[];
@@ -85,7 +87,8 @@ test('GS08: real checkout drift isolates a CTA through authenticated review in C
         assert.equal(status,200);
         assert.equal(body.action,'REPLACE_CONVERSION');
         assert.ok(body.mappings?.some(row=>row.marker==='premium1'), 'independent CTA must remain eligible');
-        await page.waitForFunction(()=>document.documentElement.dataset.testCtaListener==='installed');
+        await page.evaluate(()=> (window as unknown as {__gs08ListenerReady:Promise<void>}).__gs08ListenerReady);
+        assert.equal(await page.evaluate(()=>document.documentElement.dataset.testCtaListener),'installed');
         await page.locator(`[data-anticlone-point="${marker}"]`).click(); await page.waitForURL(expected);
       } catch (error) {
         const timing=await page.evaluate(()=>({now:performance.now(),readyState:document.readyState,listener:document.documentElement.dataset.testCtaListener ?? null,events:(window as unknown as {__gs08Events:unknown[]}).__gs08Events,resources:performance.getEntriesByType('resource').filter(entry=>/\/(?:core\.js|runtime\.js|entry-decision)$/.test(new URL(entry.name).pathname)).map(entry=>({path:new URL(entry.name).pathname,start:entry.startTime,duration:entry.duration}))})).catch(()=>null);
@@ -108,6 +111,12 @@ test('GS08: real checkout drift isolates a CTA through authenticated review in C
     // This page uses the real browser clock, unlike the deterministic positive scenario.
     const late=await browser.newPage();
     await late.addInitScript(()=>{
+      const json=Response.prototype.json;
+      Response.prototype.json=function(){
+        const result=json.call(this);
+        if (this.url.endsWith('/entry-decision')) void result.then(()=>requestAnimationFrame(()=>{document.documentElement.dataset.testDecisionProcessed='yes';}));
+        return result;
+      };
       const add=document.addEventListener.bind(document);
       document.addEventListener=((type:string,listener:EventListenerOrEventListenerObject,options?:boolean|AddEventListenerOptions)=>{
         add(type,listener,options);
@@ -128,6 +137,8 @@ test('GS08: real checkout drift isolates a CTA through authenticated review in C
     assert.equal(lateStatus,200); assert.equal(lateBody?.action,'REPLACE_CONVERSION');
     assert.ok(lateBody?.mappings?.some(row=>row.marker==='premium1'));
     assert.ok(heldMs>=150);
+    // A frame after JSON consumption lets the runtime's promise reactions complete before any click.
+    await late.waitForFunction(()=>document.documentElement.dataset.testDecisionProcessed==='yes');
     console.info(`GS08 late response held ${heldMs.toFixed(1)} ms after server response`);
     assert.equal(await late.evaluate(()=>document.documentElement.dataset.testCtaListener ?? null),null);
     await late.locator('[data-anticlone-point="premium1"]').click();
