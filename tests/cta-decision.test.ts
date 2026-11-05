@@ -8,7 +8,7 @@ test('D07: stored forms do not consume the active anchor mapping limit', async (
   assert.ok(process.env.TEST_DATABASE_URL);
   const db = new Pool({connectionString:process.env.TEST_DATABASE_URL});
   try {
-    for (const file of ['003_projects','007_protection_policy','011_cta_inventory','012_cta_policy']) {
+    for (const file of ['003_projects','007_protection_policy','011_cta_inventory','022_cta_capture_selection','012_cta_policy']) {
       await db.query(await readFile(`infra/${file}.sql`,'utf8'));
     }
     const project = 'd07_' + crypto.randomUUID();

@@ -12,8 +12,9 @@
       if (raw) {
         try { const parsed = new URL(raw, document.baseURI); if (['http:', 'https:'].includes(parsed.protocol) && !parsed.username && !parsed.password) { parsed.search = ''; parsed.hash = ''; url = parsed.href; } } catch (_) { /* unobservable destination */ }
       }
-      // Ordinal is a temporary locator, never identity. No text, price, value or selectors are collected.
-      return {marker, kind, parent: node.parentElement?.tagName.toLowerCase() || 'none', ordinal: index + 1, url};
+      // Synthetic laboratory content only: short visual context, never an identity signal.
+      const context = (node.textContent || '').replace(/[\u0000-\u001f\u007f\s]+/g, ' ').trim().slice(0, 160);
+      return {marker, kind, parent: node.parentElement?.tagName.toLowerCase() || 'none', ordinal: index + 1, url, context};
     });
   };
 })();

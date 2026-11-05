@@ -1,4 +1,4 @@
-﻿import { test } from 'node:test';
+import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -17,7 +17,7 @@ test('expiry preserves events, respects active delivery and survives workers and
   const db=new Pool({connectionString:process.env.TEST_DATABASE_URL,options});
   const other=new Pool({connectionString:process.env.TEST_DATABASE_URL,options});
   try {
-    for(const file of ['001_initial','002_alerts','003_projects','004_observation_sources','011_cta_inventory','014_cta_drift_alerts','015_cta_alert_deliveries','016_cta_local_smtp','018_notification_budget','019_alert_outbox_expiry','020_cta_delivery_expiry'])
+    for(const file of ['001_initial','002_alerts','003_projects','004_observation_sources','011_cta_inventory','022_cta_capture_selection','014_cta_drift_alerts','015_cta_alert_deliveries','016_cta_local_smtp','018_notification_budget','019_alert_outbox_expiry','020_cta_delivery_expiry'])
       await db.query(await readFile(`infra/${file}.sql`,'utf8'));
     await db.query("INSERT INTO projects(id,name,origin) VALUES('p','p','http://localhost')");
     const point=randomUUID();
