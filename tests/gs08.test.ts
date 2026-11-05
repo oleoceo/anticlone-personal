@@ -52,11 +52,11 @@ test('GS08: real checkout drift isolates a CTA through authenticated review in C
     let ready=false; for(let i=0;i<100;i++){try{if((await fetch('http://127.0.0.1:3000/runtime.js')).ok){ready=true;break;}}catch{} await new Promise(r=>setTimeout(r,100));} assert.ok(ready);
     browser=await chromium.launch({headless:true,args:['--host-resolver-rules=MAP localhost 127.0.0.1']});
     const page=await browser.newPage();
+    // Freeze browser time only for the positive functional scenario; late response uses real time.
+    await page.clock.install({time:new Date('2025-01-01T00:00:00Z')});
+    await page.clock.pauseAt(new Date('2025-01-01T00:00:01Z'));
     await page.addInitScript(()=>{
       const now=performance.now.bind(performance);
-      const ticks:number[]=[];
-      Object.defineProperty(performance,'now',{value:()=>{const value=now(); ticks.push(value); return value;}});
-      Object.defineProperty(window,'__gs08Ticks',{value:ticks});
       const events:{event:string;time:number}[]=[];
       Object.defineProperty(window,'__gs08Events',{value:events});
       document.addEventListener('load',event=>{if (event.target instanceof HTMLScriptElement && new URL(event.target.src).pathname==='/core.js') events.push({event:'core-load',time:now()});},true);
@@ -88,7 +88,7 @@ test('GS08: real checkout drift isolates a CTA through authenticated review in C
         await page.waitForFunction(()=>document.documentElement.dataset.testCtaListener==='installed');
         await page.locator(`[data-anticlone-point="${marker}"]`).click(); await page.waitForURL(expected);
       } catch (error) {
-        const timing=await page.evaluate(()=>({now:performance.now(),readyState:document.readyState,listener:document.documentElement.dataset.testCtaListener ?? null,ticks:(window as unknown as {__gs08Ticks:number[]}).__gs08Ticks,events:(window as unknown as {__gs08Events:unknown[]}).__gs08Events,resources:performance.getEntriesByType('resource').filter(entry=>/\/(?:core\.js|runtime\.js|entry-decision)$/.test(new URL(entry.name).pathname)).map(entry=>({path:new URL(entry.name).pathname,start:entry.startTime,duration:entry.duration}))})).catch(()=>null);
+        const timing=await page.evaluate(()=>({now:performance.now(),readyState:document.readyState,listener:document.documentElement.dataset.testCtaListener ?? null,events:(window as unknown as {__gs08Events:unknown[]}).__gs08Events,resources:performance.getEntriesByType('resource').filter(entry=>/\/(?:core\.js|runtime\.js|entry-decision)$/.test(new URL(entry.name).pathname)).map(entry=>({path:new URL(entry.name).pathname,start:entry.startTime,duration:entry.duration}))})).catch(()=>null);
         const points=await db.query('SELECT marker,review_required FROM cta_points WHERE project_id=$1 ORDER BY marker',[project]);
         console.error('GS08 diagnostic',JSON.stringify({navigation,marker,status,body,premiumEligible:body?.mappings?.some(row=>row.marker==='premium1') ?? false,timing,failures,points:points.rows}));
         throw error;
@@ -104,6 +104,35 @@ test('GS08: real checkout drift isolates a CTA through authenticated review in C
     const point=points.find(x=>x.marker==='basic001').id;
     assert.deepEqual((await db.query('SELECT point_id,reason FROM cta_drift_alerts WHERE project_id=$1',[project])).rows,[{point_id:point,reason:'DESTINATION_CHANGED'}]);
     assert.deepEqual((await db.query('SELECT d.delivery_mode FROM cta_alert_deliveries d JOIN cta_drift_alerts a ON a.id=d.alert_id WHERE a.project_id=$1',[project])).rows,[{delivery_mode:'SMTP_LOCAL'}]);
+    // Keep the server and PostgreSQL real, but hold this response beyond the runtime deadline.
+    // This page uses the real browser clock, unlike the deterministic positive scenario.
+    const late=await browser.newPage();
+    await late.addInitScript(()=>{
+      const add=document.addEventListener.bind(document);
+      document.addEventListener=((type:string,listener:EventListenerOrEventListenerObject,options?:boolean|AddEventListenerOptions)=>{
+        add(type,listener,options);
+        if(type==='click') document.documentElement.dataset.testCtaListener='installed';
+      }) as typeof document.addEventListener;
+    });
+    let lateStatus=0, lateBody:{action?:string;mappings?:{marker:string}[]}|undefined, heldMs=0;
+    await late.route('**/entry-decision',async route=>{
+      const response=await route.fetch();
+      lateStatus=response.status(); lateBody=await response.json() as typeof lateBody;
+      const start=await late.evaluate(()=>performance.now());
+      await late.waitForFunction(t=>performance.now()-t>=150,start);
+      heldMs=await late.evaluate(t=>performance.now()-t,start);
+      await route.fulfill({response});
+    });
+    const lateResponse=late.waitForResponse(r=>r.url().endsWith('/entry-decision'));
+    await late.goto(clone+'/clone'); await lateResponse;
+    assert.equal(lateStatus,200); assert.equal(lateBody?.action,'REPLACE_CONVERSION');
+    assert.ok(lateBody?.mappings?.some(row=>row.marker==='premium1'));
+    assert.ok(heldMs>=150);
+    console.info(`GS08 late response held ${heldMs.toFixed(1)} ms after server response`);
+    assert.equal(await late.evaluate(()=>document.documentElement.dataset.testCtaListener ?? null),null);
+    await late.locator('[data-anticlone-point="premium1"]').click();
+    await late.waitForURL(clone+'/native-premium');
+    await late.close();
     await click('basic001',clone+'/changed'); await click('premium1',original+'/official-premium');
     const observation=(await db.query("SELECT id,confidence FROM cta_observations WHERE project_id=$1 AND point_id=$2 ORDER BY observed_at DESC,id DESC LIMIT 1",[project,point])).rows[0];
     assert.equal(observation.confidence,'HIGH');
