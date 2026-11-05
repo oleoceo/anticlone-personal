@@ -95,7 +95,7 @@ test('CTA selection is authenticated, capture-scoped and never activates mitigat
     await assert.rejects(selectObservation(db,race),SelectionConflict);
     await page.goto(base+'/admin/ui/'); await page.getByLabel('Projeto').fill('p'); await page.getByLabel('Superfície').fill('landing'); await page.getByRole('button',{name:'Consultar CTAs'}).click();
     await page.getByText('Seleções pendentes de capturas anteriores, desatualizadas e sem ativação: 1',{exact:false}).waitFor();
-    const cookie=(await page.context().cookies(base)).find(c=>c.name==='admin_session'); assert.ok(cookie);
+    const cookie=(await page.context().cookies(base+'/admin/ui/')).find(c=>c.name==='admin_session'); assert.ok(cookie);
     const unauth=await fetch(base+'/admin/ui/cta-selection',{method:'POST',headers:{origin:base,'sec-fetch-site':'same-origin','content-type':'application/json'},body:JSON.stringify(body)}); assert.equal(unauth.status,403);
     const noCsrf=await fetch(base+'/admin/ui/cta-selection',{method:'POST',headers:{origin:base,'sec-fetch-site':'same-origin','content-type':'application/json',cookie:`admin_session=${cookie.value}`},body:JSON.stringify(body)}); assert.equal(noCsrf.status,403);
   } finally {if(browser) await browser.close(); if(app && app.exitCode===null && app.signalCode===null) {app.kill('SIGTERM');await once(app,'exit');} if(fixture?.listening) await new Promise<void>(r=>fixture!.close(()=>r())); if(server?.listening) await new Promise<void>(r=>server!.close(()=>r())); await db.end(); await root.query(`DROP SCHEMA ${schema} CASCADE`); await root.end();}
