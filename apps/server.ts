@@ -8,11 +8,13 @@ import { entryDecision, approvedDestination } from './page-redirect.js';
 import { validateAllocation } from './allocation.js';
 import { ctaDecision } from './cta-policy.js';
 import { safeEvaluateRisk, recordRisk } from './risk.js';
+import { gatewayMode } from './gateway-mode.js';
 const connectionString = process.env.DATABASE_URL, project = process.env.PROJECT_ID;
 const smtpPort = Number(process.env.SMTP_PORT), port = Number(process.env.PORT ?? 3000);
 if (!connectionString || !project || !/^[a-zA-Z0-9_-]{1,64}$/.test(project) || !Number.isInteger(smtpPort) || smtpPort < 1 || smtpPort > 65535 || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('invalid local test configuration');
 const activeProject: string = project;
 const pool = new Pool({ connectionString });
+if (process.env.GATEWAY_MODE === 'PILOT_OBSERVE' && (process.env.ALLOWED_ORIGIN || process.env.LAB_CONTROLLED_ORIGIN || process.env.LAB_CONTROLLED_RISK)) throw Error('laboratory configuration forbidden in pilot');
 // One-time legacy import is driven solely by the local operator's old configuration.
 const legacyOrigin = process.env.ALLOWED_ORIGIN && configuredOrigin(process.env.ALLOWED_ORIGIN);
 if (legacyOrigin) {
@@ -23,6 +25,7 @@ await pool.query('SELECT project_id,host,day,level,evaluator_version,source,reas
 const projectRow = await pool.query('SELECT origin FROM projects WHERE id=$1', [activeProject]);
 if (projectRow.rowCount !== 1) throw new Error('unknown project');
 const normalizedOrigin = configuredOrigin(projectRow.rows[0].origin);
+const mode = gatewayMode(process.env, normalizedOrigin);
 if (legacyOrigin && legacyOrigin !== normalizedOrigin) throw new Error('legacy configuration conflicts with project');
 // The operator controls this local experiment; requests never provide risk.
 const controlledOrigin = process.env.LAB_CONTROLLED_ORIGIN ? configuredOrigin(process.env.LAB_CONTROLLED_ORIGIN) : undefined;
@@ -69,6 +72,7 @@ const server = http.createServer((req, res) => {
       const assessment = safeEvaluateRisk(controlledOrigin === origin && origin !== normalizedOrigin && process.env.LAB_CONTROLLED_RISK === 'LOW');
       if (!assessment) return {action:'OBSERVE_ONLY'};
       await recordRisk(pool, activeProject, new URL(origin).hostname, assessment);
+      if (mode.pilot) return {action:'OBSERVE_ONLY'};
       const result = await pool.query('SELECT v.version,v.enabled,v.approved_destination,v.allocation FROM active_protection_policies a JOIN protection_policy_versions v ON v.project_id=a.project_id AND v.version=a.version WHERE a.project_id=$1 AND v.stealth=true', [activeProject]);
       const entryPolicy = result.rows[0];
       // Invalid enabled entry policy is an evaluation failure, not permission to continue.
@@ -108,7 +112,7 @@ const server = http.createServer((req, res) => {
       if (!req.headers.origin || origin !== configuredOrigin(req.headers.origin)) throw new Error('origin mismatch');
     }
     catch { res.writeHead(400).end(); return; }
-    void observe(pool, activeProject, normalizedOrigin, origin, req.url === '/observe/fallback' ? 'fallback' : 'core', evidence).then(result => res.writeHead(result === 'capacity' ? 429 : 204).end()).catch(() => res.writeHead(503).end());
+    void observe(pool, activeProject, mode.origins, origin, req.url === '/observe/fallback' ? 'fallback' : 'core', evidence).then(result => res.writeHead(result === 'capacity' ? 429 : 204).end()).catch(() => res.writeHead(503).end());
   });
 });
 server.requestTimeout = 5000; server.headersTimeout = 6000;

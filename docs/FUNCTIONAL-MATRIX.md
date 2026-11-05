@@ -7,7 +7,7 @@ Legenda: **P** = planejada no Personal; **PARCIAL** = parte comprovada, capacida
 | ID | Capacidade operacional preservada | Fonte SaaS (arquivo ou texto) | Prova mínima / cenário | Sit. |
 |---|---|---|---|---|
 | F01 | Vários projetos próprios e identidade estável independente da URL | 12-MVP-SCOPE, 14-DOMAIN-MODEL | GS16, GS01; cadastro e isolamento local em tests/projects.test.ts, CI 41677878620 | PARCIAL |
-| F02 | Múltiplas origens autorizadas, preview/staging e pathnames | 12-MVP-SCOPE, 23-RUNTIME-PROTOCOL | GS01 | P |
+| F02 | Múltiplas origens autorizadas, preview/staging e pathnames | 12-MVP-SCOPE, 23-RUNTIME-PROTOCOL | Lista exata HTTPS em PILOT_OBSERVE: tests/pilot-observation.test.ts, PostgreSQL/Chromium local; pathnames e GS01 integral pendentes, docs/PILOT-OBSERVATION.md | PARCIAL |
 | F03 | Instalação universal HTML/React/Vite/WordPress quando permitido | 12-MVP-SCOPE, 27-COMPATIBILITY-MATRIX | GS01, GS10 | P |
 | F04 | Bootstrap pequeno + Core Runtime | 23-RUNTIME-PROTOCOL | Carregamento e falha em Chromium, tests/gs02.test.ts, CI 41680979048; instalação limitada a laboratório | PARCIAL |
 | F05 | Fallback independente com capacidades limitadas | 23-RUNTIME-PROTOCOL | GS09 parcial: fallback e canários em Chromium, tests/gs02.test.ts; CSP e outros navegadores pendentes | PARCIAL |
