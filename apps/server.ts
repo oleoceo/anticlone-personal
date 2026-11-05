@@ -12,6 +12,7 @@ import { gatewayMode } from './gateway-mode.js';
 import { gatewayBoundary } from './gateway-boundary.js';
 import { recordInstallationClaim } from './installation.js';
 import { recordDegradationClaim, degradationState, maintainDegradation } from './degradation.js';
+import { optionalSchemas } from './optional-schema.js';
 const boundary = gatewayBoundary(process.env);
 const connectionString = process.env.DATABASE_URL, project = process.env.PROJECT_ID;
 const smtpPort = Number(process.env.SMTP_PORT), port = Number(process.env.PORT ?? 3000);
@@ -31,6 +32,7 @@ const projectRow = await pool.query('SELECT origin FROM projects WHERE id=$1', [
 if (projectRow.rowCount !== 1) throw new Error('unknown project');
 const normalizedOrigin = configuredOrigin(projectRow.rows[0].origin);
 const mode = gatewayMode(process.env, normalizedOrigin);
+const optional = await optionalSchemas(pool);
 if (legacyOrigin && legacyOrigin !== normalizedOrigin) throw new Error('legacy configuration conflicts with project');
 // The operator controls this local experiment; requests never provide risk.
 const controlledOrigin = process.env.LAB_CONTROLLED_ORIGIN ? configuredOrigin(process.env.LAB_CONTROLLED_ORIGIN) : undefined;
@@ -46,9 +48,9 @@ const claimAfter = new Map<string,number>();
 function recordClaim(origin: string, source: 'core' | 'fallback') {
   if (origin !== normalizedOrigin || claimPending.has(source) || Date.now() < (claimAfter.get(source) ?? 0)) return;
   claimPending.add(source);
-  // Bound database work and error logging even when the migration is not present.
+  // Bound writes for installed, explicitly enabled projects. Missing schemas are skipped by the gate.
   claimAfter.set(source,Date.now()+60_000);
-  void recordInstallationClaim(pool,activeProject,origin,source).catch(() => process.stderr.write('installation claim unavailable\n')).finally(()=>claimPending.delete(source));
+  void optional.installation.run('claim', () => recordInstallationClaim(pool,activeProject,origin,source)).finally(()=>claimPending.delete(source));
 }
 const server = http.createServer((req, res) => {
   if (!boundary(req, res)) return;
@@ -135,9 +137,10 @@ const server = http.createServer((req, res) => {
     void observe(pool, activeProject, mode.origins, origin, source, evidence).then(result => {
       if (result === 'authorized') recordClaim(origin,source);
       if (!mode.pilot && controlledOrigin && origin === controlledOrigin && origin !== normalizedOrigin) {
-        void recordDegradationClaim(pool,activeProject,new URL(origin).hostname,source)
-          .then(() => degradationState(pool,activeProject,new URL(origin).hostname))
-          .catch(() => process.stderr.write('degradation correlation unavailable\n'));
+        void optional.degradation.run('correlation', async () => {
+          await recordDegradationClaim(pool,activeProject,new URL(origin).hostname,source);
+          await degradationState(pool,activeProject,new URL(origin).hostname);
+        });
       }
       res.writeHead(result === 'capacity' ? 429 : 204).end();
     }).catch(() => res.writeHead(503).end());
@@ -153,11 +156,11 @@ async function maintenance() {
   if (busy) return;
   busy = true;
   try {
-    await maintainDegradation(pool, activeProject).catch(() => process.stderr.write('degradation maintenance unavailable\n'));
+    await optional.degradation.run('maintenance', () => maintainDegradation(pool, activeProject));
     await cleanup(pool, activeProject); await deliverOne(pool, activeProject, smtpPort);
     if (Date.now() >= installationCleanupAfter) {
-      installationCleanupAfter = Date.now() + 60 * 60_000;
-      await pool.query("DELETE FROM installation_signals WHERE project_id=$1 AND last_observed_at < now()-interval '7 days'", [activeProject]).catch(() => process.stderr.write('installation retention unavailable\n'));
+      const completed = await optional.installation.run('retention', () => pool.query("DELETE FROM installation_signals WHERE project_id=$1 AND last_observed_at < now()-interval '7 days'", [activeProject]));
+      if (completed) installationCleanupAfter = Date.now() + 60 * 60_000;
     }
   }
   catch { process.stderr.write('maintenance failed\n'); }

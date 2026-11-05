@@ -59,3 +59,9 @@ F44/GS20 — recorte laboratorial (PARCIAL): Core/fallback reais no gateway; can
 - PostgreSQL/Chromium: ambos, interrupcao, expiracao, historico, retomada, negativos/spoofing e retencao periodica sem trafego/isolamento passaram; regressao 58/58 (HTTPS Linux na CI), lint/typecheck/build e 9 testes documentais passaram.
 
 - Revisao independente /root/f44_review favoravel; sem P0/P1, delta degradation 70f594e / server 6fbb7d9; CI HTTPS final registrada no PR.
+
+PR #45 — compatibilidade de manutencao em schemas legados (delta sobre 692f7c5):
+- Catalogo consultado uma vez; ausencia 025/026 fica NOT_INSTALLED ate reinicio, sem acessar tabelas ausentes ou bloquear capacidades anteriores.
+- Falhas reais permanecem DATABASE_ERROR com codigo seguro e pausa de 60s; opt-in e regras de ativacao anteriores preservados.
+- Regressao nova: 5/5 testes passaram (quatro combinacoes de schema, retencao/isolamento, ausencia de erros repetidos, falha inesperada e recuperacao).
+- Validacao local: 63 testes aprovados, 1 HTTPS reservado para CI; lint/typecheck/build e 9 testes Python passaram. Revisao /root/legacy_maintenance_review favoravel ao delta, sem bloqueios; CI final no PR. F44 PARCIAL, NOT_VERIFIED e OBSERVE_ONLY preservados.
