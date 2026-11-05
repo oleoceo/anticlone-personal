@@ -51,6 +51,20 @@ test('GS06 integration: persisted policy, controlled LOW and original', {timeout
     assert.ok(!JSON.stringify(requests).includes('privatevalue'));
     await saveDraft(db,project,{enabled:true,approved_destination:original+'/approved',stealth:true,allocation:{PAID_ATTRIBUTED:100,ORGANIC:100,REFERRAL:100,DIRECT_UNKNOWN:100}}); await activatePolicy(db,project);
     await page.goto(clone+'/clone'); await page.waitForURL(original+'/approved'); await page.waitForTimeout(400); assert.equal(page.url(),original+'/approved');
+    // A valid redirect delivered after the entry deadline must leave native navigation usable.
+    const timed=await browser.newPage();
+    await timed.route('**/entry-decision',async route=>{
+      const response=await route.fetch();
+      assert.equal((await response.json() as {action:string}).action,'PAGE_REDIRECT');
+      await new Promise(resolve=>setTimeout(resolve,250));
+      await route.fulfill({response});
+    });
+    const timedResponse=timed.waitForResponse(r=>r.url().endsWith('/entry-decision'));
+    await timed.goto(clone+'/clone'); await timedResponse;
+    await timed.waitForTimeout(100);
+    assert.equal(timed.url(),clone+'/clone');
+    await timed.getByText('next',{exact:true}).click(); await timed.waitForURL(clone+'/next');
+    await timed.close();
     let observed=false; for(let n=0;n<50;n++){if((await db.query('SELECT id FROM incidents WHERE project_id=$1',[project])).rowCount){observed=true;break;} await new Promise(r=>setTimeout(r,100));} assert.ok(observed);
     app.kill('SIGTERM'); await once(app,'exit'); app=start('');
     let uncertainReady=false; for(let n=0;n<100;n++){try { if((await fetch('http://127.0.0.1:3000/runtime.js')).ok){uncertainReady=true;break;} }catch {} await new Promise(r=>setTimeout(r,100));} assert.ok(uncertainReady);

@@ -12,3 +12,5 @@
 | D07 | Suspender interceptação de formulários no runtime; manter mapeamentos armazenados sem ativá-los no browser. | PR #18: Chromium reproduziu navegação antes de cancelamento por listener de window registrado durante submit. Redução de escopo autorizada após correções anteriores preserva envio nativo e evita redirecionar dados não aprovados; F22 formulários permanece pendente. | ESCOPO REDUZIDO; tests/form-cancellation.test.ts |
 
 Não adicionar decisões para preferências triviais; registrar somente trade-offs com efeito de contrato, custo, operação ou segurança. Documentos SaaS não reabrem decisão sem evidência.
+
+| D08 | Separar o prazo de entrada PAGE_REDIRECT (150 ms, fail-open) da preparacao assincrona REPLACE_CONVERSION, sem prazo global de 150 ms para CTA. | Contrato confirmado pelo proprietario no PR #36: CTA valido pode ficar pronto antes do clique; tempo nao altera risco nem percentual. Interacao precoce cancela preparacao pendente; abandono ou mudanca de pathname/query invalida definitivamente a decisao da navegacao. Hash no mesmo contexto continua permitido. | APROVADA PELO PROPRIETARIO; evidencias do HEAD final no PR #36 |
