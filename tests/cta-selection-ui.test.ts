@@ -4,12 +4,14 @@ import { readFile } from 'node:fs/promises';
 import { randomUUID, scryptSync } from 'node:crypto';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
+import { spawn } from 'node:child_process';
 import type { AddressInfo } from 'node:net';
 import { Pool } from 'pg';
 import { chromium } from 'playwright';
 import { Secret, TOTP } from 'otpauth';
 import { createAdminServer } from '../apps/admin-auth.js';
-import { importInventory, selectObservation, SelectionConflict } from '../apps/cta-inventory.js';
+import { importInventory, mapPoint, selectObservation, SelectionConflict } from '../apps/cta-inventory.js';
+import { publishCtaPolicy } from '../apps/cta-policy.js';
 
 test('CTA selection is authenticated, capture-scoped and never activates mitigation', {timeout:90000}, async()=>{
   assert.ok(process.env.TEST_DATABASE_URL);
@@ -17,20 +19,21 @@ test('CTA selection is authenticated, capture-scoped and never activates mitigat
   await root.query(`CREATE SCHEMA ${schema}`);
   const db=new Pool({connectionString:process.env.TEST_DATABASE_URL,options:`-c search_path=${schema}`});
   let server:ReturnType<typeof createAdminServer>|undefined, fixture:ReturnType<typeof createServer>|undefined, browser:Awaited<ReturnType<typeof chromium.launch>>|undefined;
+  let app:ReturnType<typeof spawn>|undefined;
   try {
-    for(const f of ['001_initial','002_alerts','003_projects','004_observation_sources','005_canaries','006_page_redirect','007_protection_policy','008_traffic_observations','009_risk_assessments','010_policy_allocation','011_cta_inventory','012_cta_policy','013_cta_review','014_cta_drift_alerts','015_cta_alert_deliveries','016_cta_local_smtp','017_notification_settings','018_notification_budget','019_alert_outbox_expiry','020_cta_delivery_expiry','021_notification_intent_reconciliation','022_cta_capture_selection']) await db.query(await readFile(`infra/${f}.sql`,'utf8'));
+    for(const f of ['001_initial','002_alerts','003_projects','004_observation_sources','005_canaries','006_page_redirect','007_protection_policy','008_traffic_observations','009_risk_assessments','010_policy_allocation','011_cta_inventory','012_cta_policy','013_cta_review','014_cta_drift_alerts','015_cta_alert_deliveries','016_cta_local_smtp','017_notification_settings','018_notification_budget','019_alert_outbox_expiry','020_cta_delivery_expiry','021_notification_intent_reconciliation','022_cta_capture_selection']) await db.query((await readFile(`infra/${f}.sql`,'utf8')).replace(/^\uFEFF/,''));
     await db.query('CREATE TABLE admin_totp_replay (factor_id text PRIMARY KEY, last_counter bigint NOT NULL)');
     await db.query('CREATE TABLE admin_totp_codes (factor_id text NOT NULL, digest text NOT NULL, valid_until bigint NOT NULL, PRIMARY KEY(factor_id,digest))');
     const secret='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', salt='0123456789abcdef0123456789abcdef', clock=1000000000;
     const record=`scrypt$${salt}$${scryptSync('password',Buffer.from(salt,'hex'),64).toString('hex')}`;
     server=createAdminServer(record,secret,db,()=>clock).listen(0,'127.0.0.1'); await once(server,'listening');
-    fixture=createServer((req,res)=>res.writeHead(200,{'content-type':'text/html'}).end(req.url==='/clone'?'<a data-anticlone-point="known001" href="/one">Mesmo</a><a data-anticlone-point="known002" href="/two">Mesmo</a><a data-anticlone-point="known003" href="/three">Mesmo</a><a href="/four%3Cscript%3E">Mesmo</a>':'native')).listen(0,'127.0.0.1'); await once(fixture,'listening');
-    const origin=`http://127.0.0.1:${(fixture.address() as AddressInfo).port}`, base=`http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    fixture=createServer((req,res)=>res.writeHead(200,{'content-type':'text/html'}).end(req.url==='/clone'?'<a data-anticlone-point="known001" href="/one">Mesmo</a><a data-anticlone-point="known002" href="/two">Mesmo</a><a data-anticlone-point="known003" href="/three">Mesmo</a><a href="/four">&lt;img src=x onerror=alert(1)&gt;</a><script src="http://127.0.0.1:3000/runtime.js"></script>':'native')).listen(0,'127.0.0.1'); await once(fixture,'listening');
+    const origin=`http://127.0.0.1:${(fixture.address() as AddressInfo).port}`, clone=`http://localhost:${(fixture.address() as AddressInfo).port}`, base=`http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     await db.query('INSERT INTO projects(id,name,origin) VALUES($1,$1,$2),($3,$3,$4)',['p',origin,'q','http://localhost:9999']);
     const destination=randomUUID(), wrong=randomUUID();
     await db.query('INSERT INTO cta_destinations(project_id,offer,id,url) VALUES($1,$2,$3,$4),($5,$2,$6,$7)',['p','offer4',destination,origin+'/approved','q',wrong,'http://localhost:9999/approved']);
-    browser=await chromium.launch({headless:true}); const page=await browser.newPage();
-    await page.goto(origin+'/clone'); await page.addScriptTag({content:await readFile('runtime/cta-inventory.js','utf8')});
+    browser=await chromium.launch({headless:true,args:['--host-resolver-rules=MAP localhost 127.0.0.1']}); const page=await browser.newPage();
+    await page.goto(clone+'/clone'); await page.addScriptTag({content:await readFile('runtime/cta-inventory.js','utf8')});
     const candidates=await page.evaluate(()=>(window as unknown as {anticloneLabInventory:()=>unknown[]}).anticloneLabInventory());
     await importInventory(db,'p',{surface:'landing',candidates});
     await page.goto(base+'/admin/ui/');
@@ -41,13 +44,22 @@ test('CTA selection is authenticated, capture-scoped and never activates mitigat
     await page.getByRole('button',{name:'Consultar CTAs'}).click();
     await page.getByText('CTA observado, mas ainda sem identidade suficiente para substituição.',{exact:false}).waitFor();
     assert.equal(await page.locator('#cta-list input').count(),4);
-    assert.match(await page.locator('#cta-list').innerText(),/four%3Cscript%3E/i);
-    assert.equal(await page.locator('#cta-list script').count(),0);
+    assert.match(await page.locator('#cta-list').innerText(),/<img src=x onerror=alert\(1\)>/);
+    assert.equal(await page.locator('#cta-list img').count(),0);
     await page.locator('#cta-list input').nth(3).check(); await page.getByRole('button',{name:'Confirmar seleção pendente'}).click();
     await page.getByText('Seleção PENDENTE registrada; redirecionamento não ativado.').waitFor();
     const intent=(await db.query('SELECT * FROM cta_selection_intents')).rows[0]; assert.equal(intent.state,'PENDING');
     assert.equal((await db.query('SELECT count(*)::int AS n FROM cta_mappings')).rows[0].n,0);
-    await page.goto(origin+'/clone'); await page.locator('a').nth(3).click(); assert.match(page.url(),/four%3Cscript%3E/i);
+    const known=(await db.query("SELECT id FROM cta_points WHERE project_id='p' AND marker='known001'")).rows[0].id;
+    await mapPoint(db,'p',{pointId:known,offer:'offer4',destinationId:destination});
+    await publishCtaPolicy(db,'p',{enabled:true,surface:'landing',pathname:'/clone',allocation:{PAID_ATTRIBUTED:100,ORGANIC:100,REFERRAL:100,DIRECT_UNKNOWN:100}});
+    app=spawn(process.execPath,['dist/apps/server.js'],{env:{...process.env,PGOPTIONS:`-c search_path=${schema}`,DATABASE_URL:process.env.TEST_DATABASE_URL,PROJECT_ID:'p',SMTP_PORT:'25252',PORT:'3000',LAB_CONTROLLED_ORIGIN:clone,LAB_CONTROLLED_RISK:'LOW'},stdio:['ignore','ignore','inherit']});
+    let ready=false; for(let i=0;i<100;i++){try{if((await fetch('http://127.0.0.1:3000/runtime.js')).ok){ready=true;break;}}catch{} await new Promise(r=>setTimeout(r,100));} assert.ok(ready);
+    await page.addInitScript(()=>{const add=document.addEventListener.bind(document); document.addEventListener=((type:string,listener:EventListenerOrEventListenerObject,options?:boolean|AddEventListenerOptions)=>{add(type,listener,options);if(type==='click') document.documentElement.dataset.cta='ready';}) as typeof document.addEventListener;});
+    let decisions=0; page.on('request',r=>{if(r.url().endsWith('/entry-decision')) decisions++;});
+    const visit=async()=>{const decision=page.waitForResponse(r=>r.url().endsWith('/entry-decision') && r.status()===200); await page.goto(clone+'/clone'); await decision; await page.waitForFunction(()=>document.documentElement.dataset.cta==='ready');};
+    await visit(); let before=decisions; await page.locator('a').first().click(); assert.equal(page.url(),origin+'/approved'); assert.equal(decisions,before);
+    await visit(); before=decisions; await page.locator('a').nth(3).click(); assert.equal(page.url(),clone+'/four'); assert.equal(decisions,before);
     const body={project:'p',surface:'landing',captureId:intent.capture_id,pointId:intent.point_id,observationId:String(intent.observation_id),offer:'offer4',destinationId:destination};
     await assert.rejects(selectObservation(db,{...body,project:'q'}),SelectionConflict);
     await assert.rejects(selectObservation(db,{...body,surface:'other'}),SelectionConflict);
@@ -55,6 +67,14 @@ test('CTA selection is authenticated, capture-scoped and never activates mitigat
     await assert.rejects(selectObservation(db,{...body,offer:'wrong'}),SelectionConflict);
     await db.query("UPDATE cta_observations SET observed_at=now()-interval '8 days' WHERE id=$1",[body.observationId]);
     await assert.rejects(selectObservation(db,body),SelectionConflict);
+    await db.query("UPDATE cta_observations SET observed_at=clock_timestamp()-interval '7 days'+interval '1 second' WHERE id=$1",[body.observationId]);
+    const lock=await db.connect();
+    try {
+      await lock.query('BEGIN'); await lock.query('SELECT id FROM projects WHERE id=$1 FOR UPDATE',['p']);
+      const waiting=selectObservation(db,body);
+      await new Promise(r=>setTimeout(r,1500)); await lock.query('COMMIT');
+      await assert.rejects(waiting,SelectionConflict);
+    } finally {lock.release();}
     await importInventory(db,'p',{surface:'landing',candidates});
     await assert.rejects(selectObservation(db,body),SelectionConflict);
     const fresh=(await db.query('SELECT c.id AS capture_id,o.id AS observation_id,o.point_id FROM cta_captures c JOIN cta_observations o ON o.capture_id=c.id WHERE c.is_current AND c.project_id=$1 ORDER BY o.id DESC LIMIT 1',['p'])).rows[0];
@@ -71,5 +91,5 @@ test('CTA selection is authenticated, capture-scoped and never activates mitigat
     const cookie=(await page.context().cookies(base)).find(c=>c.name==='admin_session'); assert.ok(cookie);
     const unauth=await fetch(base+'/admin/ui/cta-selection',{method:'POST',headers:{origin:base,'sec-fetch-site':'same-origin','content-type':'application/json'},body:JSON.stringify(body)}); assert.equal(unauth.status,403);
     const noCsrf=await fetch(base+'/admin/ui/cta-selection',{method:'POST',headers:{origin:base,'sec-fetch-site':'same-origin','content-type':'application/json',cookie:`admin_session=${cookie.value}`},body:JSON.stringify(body)}); assert.equal(noCsrf.status,403);
-  } finally {if(browser) await browser.close(); if(fixture?.listening) await new Promise<void>(r=>fixture!.close(()=>r())); if(server?.listening) await new Promise<void>(r=>server!.close(()=>r())); await db.end(); await root.query(`DROP SCHEMA ${schema} CASCADE`); await root.end();}
+  } finally {if(browser) await browser.close(); if(app && app.exitCode===null && app.signalCode===null) {app.kill('SIGTERM');await once(app,'exit');} if(fixture?.listening) await new Promise<void>(r=>fixture!.close(()=>r())); if(server?.listening) await new Promise<void>(r=>server!.close(()=>r())); await db.end(); await root.query(`DROP SCHEMA ${schema} CASCADE`); await root.end();}
 });

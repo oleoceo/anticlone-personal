@@ -3,7 +3,7 @@ import type { Pool } from 'pg';
 import { approvedDestination } from './page-redirect.js';
 import { tryIntent } from './notification-intents.js';
 
-type Candidate = {marker: string | null; kind: string; parent: string; ordinal: number; url: string | null};
+type Candidate = {marker: string | null; kind: string; parent: string; ordinal: number; url: string | null; context: string | null};
 const offerPattern = /^[a-zA-Z0-9_-]{1,64}$/;
 const markerPattern = /^[a-zA-Z0-9_-]{8,64}$/;
 function object(value: unknown): Record<string, unknown> {
@@ -28,9 +28,11 @@ function candidates(body: unknown): {surface: string; rows: Candidate[]} {
   if (typeof data.surface !== 'string' || !offerPattern.test(data.surface)) throw Error('invalid surface');
   if (!Array.isArray(data.candidates) || data.candidates.length > 100) throw Error('invalid candidates');
   const rows = data.candidates.map((item: unknown) => {
-    const row = fields(item,'kind,marker,ordinal,parent,url');
+    const row = object(item);
+    if (!['kind,marker,ordinal,parent,url','context,kind,marker,ordinal,parent,url'].includes(Object.keys(row).sort().join(','))) throw Error('invalid fields');
+    if (row.context !== undefined && (typeof row.context !== 'string' || row.context.length>160 || /[\u0000-\u001f\u007f]/.test(row.context))) throw Error('invalid context');
     if (!['a','form','button'].includes(row.kind as string) || typeof row.parent !== 'string' || !/^[a-z]{1,20}$/.test(row.parent) || !Number.isInteger(row.ordinal) || (row.ordinal as number) < 1 || (row.ordinal as number) > 100 || !(row.marker === null || typeof row.marker === 'string' && markerPattern.test(row.marker))) throw Error('invalid candidate');
-    return {marker: row.marker as string | null,kind:row.kind as string,parent:row.parent,ordinal:row.ordinal as number,url:observationUrl(row.url)};
+    return {marker: row.marker as string | null,kind:row.kind as string,parent:row.parent,ordinal:row.ordinal as number,url:observationUrl(row.url),context:typeof row.context === 'string' ? row.context : null};
   });
   return {surface:data.surface, rows};
 }
@@ -87,7 +89,7 @@ export async function importInventory(db: Pool, project: string, body: unknown) 
           INSERT INTO cta_drift_alerts(project_id,point_id,reason) SELECT project_id,id,'DESTINATION_CHANGED' FROM changed CROSS JOIN prior WHERE NOT prior.review_required RETURNING id`,[project,id,row.url]);
         for (const alert of alerts.rows) await tryIntent(client, () => client.query('INSERT INTO cta_alert_deliveries(alert_id) VALUES($1) ON CONFLICT DO NOTHING',[alert.id]));
       }
-      await client.query('INSERT INTO cta_observations(project_id,point_id,evidence,confidence,observed_url,capture_id,selection_allowed) VALUES($1,$2,$3,$4,$5,$6,$7)',[project,id,`structural:${row.kind}:${row.parent}:ordinal:${row.ordinal}`,unique ? 'HIGH' : 'LOW',row.url,capture,row.marker === null || unique]);
+      await client.query('INSERT INTO cta_observations(project_id,point_id,evidence,confidence,observed_url,capture_id,selection_allowed,visual_context) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[project,id,`structural:${row.kind}:${row.parent}:ordinal:${row.ordinal}`,unique ? 'HIGH' : 'LOW',row.url,capture,row.marker === null || unique,row.context]);
     }
     await client.query('COMMIT');
   } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
@@ -112,17 +114,17 @@ export async function selectObservation(db: Pool, body: unknown) {
     const project=await client.query('SELECT origin FROM projects WHERE id=$1 FOR UPDATE',[row.project]);
     if (!project.rowCount) throw new TypeError('invalid project');
     lab(project.rows[0].origin);
-    const result=await client.query(`SELECT 1 FROM cta_captures c
+    const result=await client.query(`SELECT o.observed_url FROM cta_captures c
       JOIN cta_observations o ON o.capture_id=c.id AND o.project_id=c.project_id
       JOIN cta_points p ON p.project_id=o.project_id AND p.id=o.point_id AND p.surface=c.surface
       JOIN cta_destinations d ON d.project_id=c.project_id AND d.offer=$6 AND d.id=$7
       WHERE c.project_id=$1 AND c.surface=$2 AND c.id=$3 AND c.is_current
-      AND o.id=$4::bigint AND o.point_id=$5 AND o.selection_allowed AND o.observed_at>=now()-interval '7 days'
+      AND o.id=$4::bigint AND o.point_id=$5 AND o.selection_allowed AND o.observed_at>=clock_timestamp()-interval '7 days'
       AND p.kind='a' AND (p.offer IS NULL OR p.offer=$6) AND NOT p.review_required`,
     [row.project,row.surface,row.captureId,row.observationId,row.pointId,row.offer,row.destinationId]);
     if (!result.rowCount) throw new SelectionConflict();
-    await client.query(`INSERT INTO cta_selection_intents(project_id,surface,capture_id,observation_id,point_id,offer,destination_id)
-      VALUES($1,$2,$3,$4,$5,$6,$7)`,[row.project,row.surface,row.captureId,row.observationId,row.pointId,row.offer,row.destinationId]);
+    await client.query(`INSERT INTO cta_selection_intents(project_id,surface,capture_id,observation_id,point_id,offer,destination_id,observed_url)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,[row.project,row.surface,row.captureId,row.observationId,row.pointId,row.offer,row.destinationId,result.rows[0].observed_url]);
     await client.query('COMMIT');
   } catch(error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
 }
