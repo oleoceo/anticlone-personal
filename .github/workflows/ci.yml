@@ -37,6 +37,13 @@ jobs:
       - run: docker pull nginx:1.28-alpine
       - run: echo '127.0.0.1 gateway.test' | sudo tee -a /etc/hosts
       - run: docker build -f infra/https/Dockerfile -t anticlone-pilot:test .
+      - run: docker compose -f infra/https/compose.yaml config --quiet
+        env:
+          GATEWAY_IMAGE: anticlone-pilot:test
+          GATEWAY_ENV_FILE: /dev/null
+          DATABASE_PASSWORD_FILE: /dev/null
+          NGINX_CONFIG: /tmp/nginx.conf
+          TLS_DIRECTORY: /tmp/tls
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test

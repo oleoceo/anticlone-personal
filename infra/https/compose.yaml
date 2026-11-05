@@ -14,7 +14,8 @@ services:
       # Fresh pilot database only; existing volumes do not rerun initialization.
       - ../:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: [CMD-SHELL, 'pg_isready -U anticlone -d anticlone']
+      # TCP is unavailable during the temporary initdb server; wait for final startup.
+      test: [CMD-SHELL, 'pg_isready -h 127.0.0.1 -U anticlone -d anticlone']
       interval: 5s
       timeout: 3s
       retries: 10
