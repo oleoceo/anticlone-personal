@@ -31,10 +31,11 @@ function candidates(body: unknown): {surface: string; rows: Candidate[]} {
     const row = object(item);
     if (!['kind,marker,ordinal,parent,url','context,kind,marker,ordinal,parent,url','commercial,context,kind,marker,ordinal,parent,url','commercial,kind,marker,ordinal,parent,url'].includes(Object.keys(row).sort().join(','))) throw Error('invalid fields');
     let amount: number | null = null, currency: string | null = null;
-    if (row.commercial !== undefined && row.commercial !== null) {
-      const commercial = fields(row.commercial,'amount,currency');
-      if (!Number.isSafeInteger(commercial.amount) || (commercial.amount as number) < 0 || typeof commercial.currency !== 'string' || !/^[A-Z]{3}$/.test(commercial.currency)) throw Error('invalid commercial evidence');
-      amount = commercial.amount as number; currency = commercial.currency;
+    if (row.commercial && typeof row.commercial === 'object' && !Array.isArray(row.commercial)) {
+      const commercial = row.commercial as Record<string,unknown>;
+      if (Object.keys(commercial).sort().join(',') === 'amount,currency' && Number.isSafeInteger(commercial.amount) && (commercial.amount as number) >= 0 && typeof commercial.currency === 'string' && /^[A-Z]{3}$/.test(commercial.currency)) {
+        amount = commercial.amount as number; currency = commercial.currency;
+      }
     }
     if (row.context !== undefined && (typeof row.context !== 'string' || row.context.length>160 || /[\u0000-\u001f\u007f]/.test(row.context))) throw Error('invalid context');
     if (!['a','form','button'].includes(row.kind as string) || typeof row.parent !== 'string' || !/^[a-z]{1,20}$/.test(row.parent) || !Number.isInteger(row.ordinal) || (row.ordinal as number) < 1 || (row.ordinal as number) > 100 || !(row.marker === null || typeof row.marker === 'string' && markerPattern.test(row.marker))) throw Error('invalid candidate');
@@ -98,7 +99,7 @@ export async function importInventory(db: Pool, project: string, body: unknown) 
       await client.query('INSERT INTO cta_observations(project_id,point_id,evidence,confidence,observed_url,capture_id,selection_allowed,visual_context,commercial_amount,commercial_currency) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',[project,id,`structural:${row.kind}:${row.parent}:ordinal:${row.ordinal}`,unique ? 'HIGH' : 'LOW',row.url,capture,row.marker === null || unique,row.context,row.amount,row.currency]);
     }
     const alerts = await client.query(`WITH assessed AS (
-      SELECT r.project_id,r.point_id,r.suspension, CASE WHEN o.id IS NULL OR o.commercial_amount IS NULL THEN 'UNCERTAIN'
+      SELECT r.project_id,r.point_id,r.suspension,r.amount,r.currency,o.id AS observation_id,o.commercial_amount,o.commercial_currency, CASE WHEN o.id IS NULL OR o.commercial_amount IS NULL THEN 'UNCERTAIN'
         WHEN o.commercial_amount <> r.amount OR o.commercial_currency <> r.currency THEN 'CHANGED' ELSE NULL END AS reason
       FROM cta_commercial_references r JOIN cta_points p ON p.project_id=r.project_id AND p.id=r.point_id
       LEFT JOIN cta_observations o ON o.project_id=r.project_id AND o.point_id=r.point_id AND o.capture_id=$3 AND o.confidence='HIGH' AND o.selection_allowed
@@ -107,8 +108,10 @@ export async function importInventory(db: Pool, project: string, body: unknown) 
       UPDATE cta_commercial_references r SET suspension=CASE WHEN a.reason='CHANGED' THEN 'CHANGED' ELSE COALESCE(r.suspension,a.reason) END
       FROM assessed a WHERE r.project_id=a.project_id AND r.point_id=a.point_id AND a.reason IS NOT NULL
       RETURNING r.project_id,r.point_id,a.suspension AS previous,a.reason
-    ) INSERT INTO cta_drift_alerts(project_id,point_id,reason)
-      SELECT project_id,point_id,CASE reason WHEN 'CHANGED' THEN 'COMMERCIAL_CHANGED' ELSE 'COMMERCIAL_UNCERTAIN' END FROM changed WHERE previous IS NULL OR (previous='UNCERTAIN' AND reason='CHANGED') RETURNING id`,[project,surface,capture]);
+    ), alerts AS (INSERT INTO cta_drift_alerts(project_id,point_id,reason)
+      SELECT project_id,point_id,CASE reason WHEN 'CHANGED' THEN 'COMMERCIAL_CHANGED' ELSE 'COMMERCIAL_UNCERTAIN' END FROM changed WHERE previous IS NULL OR (previous='UNCERTAIN' AND reason='CHANGED') RETURNING id,point_id)
+      INSERT INTO cta_commercial_alert_evidence(alert_id,capture_id,observation_id,approved_amount,approved_currency,observed_amount,observed_currency)
+      SELECT alerts.id,$3,assessed.observation_id,assessed.amount,assessed.currency,assessed.commercial_amount,assessed.commercial_currency FROM alerts JOIN assessed ON assessed.point_id=alerts.point_id RETURNING alert_id AS id`,[project,surface,capture]);
     for (const alert of alerts.rows) await tryIntent(client, () => client.query('INSERT INTO cta_alert_deliveries(alert_id) VALUES($1) ON CONFLICT DO NOTHING',[alert.id]));
     await client.query('COMMIT');
   } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }

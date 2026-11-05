@@ -54,7 +54,7 @@ test('CTA selection is authenticated, capture-scoped and never activates mitigat
     await mapPoint(db,'p',{pointId:known,offer:'offer4',destinationId:destination});
     await page.getByRole('button',{name:'Consultar CTAs'}).click();
     await page.getByText('referência comercial: não protegida contra drift de preço',{exact:false}).first().waitFor();
-    page.once('dialog',dialog=>dialog.accept());
+    page.once('dialog',dialog=>{assert.match(dialog.message(),/6700 unidades mínimas BRL/); void dialog.accept();});
     await page.getByRole('button',{name:'Aprovar condição comercial'}).click();
     await page.getByText('Condição aprovada. Consulte novamente.').waitFor();
     assert.equal((await db.query('SELECT count(*)::int AS n FROM cta_commercial_audit')).rows[0].n,1);
@@ -85,6 +85,8 @@ test('CTA selection is authenticated, capture-scoped and never activates mitigat
     await assert.rejects(selectObservation(db,body),SelectionConflict);
     const fresh=(await db.query('SELECT c.id AS capture_id,o.id AS observation_id,o.point_id FROM cta_captures c JOIN cta_observations o ON o.capture_id=c.id WHERE c.is_current AND c.project_id=$1 ORDER BY o.id DESC LIMIT 1',['p'])).rows[0];
     const newer={...body,captureId:fresh.capture_id,observationId:String(fresh.observation_id),pointId:fresh.point_id};
+    const other=(await db.query("SELECT id FROM cta_points WHERE project_id='p' AND marker='known002'")).rows[0].id;
+    await mapPoint(db,'p',{pointId:other,offer:'offer4',destinationId:destination});
     await importInventory(db,'p',{surface:'landing',candidates:[]});
     await assert.rejects(selectObservation(db,newer),SelectionConflict);
     await importInventory(db,'p',{surface:'landing',candidates});
@@ -101,6 +103,7 @@ test('CTA selection is authenticated, capture-scoped and never activates mitigat
     await assert.rejects(selectObservation(db,race),SelectionConflict);
     await page.goto(base+'/admin/ui/'); await page.getByLabel('Projeto').fill('p'); await page.getByLabel('Superfície').fill('landing'); await page.getByRole('button',{name:'Consultar CTAs'}).click();
     await page.getByText('Seleções pendentes de capturas anteriores, desatualizadas e sem ativação: 1',{exact:false}).waitFor();
+    assert.match(await page.locator('#cta-list').innerText(),/known002.*não protegida contra drift de preço/);
     const cookie=(await page.context().cookies(base+'/admin/ui/')).find(c=>c.name==='admin_session'); assert.ok(cookie);
     const unauth=await fetch(base+'/admin/ui/cta-selection',{method:'POST',headers:{origin:base,'sec-fetch-site':'same-origin','content-type':'application/json'},body:JSON.stringify(body)}); assert.equal(unauth.status,403);
     const noCsrf=await fetch(base+'/admin/ui/cta-selection',{method:'POST',headers:{origin:base,'sec-fetch-site':'same-origin','content-type':'application/json',cookie:`admin_session=${cookie.value}`},body:JSON.stringify(body)}); assert.equal(noCsrf.status,403);

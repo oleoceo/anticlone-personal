@@ -20,3 +20,9 @@ CREATE TABLE IF NOT EXISTS cta_commercial_audit (
 );
 ALTER TABLE cta_drift_alerts DROP CONSTRAINT cta_drift_alerts_reason_check;
 ALTER TABLE cta_drift_alerts ADD CONSTRAINT cta_drift_alerts_reason_check CHECK (reason IN ('MARKER_COLLISION','DESTINATION_CHANGED','COMMERCIAL_CHANGED','COMMERCIAL_UNCERTAIN'));
+CREATE TABLE IF NOT EXISTS cta_commercial_alert_evidence (
+ alert_id bigint PRIMARY KEY REFERENCES cta_drift_alerts(id) ON DELETE CASCADE,
+ capture_id uuid NOT NULL REFERENCES cta_captures(id), observation_id bigint,
+ approved_amount bigint NOT NULL, approved_currency text NOT NULL,
+ observed_amount bigint, observed_currency text
+);

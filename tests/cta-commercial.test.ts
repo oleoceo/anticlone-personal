@@ -36,6 +36,7 @@ test('commercial drift is isolated, deduplicated and approved against current ev
     assert.equal((await decision()).mappings?.length,2);
     await capture(8900); await capture(8900);
     assert.deepEqual((await db.query('SELECT reason FROM cta_drift_alerts')).rows,[{reason:'COMMERCIAL_CHANGED'}]);
+    assert.deepEqual((await db.query('SELECT approved_amount,approved_currency,observed_amount,observed_currency FROM cta_commercial_alert_evidence')).rows,[{approved_amount:'6700',approved_currency:'BRL',observed_amount:'8900',observed_currency:'BRL'}]);
     assert.deepEqual((await decision()).mappings?.map(x=>x.marker),['premium1']);
     const stale=await approval('basic001',1); await capture(8900);
     await assert.rejects(approveCommercial(db,stale));
@@ -64,5 +65,10 @@ test('commercial drift is isolated, deduplicated and approved against current ev
     await Promise.allSettled([approveCommercial(db,race),capture(10000)]);
     assert.ok((await db.query("SELECT suspension FROM cta_commercial_references r JOIN cta_points p ON p.project_id=r.project_id AND p.id=r.point_id WHERE p.marker='basic001'")).rows[0].suspension);
     assert.deepEqual((await decision()).mappings?.map(x=>x.marker),['premium1']);
+    const version=(await db.query("SELECT r.version FROM cta_commercial_references r JOIN cta_points p ON p.project_id=r.project_id AND p.id=r.point_id WHERE p.marker='basic001'")).rows[0].version;
+    await approveCommercial(db,await approval('basic001',version));
+    const malformed=rows(10000).map((row,i)=>i===0?{...row,commercial:{amount:8900,currency:null}}:row);
+    await importInventory(db,project,{surface:'landing',candidates:malformed});
+    assert.equal((await db.query("SELECT suspension FROM cta_commercial_references r JOIN cta_points p ON p.project_id=r.project_id AND p.id=r.point_id WHERE p.marker='basic001'")).rows[0].suspension,'UNCERTAIN');
   } finally { await db.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end(); }
 });
