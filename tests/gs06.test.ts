@@ -51,21 +51,54 @@ test('GS06 integration: persisted policy, controlled LOW and original', {timeout
     assert.ok(!JSON.stringify(requests).includes('privatevalue'));
     await saveDraft(db,project,{enabled:true,approved_destination:original+'/approved',stealth:true,allocation:{PAID_ATTRIBUTED:100,ORGANIC:100,REFERRAL:100,DIRECT_UNKNOWN:100}}); await activatePolicy(db,project);
     await page.goto(clone+'/clone'); await page.waitForURL(original+'/approved'); await page.waitForTimeout(400); assert.equal(page.url(),original+'/approved');
-    // Interaction before the request cancels a valid redirect even within the entry deadline.
-    const interacted=await browser.newPage();
-    await interacted.addInitScript(()=>{
-      const fetchOriginal=window.fetch.bind(window);
-      window.fetch=(...args)=>{
-        if(String(args[0]).endsWith('/entry-decision')) dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));
-        return fetchOriginal(...args);
-      };
-    });
-    const quick=interacted.waitForResponse(r=>r.url().endsWith('/entry-decision'));
-    await interacted.goto(clone+'/clone');
-    assert.equal((await (await quick).json() as {action:string}).action,'PAGE_REDIRECT');
-    assert.ok(await interacted.evaluate(()=>performance.now()<150),'decision must arrive within entry deadline');
-    await interacted.waitForTimeout(200); assert.equal(interacted.url(),clone+'/clone');
-    await interacted.close();
+    // Both cases consume a real decision at 100 ms of controlled runtime time.
+    // The control proves eligibility; only the early interaction differs.
+    for (const interact of [false,true]) {
+      const context=await browser.newContext();
+      const controlled=await context.newPage();
+      await controlled.clock.install({time:0});
+      await controlled.clock.pauseAt(1000);
+      await controlled.addInitScript(({interact})=>{
+        const state=window as typeof window & {gs06Start:number; gs06Consumed:Promise<void>};
+        state.gs06Start=performance.now();
+        let consumed:()=>void;
+        state.gs06Consumed=new Promise<void>(resolve=>{ consumed=resolve; });
+        const fetchOriginal=window.fetch.bind(window);
+        window.fetch=async (...args)=>{
+          if (!String(args[0]).endsWith('/entry-decision')) return fetchOriginal(...args);
+          if (interact) dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));
+          const response=await fetchOriginal(...args);
+          const jsonOriginal=response.json.bind(response);
+          response.json=async ()=>{
+            const decision=await jsonOriginal();
+            // Drain the runtime's decision continuation before checking the page.
+            queueMicrotask(()=>queueMicrotask(()=>consumed()));
+            return decision;
+          };
+          return response;
+        };
+      },{interact});
+      await controlled.route('**/entry-decision',async route=>{
+        const response=await route.fetch();
+        assert.equal((await response.json() as {action:string}).action,'PAGE_REDIRECT');
+        await controlled.clock.runFor(100);
+        assert.equal(await controlled.evaluate(()=>performance.now()-(window as typeof window & {gs06Start:number}).gs06Start),100);
+        await route.fulfill({response});
+      });
+      await controlled.goto(clone+'/clone');
+      if (interact) {
+        await controlled.evaluate(()=>(window as typeof window & {gs06Consumed:Promise<void>}).gs06Consumed);
+        assert.equal(await controlled.evaluate(()=>performance.now()-(window as typeof window & {gs06Start:number}).gs06Start),100,'decision processed before the unchanged 150 ms deadline');
+        assert.equal(controlled.url(),clone+'/clone');
+        await controlled.unrouteAll({behavior:'wait'});
+        // DOM click retains the anchor's native default navigation with time paused.
+        await controlled.getByText('next',{exact:true}).evaluate((node:HTMLElement)=>node.click());
+        await controlled.waitForURL(clone+'/next');
+      } else {
+        await controlled.waitForURL(original+'/approved');
+      }
+      await context.close();
+    }
     // A valid redirect delivered after the entry deadline must leave native navigation usable.
     const timed=await browser.newPage();
     await timed.route('**/entry-decision',async route=>{
