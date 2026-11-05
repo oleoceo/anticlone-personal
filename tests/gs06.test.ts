@@ -84,7 +84,7 @@ test('GS06 integration: persisted policy, controlled LOW and original', {timeout
         await controlled.clock.runFor(100);
         assert.equal(await controlled.evaluate(()=>performance.now()-(window as typeof window & {gs06Start:number}).gs06Start),100);
         await route.fulfill({response});
-      });
+      },{times:1});
       await controlled.goto(clone+'/clone');
       if (interact) {
         await controlled.evaluate(()=>(window as typeof window & {gs06Consumed:Promise<void>}).gs06Consumed);
