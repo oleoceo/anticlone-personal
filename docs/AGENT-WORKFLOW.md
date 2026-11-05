@@ -51,3 +51,5 @@ IMPLEMENTAR -> TESTAR
 - Usar modelos mais caros para revisão de segurança, incidentes difíceis ou arquitetura ambígua, não para scaffolding rotineiro.
 - Se CI falhar por ambiente/credencial, distinguir de falha do código; não fazer dezenas de commits tentando adivinhar.
 - Solicitar ajuda humana apenas para decisões de produto, custos, credenciais/permissões, deploy e operações irreversíveis, ou bloqueio real persistente.
+
+Para recuperar o laboratório Windows/WSL e diagnosticar testes PostgreSQL/Chromium, consulte [LOCAL-LAB-ENV.md](LOCAL-LAB-ENV.md) antes de declarar infraestrutura indisponível.

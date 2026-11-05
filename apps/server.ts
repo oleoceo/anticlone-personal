@@ -32,6 +32,7 @@ const core = readFileSync('runtime/core.js');
 const fallback = readFileSync('runtime/fallback.js');
 let windowStart = Date.now(), count = 0;
 let decisionWindowStart = Date.now(), decisionCount = 0;
+let refreshWindowStart = Date.now(), refreshCount = 0;
 const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*'); res.setHeader('Cache-Control', 'no-store');
   if (req.method === 'GET' && (req.url === '/runtime.js' || req.url === '/core.js' || req.url === '/fallback.js')) {
@@ -46,11 +47,17 @@ const server = http.createServer((req, res) => {
       res.writeHead(200, { 'Content-Type': 'image/gif' }).end(Buffer.from('R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==', 'base64'));
     }).catch(() => res.writeHead(503).end()); return;
   }
-  if (req.method === 'POST' && req.url === '/entry-decision') {
+  if (req.method === 'POST' && (req.url === '/entry-decision' || req.url === '/cta-refresh')) {
+    const refresh = req.url === '/cta-refresh';
     let origin: string;
     try { origin = configuredOrigin(req.headers.origin ?? ''); } catch { res.writeHead(400).end(); return; }
-    if (Date.now() - decisionWindowStart >= 60_000) { decisionWindowStart = Date.now(); decisionCount = 0; }
-    if (++decisionCount > 60) { res.writeHead(429).end(); return; }
+    if (refresh) {
+      if (Date.now() - refreshWindowStart >= 60_000) { refreshWindowStart = Date.now(); refreshCount = 0; }
+      if (++refreshCount > 60) { res.writeHead(429).end(); return; }
+    } else {
+      if (Date.now() - decisionWindowStart >= 60_000) { decisionWindowStart = Date.now(); decisionCount = 0; }
+      if (++decisionCount > 60) { res.writeHead(429).end(); return; }
+    }
     if (!/^text\/plain(?:\s*;|$)/i.test(req.headers['content-type'] ?? '')) { res.writeHead(415).end(); return; }
     let body = ''; let rejected = false;
     req.on('data', (chunk: Buffer) => { if (rejected) return; body += chunk.toString('utf8'); if (body.length > 2048) { rejected = true; body = ''; res.writeHead(413).end(); } });
@@ -71,7 +78,7 @@ const server = http.createServer((req, res) => {
         validateAllocation(entryPolicy.allocation);
       }
       const entry = entryDecision(entryPolicy, normalizedOrigin, origin, controlledOrigin, assessment.level, session, trafficClass);
-      if (entry.action === 'PAGE_REDIRECT') return entry;
+      if (entry.action === 'PAGE_REDIRECT') return refresh ? {action:'OBSERVE_ONLY'} : entry;
       return ctaDecision(pool, activeProject, normalizedOrigin, origin, controlledOrigin, assessment.level, session, trafficClass);
     })().then(decision => res.writeHead(200, {'Content-Type': 'application/json'}).end(JSON.stringify(decision)))
       .catch(() => res.writeHead(200, {'Content-Type': 'application/json'}).end(JSON.stringify({action:'OBSERVE_ONLY'}))); }); return;
