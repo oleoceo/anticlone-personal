@@ -9,6 +9,8 @@
 
 ## B. Uma fatia = um resultado comprovável
 
+Implementação funcional autorizada prossegue de preparação até código, testes, correções, PR, CI e revisão independente sem nova autorização intermediária. Interrompa apenas por bloqueio técnico real, decisão de produto não autorizada, permissão indispensável ausente, risco irreversível ou limite operacional efetivo da sessão, com evidências. Duas rodadas limitam correções de falhas persistentes, não etapas.
+
 1. **Escolher:** menor Fxx ainda planejada que desbloqueia o próximo GS. Declarar até 6 linhas de escopo, critério, arquivos, teste e risco.
 2. **Isolar:** `git switch main; git pull --ff-only` (se existir remote); criar `feat/<capacidade-curta>`; no Poracode, um worktree por agente que escreve.
 3. **Implementar:** código + migração + testes + diagnóstico de falha. Não criar endpoints/menus placebo nem mudar escopo por conveniência.

@@ -24,6 +24,7 @@
 - Controles de acesso, retenção de dados, deduplicação, validação de URL e logs seguros desde a primeira implementação relevante.
 
 ## Protocolo para toda alteração
+- Implementação funcional autorizada inclui inspeção, diagnóstico, planejamento curto, branch e ambiente como etapas internas; prossiga para código, testes, correções, PR, CI e revisão independente sem nova autorização. Interrompa somente por bloqueio técnico real, decisão de produto não autorizada, permissão indispensável ausente, risco irreversível ou limite operacional efetivo da sessão, com evidências. Duas rodadas limitam correções de falhas persistentes, não etapas da tarefa.
 - Selecionar **uma capacidade verificável** da matriz; explicar em até 6 linhas: comportamento, arquivos, testes e risco.
 - Usar branch/worktree própria; nunca fazer dois agentes gravarem simultaneamente na mesma worktree/branch.
 - Implementador: código + testes + migrations necessárias + documentação curta. Revisor **independente**, em outra sessão: diff, contrato, riscos, regressões e testes relacionados; pode ser outro Codex ou Claude Code, sem compartilhar escrita na worktree do autor.

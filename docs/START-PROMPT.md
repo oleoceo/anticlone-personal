@@ -1,3 +1,5 @@
+> **HISTÓRICO:** kickoff inicial, não instrução para encerrar tarefas atuais após auditoria.
+
 # Prompt inicial para colar no Poracode (agente coordenador)
 
 Você está no repositório `C:\projetos\anticlone-personal`. Leia `AGENTS.md` (fonte única), `ANTICLONE-PERSONAL-BLUEPRINT.md`, `docs/FUNCTIONAL-MATRIX.md`, `docs/TEST-SCENARIOS.md` e `docs/AGENT-WORKFLOW.md`.

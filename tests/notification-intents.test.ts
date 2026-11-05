@@ -18,7 +18,7 @@ test('notification intent failures preserve events and reconciliation survives r
   const db=new Pool({connectionString:process.env.TEST_DATABASE_URL,options});
   const other=new Pool({connectionString:process.env.TEST_DATABASE_URL,options});
   try {
-    for (const file of ['001_initial','002_alerts','003_projects','004_observation_sources','011_cta_inventory','022_cta_capture_selection','013_cta_review','014_cta_drift_alerts','015_cta_alert_deliveries','016_cta_local_smtp','018_notification_budget','019_alert_outbox_expiry','020_cta_delivery_expiry'])
+    for (const file of ['001_initial','002_alerts','003_projects','004_observation_sources','011_cta_inventory','022_cta_capture_selection','013_cta_review','014_cta_drift_alerts','015_cta_alert_deliveries','016_cta_local_smtp','018_notification_budget','019_alert_outbox_expiry','020_cta_delivery_expiry','023_cta_commercial'])
       await db.query((await readFile(`infra/${file}.sql`,'utf8')).replace(/^\uFEFF/,''));
     await db.query("INSERT INTO projects(id,name,origin) VALUES('p','p','http://localhost')");
     const oldPoint=randomUUID();

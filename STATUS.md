@@ -1,5 +1,6 @@
 # STATUS — AntiClone Personal
-- **F21 refresh em laboratorio:** expiracao local em 120 s, revalidacao no retorno e consulta separada limitada; testes PostgreSQL/Chromium e emulacao mobile em tests/cta-refresh.test.ts. CI e revisao independente do HEAD pendentes no PR; sem deploy ou merge.
+- **Drift comercial laboratorial (F25/F27 parcial):** preço/moeda estruturados, suspensão isolada, alerta e aprovação autenticada; testes PostgreSQL/Chromium locais passaram, incluindo GS03/GS06/GS08 e refresh. CI e revisão independente do HEAD pendentes; não comprova checkout externo ou páginas hostis.
+- **F21 refresh em laboratorio:** expiracao local em 120 s, revalidacao no retorno e consulta separada limitada; testes PostgreSQL/Chromium e emulacao mobile em tests/cta-refresh.test.ts. PR #38 integrado em 2822346204dec267150448ff75bfc5c0fa7568cc; CI pos-merge 42039811964 verde. Capacidade laboratorial parcial; sem deploy.
 - **PR #37 / GS06 estabilidade:** resposta real aos 100 ms virtuais em contexto isolado; controle sem interacao redireciona, interacao precoce cancela e preserva link nativo. Producao, prazo de 150 ms e GS08 inalterados. Checks locais, CI completa e revisao independente do SHA final registrados no PR antes de Ready for review. Sem deploy ou merge.
 - **F21 interacao pendente:** redirect e preparacao de CTA separados; GS08 cobre ponteiro, teclado e clique antecipado. Evidencias e revisao final no PR; sem drift comercial ou refresh de politica.
 - **F21 / GS08 temporal (PR #36):** PAGE_REDIRECT conserva entrada de 150 ms fail-open; CTA pode ser preparado depois, antes da interacao, no mesmo contexto. GS08 usa relogio real, PostgreSQL e Chromium para CTA tardio elegivel e ponto sob revisao; negativos de risco, percentual, validacao e ciclo de navegacao. Lint/typecheck/build locais aprovados; evidencias da suite completa, revisao detached e CI vinculadas ao HEAD final no PR. Sem drift comercial, deploy ou merge.
@@ -40,3 +41,5 @@
 - **F19/F20/F41 parciais:** inventario e mapeamento manual em laboratorio; testes de navegador e PostgreSQL na CI 41726344521 (13c051e); revisao independente sem P0/P1 remanescente. GS03/GS17 integrais e descoberta dinamica pendentes.
 
 - **F21 parcial:** ancoras estaticas aprovadas em laboratorio; PostgreSQL e Chromium na CI 41730953550 (b79f29b), GS03 integral e F22 pendentes. Revisao independente do codigo em /root/f21_review; parecer condicionado a CI final.
+
+Estados: IMPLEMENTADO E TESTADO — refresh laboratorial do PR #38; IMPLEMENTADO PARCIALMENTE — F21/F25/F27/F41; REDUZIDO POR DECISÃO DOCUMENTADA — formulários (D07); PENDENTE — reconhecimento comercial adversarial e checkout externo; BLOQUEADO — nenhum bloqueio geral estabelecido.
