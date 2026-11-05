@@ -59,6 +59,60 @@ Legenda: **P** = planejada no Personal; **PARCIAL** = parte comprovada, capacida
 - F19–F27: conversões e alertas — 26-CONVERSION-SURFACES-DRIFT, 31-NOTIFICATIONS-EMAIL-TEMPLATES e 00- O anticlone; identidade, atribuição e saúde acrescentadas em F41, F42 e F45.
 - F28–F40: evidências, métricas, segurança e operação — 22-METRIC-DICTIONARY, 25-INCIDENT-EVIDENCE-MODEL, 16-SECURITY-PRINCIPLES, 33-INTEGRATIONS-WEBHOOKS-ADAPTIVE-MAPPING, 34-PRIVACY-DATA-RETENTION e Blueprint. A comparação é temática, não uma revisão integral de cada especificação histórica.
 
+## Quadro de conclusao A/B/C apos PR #41
+
+Este quadro complementa as provas acima, sem mudar criterios. `Parcial` significa codigo demonstrado em laboratorio; `Integracao` significa componentes presentes sem fluxo operacional completo; `Ausente` significa que nao foi localizada implementacao suficiente do comportamento integral. Nenhuma linha e aceite de producao. A prova indicada e reproduzivel pelo teste existente; resultado do novo recorte HTTPS depende dos gates no SHA final do PR. GS01-GS21 continuam no contrato `TEST-SCENARIOS.md`.
+
+| Funcao / entrega | Estado real e prova atual | Dependencia / criterio restante para conclusao |
+|---|---|---|
+| F01 · C | Parcial: projects.test.ts | Ciclo pausa/arquivo, varias paginas e GS16 operacional. |
+| F02 · A | Parcial: pilot-observation.test.ts | Persistir origens/pathnames por instalacao e validar GS01 real. |
+| F03 · A | Integracao: bootstrap HTML testado | HTML/React/Vite/WordPress controlados e GS10 por compatibilidade. |
+| F04 · A | Parcial: gs02.test.ts | Publicacao versionada e instalacao fora do laboratorio. |
+| F05 · A | Parcial: gs02.test.ts | GS09 completo, CSP e navegadores suportados. |
+| F06 · A | Parcial: gs02.test.ts | Diagnostico best-effort de canarios e GS09/GS10 reais. |
+| F07 · A | Parcial: server.ts, https-gateway.test.ts | Alias persistido/versionado e compatibilidade de revisoes. |
+| F08 · A | Ausente: smoke de transporte nao e diagnostico universal | Modelo de instalacao e FULL/PARTIAL/UNSUPPORTED verificaveis (GS10). |
+| F09 · A | Parcial: pilot-observation.test.ts | Corroboracao e contexto operacional, sem confiar no Origin. |
+| F10 · A | Ausente: sem prova completa file/iframe | Matriz de transporte/sandbox com degradacao GS10. |
+| F11 · A | Parcial: detection.test.ts/gs02.test.ts | Evidencias operacionais e GS12 completos. |
+| F12 · A | Parcial: detection.test.ts | Lifecycle e falso positivo auditados no painel (GS12). |
+| F13 · B | Parcial: risk.test.ts, somente UNCERTAIN operacional | Classificador versionado multissinal, validacao conservadora GS05/GS12. |
+| F14 · B | Parcial: protection-policy.test.ts | Precedencia operacional de Stealth com classificador e GS05/GS19 completos. |
+| F15 · B | Parcial: traffic.test.ts | Sessao e fatos reais para GS04/GS14. |
+| F16 · B | Parcial: traffic.test.ts | Atribuicao revisavel, incerteza e GS12 completos. |
+| F17 · B | Parcial: gs06.test.ts, loopback | Destinos externos aprovados, classificador e GS06 operacional. |
+| F18 · B | Parcial: gs06.test.ts | Gate visual e medidas de timeout/performance GS06/GS10. |
+| F19 · B | Parcial: cta-browser.test.ts | Identidade confiavel e ofertas dinamicas sem marcador, GS03/GS17. |
+| F20 · B | Parcial: cta-inventory.test.ts | Aprovacao de destinos externos por oferta e GS03 integral. |
+| F21 · B | Parcial: f21.test.ts/cta-refresh.test.ts | Risco e destinos operacionais; sem rede no clique, GS03/GS07. |
+| F22 · B | Parcial: f21.test.ts; formularios suspensos D07 | Superficies dinamicas e matriz GS07/GS10; respeitar D07. |
+| F23 · B | Parcial: allocation.test.ts | Todas as acoes/classes integradas e GS04 completo. |
+| F24 · B | Parcial: allocation.test.ts | Versao/sessao operacionais e GS04 com incerteza documentada. |
+| F25 · B | Parcial: cta-commercial.test.ts/gs08.test.ts | Offer Snapshot, associacao contextual segura e GS08 externo. Prototipo reprovado BLOCKED. |
+| F26 · A | Parcial: detection.test.ts, notification-*.test.ts | SMTP externo aprovado, historico operacional e GS13 externo. |
+| F27 · B | Parcial: cta-local-smtp.test.ts/gs08.test.ts | Provedor externo e GS13 operacional, sem exactly-once prometido. |
+| F28 · A | Integracao: admin-ui.ts e consultas locais | Evidencias, filtros, lifecycle e auditoria completos (GS12). |
+| F29 · C | Ausente: agregados parciais nao sao metricas completas | Fatos de sessao/acao/handoff e GS14. |
+| F30 · C | Ausente: sem receita operacional | Preco confirmado/snapshot, estimativa rotulada e GS14. |
+| F31 · C | Ausente: webhook de vendas | Integracao escolhida, assinatura/idempotencia e GS14. |
+| F32 · A | Ausente: enriquecimento DNS/ASN | Worker com anti-SSRF, fontes separadas do visitante e GS12. |
+| F33 · C | Parcial: https-gateway.test.ts + limites existentes | Proxy/TLS integrado neste PR; replay/queue/SSRF e GS11 integral pendentes. |
+| F34 · C | Parcial: admin-auth.test.ts/admin-totp.test.ts | Administracao de producao, auditoria e GS16. |
+| F35 · C | Parcial: detection.test.ts/notification-intents.test.ts | Worker/Redis conforme D03 ainda proposto; reinicios operacionais GS02/GS13. |
+| F36 · C | Ausente: ciclo completo pausa/arquivo | Preservar historico/agregados e GS15. |
+| F37 · C | Parcial: cleanup/expiracao e notification-expiry.test.ts | Politica integral de dados e GS15, incluindo logs/backup. |
+| F38 · C | Integracao: Compose/imagem/smoke deste PR | Restore ensaiado, upgrade versionado e rollback real na VPS (GS16). |
+| F39 · C | Parcial: suites Chromium e mobile laboratoriais | Navegadores/medidas reais p95/p99 e GS10/GS16. |
+| F40 · C | Parcial: admin-ui.ts e testes de UI locais | Painel React/Vite responsivo completo e GS16. |
+| F41 · B | Parcial: cta-inventory.test.ts | Identidade estrutural segura, multiplas ofertas, GS17 integral. |
+| F42 · B | Ausente: propagacao configuravel | Allowlist por destino, parametros adversariais e GS18. |
+| F43 · B | Parcial: policy-admin.test.ts | Precedencia geral/entrada/interacao e conflitos, GS19 integral. |
+| F44 · A | Ausente: correlacao de degradacao | Fontes independentes correlacionadas e GS20. |
+| F45 · A | Ausente: inatividade/falha rastreavel | Instalacoes persistidas, dedup/retry/historico e GS21. |
+
+Caminho critico: publicacao HTTPS observavel -> risco/Stealth -> destinos externos de pagina/CTA -> identidade e superficies -> confirmacao manual de preco por CTA/Offer Snapshot versionado -> associacao contextual segura -> drift/revisao -> atribuicao/metricas/vendas -> seguranca/painel/retencao/restore e aceitacao final. SMTP externo, diagnostico de instalacao e enriquecimento de A devem acompanhar suas dependencias sem considerar a primeira instalacao como encerramento. Preparacao de publicacao nao autoriza DNS/deploy nem conclui A/B/C.
+
 ## Fora do Personal (por decisão de produto, não por perda de função de proteção)
 
 Tenants/organizações comerciais, memberships de clientes, checkout de assinatura, planos e entitlements, gestão de clientes, broadcast, MRR/ARR, hub, duas apps independentes, pool comercial multi-domínio, plugins de milhares de plataformas, instalações customer-owned SaaS.

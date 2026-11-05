@@ -9,11 +9,14 @@ import { validateAllocation } from './allocation.js';
 import { ctaDecision } from './cta-policy.js';
 import { safeEvaluateRisk, recordRisk } from './risk.js';
 import { gatewayMode } from './gateway-mode.js';
+import { gatewayBoundary } from './gateway-boundary.js';
+const boundary = gatewayBoundary(process.env);
 const connectionString = process.env.DATABASE_URL, project = process.env.PROJECT_ID;
 const smtpPort = Number(process.env.SMTP_PORT), port = Number(process.env.PORT ?? 3000);
 if (!connectionString || !project || !/^[a-zA-Z0-9_-]{1,64}$/.test(project) || !Number.isInteger(smtpPort) || smtpPort < 1 || smtpPort > 65535 || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('invalid local test configuration');
 const activeProject: string = project;
-const pool = new Pool({ connectionString });
+const pool = new Pool({ connectionString, max: 5, connectionTimeoutMillis: 2000, statement_timeout: 3000, query_timeout: 4000 });
+pool.on('error', () => process.stderr.write('database connection failed\n'));
 if (process.env.GATEWAY_MODE === 'PILOT_OBSERVE' && (process.env.ALLOWED_ORIGIN || process.env.LAB_CONTROLLED_ORIGIN || process.env.LAB_CONTROLLED_RISK)) throw Error('laboratory configuration forbidden in pilot');
 // One-time legacy import is driven solely by the local operator's old configuration.
 const legacyOrigin = process.env.ALLOWED_ORIGIN && configuredOrigin(process.env.ALLOWED_ORIGIN);
@@ -37,14 +40,19 @@ let windowStart = Date.now(), count = 0;
 let decisionWindowStart = Date.now(), decisionCount = 0;
 let refreshWindowStart = Date.now(), refreshCount = 0;
 const server = http.createServer((req, res) => {
+  if (!boundary(req, res)) return;
+  res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Access-Control-Allow-Origin', '*'); res.setHeader('Cache-Control', 'no-store');
+  if (req.method === 'GET' && req.url === '/healthz') {
+    void pool.query('SELECT 1').then(() => res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify({status:'ready', mode:mode.pilot ? 'PILOT_OBSERVE' : 'LAB', action:'OBSERVE_ONLY'}))).catch(() => res.writeHead(503).end()); return;
+  }
   if (req.method === 'GET' && (req.url === '/runtime.js' || req.url === '/core.js' || req.url === '/fallback.js')) {
     res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
     res.end(req.url === '/runtime.js' ? bootstrap : req.url === '/core.js' ? core : fallback); return;
   }
   if (req.method === 'GET' && (req.url === '/canary/html.gif' || req.url === '/canary/css.gif')) {
     if (Date.now() - windowStart >= 60_000) { windowStart = Date.now(); count = 0; }
-    if (++count > 60) { res.writeHead(429).end(); return; }
+    if (++count > 60 && process.env.GATEWAY_TRANSPORT !== 'HTTPS_PROXY') { res.writeHead(429).end(); return; }
     const source = req.url === '/canary/html.gif' ? 'html_canary' : 'css_canary';
     void observeCanary(pool, activeProject, req.headers.referer, source).then(() => {
       res.writeHead(200, { 'Content-Type': 'image/gif' }).end(Buffer.from('R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==', 'base64'));
@@ -56,14 +64,14 @@ const server = http.createServer((req, res) => {
     try { origin = configuredOrigin(req.headers.origin ?? ''); } catch { res.writeHead(400).end(); return; }
     if (refresh) {
       if (Date.now() - refreshWindowStart >= 60_000) { refreshWindowStart = Date.now(); refreshCount = 0; }
-      if (++refreshCount > 60) { res.writeHead(429).end(); return; }
+      if (++refreshCount > 60 && process.env.GATEWAY_TRANSPORT !== 'HTTPS_PROXY') { res.writeHead(429).end(); return; }
     } else {
       if (Date.now() - decisionWindowStart >= 60_000) { decisionWindowStart = Date.now(); decisionCount = 0; }
-      if (++decisionCount > 60) { res.writeHead(429).end(); return; }
+      if (++decisionCount > 60 && process.env.GATEWAY_TRANSPORT !== 'HTTPS_PROXY') { res.writeHead(429).end(); return; }
     }
     if (!/^text\/plain(?:\s*;|$)/i.test(req.headers['content-type'] ?? '')) { res.writeHead(415).end(); return; }
-    let body = ''; let rejected = false;
-    req.on('data', (chunk: Buffer) => { if (rejected) return; body += chunk.toString('utf8'); if (body.length > 2048) { rejected = true; body = ''; res.writeHead(413).end(); } });
+    let body = ''; let rejected = false; let bodyBytes = 0;
+    req.on('data', (chunk: Buffer) => { if (rejected) return; bodyBytes += chunk.length; body += chunk.toString('utf8'); if (bodyBytes > 2048) { rejected = true; body = ''; res.writeHead(413).end(); } });
     req.on('end', () => {
     if (rejected) return;
     let session: unknown; let trafficClass: string;
@@ -89,7 +97,7 @@ const server = http.createServer((req, res) => {
   }
   if (req.method !== 'POST' || req.url !== '/observe' && req.url !== '/observe/fallback') { res.writeHead(404).end(); return; }
   if (Date.now() - windowStart >= 60_000) { windowStart = Date.now(); count = 0; }
-  if (++count > 60) { res.writeHead(429).end(); return; }
+  if (++count > 60 && process.env.GATEWAY_TRANSPORT !== 'HTTPS_PROXY') { res.writeHead(429).end(); return; }
   if (!/^text\/plain(?:\s*;|$)/i.test(req.headers['content-type'] ?? '')) { res.writeHead(415).end(); return; }
   let length = 0; const chunks: Buffer[] = []; let rejected = false;
   req.on('data', (chunk: Buffer) => {
@@ -116,6 +124,8 @@ const server = http.createServer((req, res) => {
   });
 });
 server.requestTimeout = 5000; server.headersTimeout = 6000;
+server.maxHeadersCount = 40;
+server.setTimeout(10_000, socket => socket.destroy());
 server.listen(port, '127.0.0.1');
 let busy = false;
 async function maintenance() {
