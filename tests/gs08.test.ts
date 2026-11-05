@@ -205,6 +205,11 @@ test('GS08: real checkout drift isolates a CTA through authenticated review in C
       await negative.close();
     }
 
+    app.kill('SIGTERM'); await once(app,'exit');
+    app=spawn(process.execPath,['dist/apps/server.js'],{env:{...process.env,PGOPTIONS:options,DATABASE_URL:process.env.TEST_DATABASE_URL,PROJECT_ID:project,SMTP_PORT:'25252',PORT:'3000',LAB_CONTROLLED_ORIGIN:clone,LAB_CONTROLLED_RISK:''},stdio:['ignore','ignore','inherit']});
+    let restarted=false; for(let i=0;i<100;i++){try{if((await fetch('http://127.0.0.1:3000/runtime.js')).ok){restarted=true;break;}}catch{} await new Promise(r=>setTimeout(r,100));} assert.ok(restarted);
+    await native();
+    assert.ok((await db.query("SELECT 1 FROM risk_assessment_days WHERE project_id=$1 AND level='UNCERTAIN'",[project])).rowCount);
   } finally {
     if (browser) await browser.close();
     if (app && app.exitCode===null && app.signalCode===null) {app.kill('SIGTERM'); await once(app,'exit');}
