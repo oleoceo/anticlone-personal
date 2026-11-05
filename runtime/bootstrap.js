@@ -3,14 +3,16 @@
     const source = document.currentScript && document.currentScript.src;
     if (!source) return;
     const deadline = performance.now() + 150;
-    let redirectPending = true, redirectInteracted = false, abandoned = false;
+    let redirectPending = true, redirectInteracted = false, abandoned = false, suspended = false;
+    let suspendCtas = () => {}, resumeCtas = () => {}, startCore = () => {}, coreLoaded = false, coreStarted = false;
     const initialPath = location.pathname, initialSearch = location.search;
-    const validContext = () => !abandoned && location.pathname === initialPath && location.search === initialSearch;
+    const validContext = () => !abandoned && !suspended && location.pathname === initialPath && location.search === initialSearch;
     const abandon = () => { abandoned = true; cancelRedirect(); };
     const cancelRedirect = () => { redirectPending = false; redirectInteracted = true; };
     setTimeout(() => { redirectPending = false; }, 150);
-    addEventListener('pagehide', abandon, {once:true});
-    addEventListener('beforeunload', abandon, {once:true});
+    addEventListener('pagehide', event => { cancelRedirect(); if (event.persisted) { suspended = true; suspendCtas(); } else abandon(); });
+    addEventListener('pageshow', event => { if (event.persisted && suspended && !abandoned) { suspended = false; if (validContext()) { if (coreStarted) resumeCtas(); else if (coreLoaded) startCore(); } else abandon(); } });
+    addEventListener('beforeunload', cancelRedirect);
     addEventListener('pointerdown', cancelRedirect, {once:true, capture:true});
     addEventListener('keydown', cancelRedirect, {once:true, capture:true});
     addEventListener('click', cancelRedirect, {once:true, capture:true});
@@ -24,8 +26,10 @@
         return result;
       };
     }
-    // Delegate clicks so approved markers can appear after the initial document load.
-    const prepareCtas = decision => {
+    // One delegated listener uses the latest bounded snapshot.
+    const ctaTtlMs = 120000, refreshIntervalMs = 60000;
+    let activeCtas = null, listenerInstalled = false;
+    const prepareCtas = (decision, startedWall, startedMono) => {
       try {
         if (!Number.isSafeInteger(decision.version) || decision.version < 1 || location.pathname !== decision.pathname || !Array.isArray(decision.mappings) || decision.mappings.length > 100) return;
         const original = new URL(decision.original);
@@ -37,8 +41,12 @@
           if (target.origin !== original.origin || target.username || target.password || target.hash || !['http:', 'https:'].includes(target.protocol)) return;
           mappings.set(row.marker, {kind:row.kind, destination:target.href});
         }
-        const install = () => {
-          if (!validContext() || location.pathname !== decision.pathname) return;
+        if (!validContext() || Date.now() < startedWall || Date.now() - startedWall >= ctaTtlMs || performance.now() - startedMono >= ctaTtlMs) return;
+        activeCtas = {mappings, pathname:decision.pathname, startedWall, startedMono};
+        if (!listenerInstalled) { listenerInstalled = true; install(); }
+      } catch (_) { /* Keep original links. */ }
+    };
+    const install = () => {
           document.addEventListener('click', event => {
             try {
               if (!(event.target instanceof Element)) return;
@@ -47,7 +55,10 @@
               const activate = currentEvent => {
                 if (currentEvent !== event) return;
                 try {
-                  if (event.defaultPrevented || !validContext() || location.pathname !== decision.pathname || !node.isConnected || !node.hasAttribute('href')) return;
+                  const snapshot = activeCtas;
+                  if (!snapshot || Date.now() < snapshot.startedWall || Date.now() - snapshot.startedWall >= ctaTtlMs || performance.now() - snapshot.startedMono >= ctaTtlMs) { activeCtas = null; return; }
+                  if (event.defaultPrevented || !validContext() || location.pathname !== snapshot.pathname || !node.isConnected || !node.hasAttribute('href')) return;
+                  const mappings = snapshot.mappings;
                   const marker = node.getAttribute('data-anticlone-point');
                   if (mappings.get(marker)?.kind !== 'a') return;
                   const current = Array.from(document.querySelectorAll('[data-anticlone-point]'));
@@ -63,15 +74,14 @@
             } catch (_) { /* Preserve the page on incompatible DOM implementations. */ }
           }, {capture:true});
           // Preserve native form submission until cancellation and data safety can be guaranteed.
-        };
-        if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', install, {once:true}); else install();
-      } catch (_) { /* Keep original links. */ }
     };
     const core = document.createElement('script');
     core.src = new URL('/core.js', source).href;
     core.async = true;
-    core.onload = () => {
+    startCore = () => {
       if (!validContext()) return;
+      if (coreStarted) return;
+      coreStarted = true;
       try {
         let session = sessionStorage.getItem('anticlone.lab.session');
         if (!session) { const bytes = crypto.getRandomValues(new Uint8Array(16)); session = Array.from(bytes, x => x.toString(16).padStart(2, '0')).join(''); sessionStorage.setItem('anticlone.lab.session', session); }
@@ -88,11 +98,37 @@
         const stored = sessionStorage.getItem('anticlone.lab.attribution');
         if (stored === null) sessionStorage.setItem('anticlone.lab.attribution', JSON.stringify(signals));
         else { const initial = JSON.parse(stored); if (!initial || typeof initial !== 'object' || Array.isArray(initial)) return; Object.keys(signals).forEach(key => delete signals[key]); Object.assign(signals, initial); }
+        let inFlight = false, sequence = 0, lastAttempt = Date.now(), backoff = refreshIntervalMs, failed = false, controller, returnTimer;
+        const expired = () => !activeCtas || Date.now() < activeCtas.startedWall || Date.now() - activeCtas.startedWall >= ctaTtlMs || performance.now() - activeCtas.startedMono >= ctaTtlMs;
+        const refresh = (onReturn = false) => {
+          const elapsed = Date.now() - lastAttempt;
+          if (!validContext() || document.hidden || inFlight || elapsed < 0) return;
+          const delay = failed ? backoff : onReturn && expired() ? 5000 : refreshIntervalMs;
+          if (elapsed < delay) {
+            if (onReturn && expired() && !returnTimer) returnTimer = setTimeout(() => { returnTimer = undefined; refresh(true); }, delay - elapsed);
+            return;
+          }
+          if (returnTimer) { clearTimeout(returnTimer); returnTimer = undefined; }
+          inFlight = true; const id = ++sequence, wall = Date.now(), mono = performance.now(); lastAttempt = wall;
+          controller = new AbortController();
+          const requestController = controller, timeout = setTimeout(() => requestController.abort(), 5000);
+          fetch(new URL('/cta-refresh', source).href, {method:'POST', headers:{'Content-Type':'text/plain'}, body:JSON.stringify({session,signals}), cache:'no-store', signal:requestController.signal})
+            .then(response => { if (!response.ok) throw Error('unavailable'); return response.json(); })
+            .then(decision => { if (id !== sequence || !validContext()) return; failed = false; backoff = refreshIntervalMs; activeCtas = null; if (decision && decision.action === 'REPLACE_CONVERSION') prepareCtas(decision, wall, mono); })
+            .catch(() => { if (id === sequence) { activeCtas = null; failed = true; backoff = Math.min(backoff * 2, 240000); } })
+            .finally(() => { clearTimeout(timeout); if (id === sequence) { inFlight = false; controller = undefined; } });
+        };
+        suspendCtas = () => { activeCtas = null; ++sequence; if (controller) controller.abort(); if (returnTimer) clearTimeout(returnTimer); returnTimer = undefined; inFlight = false; controller = undefined; };
+        resumeCtas = () => refresh(true);
+        const timer = setInterval(() => refresh(), refreshIntervalMs);
+        addEventListener('pagehide', event => { if (!event.persisted) { clearInterval(timer); suspendCtas(); } });
+        document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(true); });
+        const entryWall = Date.now(), entryMono = performance.now(), entrySequence = sequence;
         fetch(new URL('/entry-decision', source).href, { method:'POST', headers:{'Content-Type':'text/plain'}, body:JSON.stringify({session,signals}), cache: 'no-store' })
           .then(response => { if (!response.ok) throw new Error('decision unavailable'); return response.json(); })
           .then(decision => {
             if (!validContext()) return;
-            if (decision.action === 'REPLACE_CONVERSION') { prepareCtas(decision); return; }
+            if (decision.action === 'REPLACE_CONVERSION') { if (entrySequence === sequence) prepareCtas(decision, entryWall, entryMono); return; }
             if (!redirectPending || redirectInteracted || performance.now() >= deadline) return;
             redirectPending = false;
             if (decision.action !== 'PAGE_REDIRECT' || !Number.isSafeInteger(decision.version) || decision.version < 1 || typeof decision.destination !== 'string') return;
@@ -102,6 +138,7 @@
           }).catch(cancelRedirect);
       } catch (_) { cancelRedirect(); }
     };
+    core.onload = () => { coreLoaded = true; startCore(); };
     document.head.appendChild(core);
   } catch (_) { /* Leave the page operational. */ }
 })();

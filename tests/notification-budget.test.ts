@@ -66,6 +66,7 @@ test('shared rolling budget is atomic across F26 and F27 and survives new pools'
     const connected=once(server,'connection');
     const child=spawn(process.execPath,['dist/tests/fixtures/notification-budget-process.js','f26',String(address.port)],{env:{...process.env,PGOPTIONS:options},stdio:'inherit'});
     const [socket]=await connected;
+    socket.on('error',(error:NodeJS.ErrnoException)=>{ if (error.code !== 'ECONNRESET') throw error; });
     child.kill(); await once(child,'exit'); socket.destroy(); await new Promise<void>(resolve=>server.close(()=>resolve()));
     assert.equal((await db.query('SELECT attempts FROM alert_outbox WHERE id=$1',[crashId])).rows[0].attempts,1);
     assert.equal((await db.query("SELECT count(*)::int AS n FROM notification_attempt_budget WHERE reserved_at > clock_timestamp()-interval '60 minutes'")).rows[0].n,1);
