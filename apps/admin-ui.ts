@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createHash, randomBytes } from 'node:crypto';
 import type { Pool } from 'pg';
 import { Conflict, getNotificationSettings, saveNotificationSettings, setNotificationPreference } from './notification-settings.js';
-import { selectObservation, SelectionConflict } from './cta-inventory.js';
+import { approveCommercial, selectObservation, SelectionConflict } from './cta-inventory.js';
 
 type Session = { expiry: number; kind: 'bearer' | 'web'; csrf: string };
 
@@ -37,7 +37,7 @@ export function handleAdminUi(req: IncomingMessage, res: ServerResponse, db: Poo
     }
     res.writeHead(404).end(); return false;
   }
-  if (req.method !== 'POST' || !['/admin/ui/login','/admin/ui/logout','/admin/ui/settings','/admin/ui/preference','/admin/ui/cta-inventory','/admin/ui/cta-selection'].includes(req.url ?? '')) { res.writeHead(404).end(); return false; }
+  if (req.method !== 'POST' || !['/admin/ui/login','/admin/ui/logout','/admin/ui/settings','/admin/ui/preference','/admin/ui/cta-inventory','/admin/ui/cta-selection','/admin/ui/cta-commercial'].includes(req.url ?? '')) { res.writeHead(404).end(); return false; }
   if (req.headers.origin !== origin || site !== 'same-origin' || req.headers['content-type'] !== 'application/json') { res.writeHead(403).end(); return false; }
   const expected = login ? cookie('admin_login_csrf') : valid ? session.csrf : undefined;
   if (!expected || !/^[a-f0-9]{64}$/.test(expected) || req.headers['x-csrf-token'] !== expected) { res.writeHead(403).end(); return false; }
@@ -49,7 +49,7 @@ export function handleAdminUi(req: IncomingMessage, res: ServerResponse, db: Poo
   req.on('end',()=>{
     if(rejected) return;
     let body:unknown; try { body=JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { res.writeHead(400).end(); return; }
-    const operation=req.url === '/admin/ui/settings' ? saveNotificationSettings(db,body) : req.url === '/admin/ui/preference' ? setNotificationPreference(db,body) : req.url === '/admin/ui/cta-inventory' ? inventory(db,body) : selectObservation(db,body).then(()=>({state:'PENDING'}));
+    const operation=req.url === '/admin/ui/settings' ? saveNotificationSettings(db,body) : req.url === '/admin/ui/preference' ? setNotificationPreference(db,body) : req.url === '/admin/ui/cta-inventory' ? inventory(db,body) : req.url === '/admin/ui/cta-commercial' ? approveCommercial(db,body).then(()=>({state:'APPROVED'})) : selectObservation(db,body).then(()=>({state:'PENDING'}));
     void operation.then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error:unknown)=>res.writeHead(error instanceof Conflict || error instanceof SelectionConflict ? 409 : error instanceof TypeError ? 400 : 503).end());
   }); return false;
 }
@@ -61,14 +61,25 @@ async function inventory(db: Pool, body: unknown) {
   const p=await db.query('SELECT origin FROM projects WHERE id=$1',[data.project]);
   if (!p.rowCount || !['localhost','127.0.0.1'].includes(new URL(p.rows[0].origin).hostname)) throw new TypeError('invalid project');
   const result=await db.query(`SELECT c.id AS capture_id,o.id AS observation_id,o.observed_at,o.observed_url,o.visual_context,o.confidence,o.selection_allowed,p.id AS point_id,p.marker,p.kind,p.review_required,
+    o.commercial_amount,o.commercial_currency,r.amount AS approved_amount,r.currency AS approved_currency,r.suspension,r.version AS commercial_version,m.destination_id,d.url AS mapped_url,
+    (SELECT json_build_object('reason',a.reason,'approved_amount',e.approved_amount,'approved_currency',e.approved_currency,'observed_amount',e.observed_amount,'observed_currency',e.observed_currency,'capture_id',e.capture_id) FROM cta_drift_alerts a JOIN cta_commercial_alert_evidence e ON e.alert_id=a.id WHERE a.project_id=p.project_id AND a.point_id=p.id ORDER BY a.id DESC LIMIT 1) AS commercial_alert,
     intent.offer AS pending_offer,intent.url AS pending_url
     FROM cta_captures c LEFT JOIN cta_observations o ON o.capture_id=c.id AND o.observed_at>=now()-interval '7 days'
     LEFT JOIN cta_points p ON p.project_id=o.project_id AND p.id=o.point_id
+    LEFT JOIN cta_mappings m ON m.project_id=p.project_id AND m.point_id=p.id
+    LEFT JOIN cta_destinations d ON d.project_id=m.project_id AND d.offer=m.offer AND d.id=m.destination_id
+    LEFT JOIN cta_commercial_references r ON r.project_id=p.project_id AND r.point_id=p.id
     LEFT JOIN LATERAL (SELECT i.offer,d.url FROM cta_selection_intents i JOIN cta_destinations d ON d.project_id=i.project_id AND d.offer=i.offer AND d.id=i.destination_id WHERE i.capture_id=c.id AND i.observation_id=o.id ORDER BY i.id DESC LIMIT 1) intent ON true
     WHERE c.project_id=$1 AND c.surface=$2 AND c.is_current ORDER BY o.id`,[data.project,data.surface]);
   const destinations=await db.query('SELECT id,offer,url FROM cta_destinations WHERE project_id=$1 ORDER BY offer,id',[data.project]);
   const stale=await db.query('SELECT count(*)::int AS n FROM cta_selection_intents i JOIN cta_captures c ON c.id=i.capture_id WHERE i.project_id=$1 AND i.surface=$2 AND NOT c.is_current',[data.project,data.surface]);
-  return {captureId:result.rows[0]?.capture_id ?? null,observations:result.rows.filter(r=>r.observation_id),destinations:destinations.rows,stale:stale.rows[0].n};
+  const missing=await db.query(`SELECT p.marker,r.amount,r.currency,r.suspension,d.url,
+    (SELECT json_build_object('reason',a.reason,'approved_amount',e.approved_amount,'approved_currency',e.approved_currency,'observed_amount',e.observed_amount,'observed_currency',e.observed_currency,'capture_id',e.capture_id) FROM cta_drift_alerts a JOIN cta_commercial_alert_evidence e ON e.alert_id=a.id WHERE a.project_id=p.project_id AND a.point_id=p.id ORDER BY a.id DESC LIMIT 1) AS alert
+    FROM cta_mappings m JOIN cta_points p ON p.project_id=m.project_id AND p.id=m.point_id
+    LEFT JOIN cta_commercial_references r ON r.project_id=p.project_id AND r.point_id=p.id
+    JOIN cta_destinations d ON d.project_id=m.project_id AND d.offer=m.offer AND d.id=m.destination_id
+    WHERE p.project_id=$1 AND p.surface=$2 AND NOT EXISTS (SELECT 1 FROM cta_captures c JOIN cta_observations o ON o.capture_id=c.id AND o.project_id=c.project_id WHERE c.project_id=p.project_id AND c.surface=p.surface AND c.is_current AND o.point_id=p.id AND o.confidence='HIGH' AND o.observed_at>=now()-interval '7 days')`,[data.project,data.surface]);
+  return {captureId:result.rows[0]?.capture_id ?? null,observations:result.rows.filter(r=>r.observation_id),missing:missing.rows,destinations:destinations.rows,stale:stale.rows[0].n};
 }
 
 const page = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Notificações</title><script src="/admin/ui/app.js" defer></script></head><body>
@@ -97,12 +108,15 @@ el('enable').addEventListener('click',async()=>{if(hasUnsavedChanges()) {updateE
 el('disable').addEventListener('click',async()=>{try{show(await request('preference',{enabled:false}),false);say('Solicitação desativada.')}catch(err){failure(err)}});
 el('reload').addEventListener('click',async()=>{try{await load();say('Configuração recarregada.')}catch(err){failure(err)}});
 el('logout').addEventListener('click',async()=>{try{await request('logout',{});await bootstrap();say('Sessão encerrada.')}catch(err){failure(err)}});
+const alertText=a=>a ? a.reason+' (captura '+a.capture_id+', referência '+a.approved_amount+' unidades mínimas '+a.approved_currency+', observado '+(a.observed_amount===null?'incerto':a.observed_amount+' unidades mínimas '+a.observed_currency)+')' : 'nenhum';
 let ctaData=null, ctaChoice=null, ctaScope=null;
 const ctaQuery=el('cta-query'), ctaSelect=el('cta-select');
 ctaQuery.addEventListener('submit',async e=>{e.preventDefault(); ctaChoice=null; ctaSelect.hidden=true; el('cta-list').replaceChildren(); el('cta-message').textContent='';
  try {ctaScope={project:ctaQuery.elements.project.value,surface:ctaQuery.elements.surface.value}; ctaData=await request('cta-inventory',ctaScope); el('capture').textContent='Captura vigente: '+(ctaData.captureId??'nenhuma')+' | Seleções pendentes de capturas anteriores, desatualizadas e sem ativação: '+ctaData.stale;
  for(const row of ctaData.observations) {const label=document.createElement('label'), radio=document.createElement('input'), detail=document.createElement('span'); radio.type='radio'; radio.name='cta'; radio.disabled=!row.selection_allowed || row.review_required || row.kind!=='a'; radio.addEventListener('change',()=>{ctaChoice=row; ctaSelect.hidden=false});
- detail.textContent=' CTA observado | '+row.kind+' | contexto não confiável: '+(row.visual_context??'indisponível')+' | URL: '+(row.observed_url??'indisponível')+' | marcador: '+(row.marker??'ausente')+' | observação: '+row.observation_id+' | '+row.observed_at+' | confiança: '+row.confidence+' | '+(row.pending_offer?'seleção pendente: '+row.pending_offer+' — '+row.pending_url:'sem seleção nesta captura')+(row.review_required?' | revisão necessária':'')+(!row.selection_allowed?' | conflito de identificação':'')+(row.marker?' | marcador não comprova identidade':' | CTA observado, mas ainda sem identidade suficiente para substituição.'); label.append(radio,detail); el('cta-list').append(label,document.createElement('br'));}
+ detail.textContent=' CTA observado | '+row.kind+' | contexto não confiável: '+(row.visual_context??'indisponível')+' | URL: '+(row.observed_url??'indisponível')+' | marcador: '+(row.marker??'ausente')+' | observação: '+row.observation_id+' | '+row.observed_at+' | confiança: '+row.confidence+' | '+(row.pending_offer?'seleção pendente: '+row.pending_offer+' — '+row.pending_url:'sem seleção nesta captura')+(row.review_required?' | revisão necessária':'')+(!row.selection_allowed?' | conflito de identificação':'')+(row.marker?' | marcador não comprova identidade':' | CTA observado, mas ainda sem identidade suficiente para substituição.')+' | referência comercial: '+(row.approved_amount===null?'não protegida contra drift de preço':row.approved_amount+' unidades mínimas '+row.approved_currency)+' | observado: '+(row.commercial_amount===null?'incerto':row.commercial_amount+' unidades mínimas '+row.commercial_currency)+' | suspensão: '+(row.suspension??'nenhuma')+' | alerta: '+alertText(row.commercial_alert)+' | destino aprovado: '+(row.mapped_url??'nenhum'); label.append(radio,detail); el('cta-list').append(label,document.createElement('br'));
+ if(row.destination_id && row.commercial_amount!==null && (row.commercial_version===null || row.suspension)) {const button=document.createElement('button'); button.type='button';button.textContent='Aprovar condição comercial';button.addEventListener('click',async()=>{if(!window.confirm('Confirma a condição observada '+row.commercial_amount+' unidades mínimas '+row.commercial_currency+' e o destino aprovado '+row.mapped_url+'?'))return; try{await request('cta-commercial',{...ctaScope,captureId:row.capture_id,observationId:row.observation_id,pointId:row.point_id,destinationId:row.destination_id,amount:Number(row.commercial_amount),currency:row.commercial_currency,version:row.commercial_version??0});el('cta-message').textContent='Condição aprovada. Consulte novamente.';button.disabled=true}catch(err){el('cta-message').textContent=err.status===409?'Captura ou aprovação alterada; consulte novamente.':'Não foi possível aprovar.'}});el('cta-list').append(button,document.createElement('br'))}}
+ for(const row of ctaData.missing) {const detail=document.createElement('p'); detail.textContent='Ponto ausente ou ambíguo: '+row.marker+' | referência: '+(row.amount===null?'não protegida contra drift de preço':row.amount+' unidades mínimas '+row.currency)+' | observado: incerto | suspensão: '+(row.suspension??'nenhuma')+' | alerta: '+alertText(row.alert)+' | destino aprovado: '+row.url; el('cta-list').append(detail)}
  ctaSelect.elements.destination.replaceChildren(); for(const d of ctaData.destinations) {const option=document.createElement('option');option.value=d.id;option.textContent=d.offer+' — '+d.url;ctaSelect.elements.destination.append(option)}
  } catch(err){failure(err)} });
 ctaSelect.addEventListener('submit',async e=>{e.preventDefault(); if(!ctaChoice || !ctaData) return; const d=ctaData.destinations.find(x=>x.id===ctaSelect.elements.destination.value); if(!d)return;

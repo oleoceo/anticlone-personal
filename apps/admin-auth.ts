@@ -5,7 +5,7 @@ import { randomBytes, scryptSync, timingSafeEqual, createHash, createHmac } from
 import { randomUUID } from 'node:crypto';
 import { configuredOrigin } from './detection.js';
 import { activatePolicy, saveDraft } from './protection-policy.js';
-import { importInventory, approveDestination, mapPoint, reviewPoint } from './cta-inventory.js';
+import { importInventory, approveDestination, approveCommercial, mapPoint, reviewPoint } from './cta-inventory.js';
 import { publishCtaPolicy } from './cta-policy.js';
 import { Conflict, getNotificationSettings, saveNotificationSettings, setNotificationPreference } from './notification-settings.js';
 import { handleAdminUi } from './admin-ui.js';
@@ -65,7 +65,7 @@ export function createAdminServer(passwordRecord: string, totpSecret: string, db
         void db.query('SELECT id,point_id,reason,created_at FROM cta_drift_alerts WHERE project_id=$1 ORDER BY created_at DESC,id DESC LIMIT 100',[alertPath[1]])
           .then(result => res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify(result.rows))).catch(() => res.writeHead(503).end()); return;
       }
-      const ctaPath = /^\/admin\/projects\/([a-zA-Z0-9_-]{1,64})\/cta(?:\/(inventory|destinations|mappings|policy|review))?$/.exec(req.url ?? '');
+      const ctaPath = /^\/admin\/projects\/([a-zA-Z0-9_-]{1,64})\/cta(?:\/(inventory|destinations|mappings|policy|review|commercial))?$/.exec(req.url ?? '');
       if (ctaPath && req.method === 'GET' && !ctaPath[2]) {
         void db.query(`SELECT p.id,p.surface,p.marker,p.kind,p.offer,p.review_required,o.id AS observation_id,o.evidence,o.confidence,o.observed_url,o.observed_at,m.destination_id,d.url AS approved_url,
           COALESCE(s.suggestions,ARRAY[]::uuid[]) AS structural_candidates
@@ -90,7 +90,7 @@ export function createAdminServer(passwordRecord: string, totpSecret: string, db
         req.on('end', () => {
           if (rejected) return;
           let body: unknown; try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { res.writeHead(400).end(); return; }
-          const operation = ctaPath[2] === 'policy' ? publishCtaPolicy(db,ctaPath[1],body).then(version => ({version})) : ctaPath[2] === 'inventory' ? importInventory(db,ctaPath[1],body).then(() => ({})) : ctaPath[2] === 'destinations' ? approveDestination(db,ctaPath[1],body) : ctaPath[2] === 'review' ? reviewPoint(db,ctaPath[1],body).then(() => ({})) : mapPoint(db,ctaPath[1],body).then(() => ({}));
+          const operation = ctaPath[2] === 'policy' ? publishCtaPolicy(db,ctaPath[1],body).then(version => ({version})) : ctaPath[2] === 'inventory' ? importInventory(db,ctaPath[1],body).then(() => ({})) : ctaPath[2] === 'destinations' ? approveDestination(db,ctaPath[1],body) : ctaPath[2] === 'review' ? reviewPoint(db,ctaPath[1],body).then(() => ({})) : ctaPath[2] === 'commercial' ? (!body || typeof body !== 'object' || Array.isArray(body) || 'project' in body ? Promise.reject(new TypeError('project is specified by path')) : approveCommercial(db,{...body,project:ctaPath[1]}).then(()=>({}))) : mapPoint(db,ctaPath[1],body).then(() => ({}));
           void operation.then(result => res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error: Error & {code?: string}) => res.writeHead(error instanceof TypeError || !error.code ? 400 : 503).end());
         }); return;
       }

@@ -22,7 +22,7 @@ test('CTA refresh preserves independent mapping and expires locally', {timeout:9
   let fixture:ReturnType<typeof createServer>|undefined, admin:ReturnType<typeof createAdminServer>|undefined;
   let app:ReturnType<typeof spawn>|undefined, browser:Awaited<ReturnType<typeof chromium.launch>>|undefined;
   try {
-    for (const f of ['001_initial','002_alerts','003_projects','004_observation_sources','005_canaries','006_page_redirect','007_protection_policy','008_traffic_observations','009_risk_assessments','010_policy_allocation','011_cta_inventory','022_cta_capture_selection','012_cta_policy','013_cta_review','014_cta_drift_alerts','015_cta_alert_deliveries','016_cta_local_smtp','018_notification_budget','019_alert_outbox_expiry','020_cta_delivery_expiry','021_notification_intent_reconciliation']) await db.query(await readFile(`infra/${f}.sql`,'utf8'));
+    for (const f of ['001_initial','002_alerts','003_projects','004_observation_sources','005_canaries','006_page_redirect','007_protection_policy','008_traffic_observations','009_risk_assessments','010_policy_allocation','011_cta_inventory','022_cta_capture_selection','012_cta_policy','013_cta_review','014_cta_drift_alerts','015_cta_alert_deliveries','016_cta_local_smtp','018_notification_budget','019_alert_outbox_expiry','020_cta_delivery_expiry','021_notification_intent_reconciliation','023_cta_commercial']) await db.query(await readFile(`infra/${f}.sql`,'utf8'));
     assert.equal((await db.query("SELECT 1 FROM pg_trigger WHERE tgrelid='cta_drift_alerts'::regclass AND tgname='prepare_cta_alert_delivery'")).rowCount,0);
     await db.query('CREATE TABLE admin_totp_replay (factor_id text PRIMARY KEY, last_counter bigint NOT NULL)');
     await db.query('CREATE TABLE admin_totp_codes (factor_id text NOT NULL, digest text NOT NULL, valid_until bigint NOT NULL, PRIMARY KEY (factor_id, digest))');
@@ -37,7 +37,7 @@ test('CTA refresh preserves independent mapping and expires locally', {timeout:9
     const port=(fixture.address() as AddressInfo).port, original=`http://127.0.0.1:${port}`, clone=`http://localhost:${port}`, project='gs08_'+randomUUID();
     await db.query('INSERT INTO projects(id,name,origin) VALUES($1,$1,$2)',[project,original]);
     const post=(part:string,body:object,authenticated=true)=>fetch(`${adminUrl}/admin/projects/${project}/cta/${part}`,{method:'POST',headers:{'content-type':'application/json',...(authenticated?{authorization:`Bearer ${token}`}:{})},body:JSON.stringify(body)});
-    const candidates=['basic001','premium1'].map((marker,i)=>({marker,kind:'a',parent:'body',ordinal:i+1,url:clone+'/native-'+(i?'premium':'basic')}));
+    const candidates=['basic001','premium1'].map((marker,i)=>({marker,kind:'a',parent:'body',ordinal:i+1,url:clone+'/native-'+(i?'premium':'basic'),commercial:{amount:i?9700:6700,currency:'BRL'}}));
     const inventory=async (rows:typeof candidates)=>{assert.equal((await post('inventory',{surface:'landing',candidates:rows})).status,200);};
     await inventory(candidates);
     const points=(await db.query('SELECT id,marker FROM cta_points WHERE project_id=$1',[project])).rows;
@@ -85,6 +85,28 @@ test('CTA refresh preserves independent mapping and expires locally', {timeout:9
     await click('premium1',original+'/official-premium');
     await navigate('basic001',original+'/official-basic');
     await navigate('premium1',original+'/official-premium');
+    const commercialApproval=async(marker:string,version:number)=>{
+      const result=await db.query(`SELECT o.id,o.capture_id,o.commercial_amount,o.commercial_currency,p.id AS point_id FROM cta_observations o JOIN cta_points p ON p.project_id=o.project_id AND p.id=o.point_id JOIN cta_captures c ON c.id=o.capture_id WHERE p.project_id=$1 AND p.marker=$2 AND c.is_current`,[project,marker]);
+      const x=result.rows[0]; return {surface:'landing',captureId:x.capture_id,pointId:x.point_id,observationId:x.id,destinationId:destinations[marker],amount:Number(x.commercial_amount),currency:x.commercial_currency,version};
+    };
+    assert.equal((await post('commercial',await commercialApproval('basic001',0),false)).status,401);
+    assert.equal((await post('commercial',{...await commercialApproval('basic001',0),project:'outro'})).status,400);
+    assert.equal((await post('commercial',await commercialApproval('basic001',0))).status,200);
+    assert.equal((await post('commercial',await commercialApproval('premium1',0))).status,200);
+    assert.equal((await post('inventory',{surface:'landing',candidates:[{...candidates[0],commercial:{amount:8900,currency:null}},candidates[1]]})).status,200);
+    assert.equal((await db.query("SELECT suspension FROM cta_commercial_references r JOIN cta_points p ON p.project_id=r.project_id AND p.id=r.point_id WHERE p.project_id=$1 AND p.marker='basic001'",[project])).rows[0].suspension,'UNCERTAIN');
+    await inventory(candidates);
+    assert.equal((await post('commercial',await commercialApproval('basic001',1))).status,200);
+    candidates[0].commercial.amount=8900;
+    await inventory(candidates); await inventory(candidates);
+    assert.equal((await db.query("SELECT count(*)::int AS n FROM cta_drift_alerts WHERE project_id=$1 AND reason='COMMERCIAL_CHANGED'",[project])).rows[0].n,1);
+    const commercialRefresh=page.waitForResponse(r=>r.url().endsWith('/cta-refresh'));
+    await page.clock.fastForward(60000); await commercialRefresh; await page.clock.runFor(1);
+    await click('basic001',clone+'/native-basic'); await click('premium1',original+'/official-premium');
+    assert.equal((await post('commercial',await commercialApproval('basic001',2))).status,200);
+    const commercialRestored=page.waitForResponse(r=>r.url().endsWith('/cta-refresh'));
+    await page.clock.fastForward(60000); await commercialRestored; await page.clock.runFor(1);
+    await click('basic001',original+'/official-basic'); await click('premium1',original+'/official-premium');
     const mobile=await browser.newPage({viewport:{width:390,height:844},isMobile:true,hasTouch:true});
     await mobile.clock.install();
     await mobile.addInitScript(()=>{
