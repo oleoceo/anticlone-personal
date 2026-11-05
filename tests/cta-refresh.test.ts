@@ -12,7 +12,7 @@ import { Secret, TOTP } from 'otpauth';
 import { createAdminServer } from '../apps/admin-auth.js';
 
 const allocation={PAID_ATTRIBUTED:100,ORGANIC:100,REFERRAL:100,DIRECT_UNKNOWN:100};
-test('CTA refresh preserves independent mapping and expires locally', {timeout:90000}, async () => {
+test('CTA refresh preserves independent mapping and expires locally', {timeout:90000}, async t => {
   assert.ok(process.env.TEST_DATABASE_URL);
   const schema='gs08_'+randomUUID().replaceAll('-','');
   const adminDb=new Pool({connectionString:process.env.TEST_DATABASE_URL});
@@ -85,8 +85,55 @@ test('CTA refresh preserves independent mapping and expires locally', {timeout:9
     await click('premium1',original+'/official-premium');
     await navigate('basic001',original+'/official-basic');
     await navigate('premium1',original+'/official-premium');
+    const mobile=await browser.newPage({viewport:{width:390,height:844},isMobile:true,hasTouch:true});
+    await mobile.clock.install();
+    await mobile.addInitScript(()=>{
+      let count=0; const add=document.addEventListener.bind(document);
+      document.addEventListener=((type:string,listener:EventListenerOrEventListenerObject,options?:boolean|AddEventListenerOptions)=>{
+        add(type,listener,options); if(type==='click') document.documentElement.dataset.listeners=String(++count);
+      }) as typeof document.addEventListener;
+    });
+    const mobileEntry=mobile.waitForResponse(r=>r.url().endsWith('/entry-decision'));
+    await mobile.goto(clone+'/clone'); await mobileEntry;
+    await mobile.waitForFunction(()=>document.documentElement.dataset.listeners==='1');
+    await mobile.evaluate(()=>Object.defineProperty(document,'hidden',{configurable:true,value:true}));
+    await mobile.clock.fastForward(3*60*60*1000);
     await inventory([{...candidates[0],url:clone+'/changed'},candidates[1]]);
     assert.equal((await db.query('SELECT review_required FROM cta_points WHERE project_id=$1 AND marker=$2',[project,'basic001'])).rows[0].review_required,true);
+    let releaseMobile!:()=>void; const mobileHold=new Promise<void>(resolve=>{releaseMobile=resolve;});
+    let mobileRequested!:()=>void; const mobileRequest=new Promise<void>(resolve=>{mobileRequested=resolve;});
+    await mobile.route('**/cta-refresh',async route=>{const response=await route.fetch(); mobileRequested(); await mobileHold; await route.fulfill({response});});
+    await mobile.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,value:false}); document.dispatchEvent(new Event('visibilitychange'));});
+    await mobileRequest;
+    const mobileClick=async (marker:string)=>mobile.evaluate(id=>{
+      const node=document.querySelector<HTMLAnchorElement>('[data-anticlone-point="'+id+'"]')!;
+      let href=''; window.addEventListener('click',event=>{href=node.href;event.preventDefault();},{once:true}); node.click(); return href;
+    },marker);
+    await t.test('pending mobile refresh keeps the native click without waiting',async()=>{
+      assert.equal(await mobileClick('premium1'),clone+'/native-premium');
+    });
+    await mobile.clock.runFor(1);
+    const mobileResponse=mobile.waitForResponse(r=>r.url().endsWith('/cta-refresh')); releaseMobile(); await mobileResponse; await mobile.clock.runFor(1);
+    assert.equal(await mobileClick('basic001'),clone+'/native-basic'); await mobile.clock.runFor(1);
+    assert.equal(await mobileClick('premium1'),original+'/official-premium'); await mobile.clock.runFor(1);
+    let mobileFetches=0; mobile.on('request',request=>{if(['fetch','xhr'].includes(request.resourceType())) mobileFetches++;});
+    const mobileAnchor=mobile.locator('[data-anticlone-point="premium1"]');
+    await mobileAnchor.evaluate(node=>node.setAttribute('target','_blank'));
+    const beforeTap=mobileFetches, mobilePopup=mobile.waitForEvent('popup');
+    await mobileAnchor.tap(); const checkout=await mobilePopup; await checkout.waitForURL(original+'/official-premium');
+    assert.equal(mobileFetches,beforeTap); await checkout.close();
+    assert.equal(await mobile.evaluate(()=>document.documentElement.dataset.listeners),'1');
+    await mobile.unroute('**/cta-refresh');
+    await mobile.evaluate(()=>Object.defineProperty(document,'hidden',{configurable:true,value:true}));
+    await mobile.clock.fastForward(120000);
+    await mobile.evaluate(()=>window.dispatchEvent(new PageTransitionEvent('pagehide',{persisted:true})));
+    const restored=mobile.waitForResponse(r=>r.url().endsWith('/cta-refresh'));
+    await mobile.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,value:false}); window.dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true}));});
+    await restored; await mobile.clock.runFor(1);
+    assert.equal(await mobileClick('basic001'),clone+'/native-basic'); await mobile.clock.runFor(1);
+    assert.equal(await mobileClick('premium1'),original+'/official-premium');
+    assert.equal(await mobile.evaluate(()=>document.documentElement.dataset.listeners),'1');
+    await mobile.close();
     const refreshed=page.waitForResponse(r=>r.url().endsWith('/cta-refresh'));
     await page.clock.fastForward(60000); await refreshed;
     await page.clock.runFor(1);

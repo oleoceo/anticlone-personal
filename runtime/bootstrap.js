@@ -3,14 +3,16 @@
     const source = document.currentScript && document.currentScript.src;
     if (!source) return;
     const deadline = performance.now() + 150;
-    let redirectPending = true, redirectInteracted = false, abandoned = false;
+    let redirectPending = true, redirectInteracted = false, abandoned = false, suspended = false;
+    let suspendCtas = () => {}, resumeCtas = () => {};
     const initialPath = location.pathname, initialSearch = location.search;
-    const validContext = () => !abandoned && location.pathname === initialPath && location.search === initialSearch;
+    const validContext = () => !abandoned && !suspended && location.pathname === initialPath && location.search === initialSearch;
     const abandon = () => { abandoned = true; cancelRedirect(); };
     const cancelRedirect = () => { redirectPending = false; redirectInteracted = true; };
     setTimeout(() => { redirectPending = false; }, 150);
-    addEventListener('pagehide', abandon, {once:true});
-    addEventListener('beforeunload', abandon, {once:true});
+    addEventListener('pagehide', event => { cancelRedirect(); if (event.persisted) { suspended = true; suspendCtas(); } else abandon(); });
+    addEventListener('pageshow', event => { if (event.persisted && suspended && !abandoned) { suspended = false; if (validContext()) resumeCtas(); else abandon(); } });
+    addEventListener('beforeunload', cancelRedirect);
     addEventListener('pointerdown', cancelRedirect, {once:true, capture:true});
     addEventListener('keydown', cancelRedirect, {once:true, capture:true});
     addEventListener('click', cancelRedirect, {once:true, capture:true});
@@ -94,19 +96,25 @@
         const stored = sessionStorage.getItem('anticlone.lab.attribution');
         if (stored === null) sessionStorage.setItem('anticlone.lab.attribution', JSON.stringify(signals));
         else { const initial = JSON.parse(stored); if (!initial || typeof initial !== 'object' || Array.isArray(initial)) return; Object.keys(signals).forEach(key => delete signals[key]); Object.assign(signals, initial); }
-        let inFlight = false, sequence = 0, lastAttempt = Date.now(), backoff = refreshIntervalMs;
-        const refresh = () => {
-          if (!validContext() || document.hidden || inFlight || Date.now() - lastAttempt < backoff) return;
+        let inFlight = false, sequence = 0, lastAttempt = Date.now(), backoff = refreshIntervalMs, failed = false, controller;
+        const expired = () => !activeCtas || Date.now() < activeCtas.startedWall || Date.now() - activeCtas.startedWall >= ctaTtlMs || performance.now() - activeCtas.startedMono >= ctaTtlMs;
+        const refresh = (onReturn = false) => {
+          const elapsed = Date.now() - lastAttempt;
+          if (!validContext() || document.hidden || inFlight || elapsed < 0 || (failed ? elapsed < backoff : elapsed < (onReturn && expired() ? 5000 : refreshIntervalMs))) return;
           inFlight = true; const id = ++sequence, wall = Date.now(), mono = performance.now(); lastAttempt = wall;
-          fetch(new URL('/cta-refresh', source).href, {method:'POST', headers:{'Content-Type':'text/plain'}, body:JSON.stringify({session,signals}), cache:'no-store', signal:AbortSignal.timeout(5000)})
+          controller = new AbortController();
+          const requestController = controller, timeout = setTimeout(() => requestController.abort(), 5000);
+          fetch(new URL('/cta-refresh', source).href, {method:'POST', headers:{'Content-Type':'text/plain'}, body:JSON.stringify({session,signals}), cache:'no-store', signal:requestController.signal})
             .then(response => { if (!response.ok) throw Error('unavailable'); return response.json(); })
-            .then(decision => { if (id !== sequence || !validContext()) return; backoff = refreshIntervalMs; activeCtas = null; if (decision && decision.action === 'REPLACE_CONVERSION') prepareCtas(decision, wall, mono); })
-            .catch(() => { if (id === sequence) { activeCtas = null; backoff = Math.min(backoff * 2, 240000); } })
-            .finally(() => { inFlight = false; });
+            .then(decision => { if (id !== sequence || !validContext()) return; failed = false; backoff = refreshIntervalMs; activeCtas = null; if (decision && decision.action === 'REPLACE_CONVERSION') prepareCtas(decision, wall, mono); })
+            .catch(() => { if (id === sequence) { activeCtas = null; failed = true; backoff = Math.min(backoff * 2, 240000); } })
+            .finally(() => { clearTimeout(timeout); if (id === sequence) { inFlight = false; controller = undefined; } });
         };
-        const timer = setInterval(refresh, refreshIntervalMs);
-        addEventListener('pagehide', () => clearInterval(timer), {once:true});
-        document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+        suspendCtas = () => { activeCtas = null; ++sequence; if (controller) controller.abort(); inFlight = false; controller = undefined; };
+        resumeCtas = () => refresh(true);
+        const timer = setInterval(() => refresh(), refreshIntervalMs);
+        addEventListener('pagehide', event => { if (!event.persisted) { clearInterval(timer); suspendCtas(); } });
+        document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(true); });
         const entryWall = Date.now(), entryMono = performance.now(), entrySequence = sequence;
         fetch(new URL('/entry-decision', source).href, { method:'POST', headers:{'Content-Type':'text/plain'}, body:JSON.stringify({session,signals}), cache: 'no-store' })
           .then(response => { if (!response.ok) throw new Error('decision unavailable'); return response.json(); })
