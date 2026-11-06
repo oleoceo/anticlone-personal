@@ -1,5 +1,6 @@
 import { authorizedHosts, collectInfrastructure, realResolver } from './infrastructure-dns.js';
 import http from 'node:http';
+import { checkoutWebhook } from './checkout-webhook.js';
 import { readFileSync } from 'node:fs';
 import { Pool } from 'pg';
 import { configuredOrigin, hostFromUrl, cleanup, observe, observeCanary } from './detection.js';
@@ -107,8 +108,10 @@ function recordClaim(origin: string, source: 'core' | 'fallback') {
   claimAfter.set(source,Date.now()+60_000);
   void optional.installation.run('claim', () => recordInstallationClaim(pool,activeProject,origin,source)).finally(()=>claimPending.delete(source));
 }
+const handleCheckout = checkoutWebhook(pool,activeProject,process.env);
 const server = http.createServer((req, res) => {
   if (!boundary(req, res)) return;
+  if (handleCheckout(req,res)) return;
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Access-Control-Allow-Origin', '*'); res.setHeader('Cache-Control', 'no-store');
   if (req.method === 'GET' && req.url === '/healthz') {

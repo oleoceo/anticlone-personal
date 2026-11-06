@@ -5,6 +5,7 @@ import { Conflict, getNotificationSettings, saveNotificationSettings, setNotific
 import { approveCommercial, selectObservation, SelectionConflict } from './cta-inventory.js';
 import { disableInstallation, enableInstallation, installationDiagnostic, InstallationOriginConflict } from './installation.js';
 import { investigation } from './investigation.js';
+import { checkoutMetrics } from './checkout-webhook.js';
 import { classifyIncident, IncidentConflict } from './incident-triage.js';
 import { protectionAdmin } from './protection-admin.js';
 import { protectionScript } from './protection-ui.js';
@@ -46,7 +47,7 @@ export function handleAdminUi(req: IncomingMessage, res: ServerResponse, db: Poo
     }
     res.writeHead(404).end(); return false;
   }
-  if (req.method !== 'POST' || !['/admin/ui/protection','/admin/ui/incidents','/admin/ui/incident-status','/admin/ui/login','/admin/ui/logout','/admin/ui/settings','/admin/ui/preference','/admin/ui/cta-inventory','/admin/ui/cta-selection','/admin/ui/cta-commercial','/admin/ui/installation','/admin/ui/installation-enable','/admin/ui/installation-disable'].includes(req.url ?? '')) { res.writeHead(404).end(); return false; }
+  if (req.method !== 'POST' || !['/admin/ui/checkout-metrics','/admin/ui/protection','/admin/ui/incidents','/admin/ui/incident-status','/admin/ui/login','/admin/ui/logout','/admin/ui/settings','/admin/ui/preference','/admin/ui/cta-inventory','/admin/ui/cta-selection','/admin/ui/cta-commercial','/admin/ui/installation','/admin/ui/installation-enable','/admin/ui/installation-disable'].includes(req.url ?? '')) { res.writeHead(404).end(); return false; }
   if (req.headers.origin !== origin || site !== 'same-origin' || req.headers['content-type'] !== 'application/json') { res.writeHead(403).end(); return false; }
   const expected = login ? cookie('admin_login_csrf') : valid ? session.csrf : undefined;
   if (!expected || !/^[a-f0-9]{64}$/.test(expected) || req.headers['x-csrf-token'] !== expected) { res.writeHead(403).end(); return false; }
@@ -58,7 +59,7 @@ export function handleAdminUi(req: IncomingMessage, res: ServerResponse, db: Poo
   req.on('end',()=>{
     if(rejected) return;
     let body:unknown; try { body=JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { res.writeHead(400).end(); return; }
-    const operation=req.url === '/admin/ui/protection' ? protectionAdmin(db,body) : req.url === '/admin/ui/incidents' ? incidentList(db,body) : req.url === '/admin/ui/incident-status' ? classifyIncident(db,body) : req.url === '/admin/ui/settings' ? saveNotificationSettings(db,body) : req.url === '/admin/ui/preference' ? setNotificationPreference(db,body) : req.url === '/admin/ui/cta-inventory' ? inventory(db,body) : req.url?.startsWith('/admin/ui/installation') ? installation(db,body,req.url) : req.url === '/admin/ui/cta-commercial' ? approveCommercial(db,body).then(()=>({state:'APPROVED'})) : selectObservation(db,body).then(()=>({state:'PENDING'}));
+    const operation=req.url === '/admin/ui/checkout-metrics' ? checkoutSummary(db,body) : req.url === '/admin/ui/protection' ? protectionAdmin(db,body) : req.url === '/admin/ui/incidents' ? incidentList(db,body) : req.url === '/admin/ui/incident-status' ? classifyIncident(db,body) : req.url === '/admin/ui/settings' ? saveNotificationSettings(db,body) : req.url === '/admin/ui/preference' ? setNotificationPreference(db,body) : req.url === '/admin/ui/cta-inventory' ? inventory(db,body) : req.url?.startsWith('/admin/ui/installation') ? installation(db,body,req.url) : req.url === '/admin/ui/cta-commercial' ? approveCommercial(db,body).then(()=>({state:'APPROVED'})) : selectObservation(db,body).then(()=>({state:'PENDING'}));
     void operation.then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error:unknown)=>res.writeHead(error instanceof IncidentConflict || error instanceof Conflict || error instanceof SelectionConflict || error instanceof InstallationOriginConflict ? 409 : error instanceof TypeError ? 400 : 503).end());
   }); return false;
 }
@@ -66,6 +67,11 @@ export function handleAdminUi(req: IncomingMessage, res: ServerResponse, db: Poo
 async function incidentList(db: Pool, body: unknown) {
   if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).join(',') !== 'project' || typeof (body as {project?:unknown}).project !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test((body as {project:string}).project)) throw new TypeError('invalid project');
   return investigation(db,(body as {project:string}).project);
+}
+
+async function checkoutSummary(db: Pool, body: unknown) {
+  if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).join(',') !== 'project' || typeof (body as {project:unknown}).project !== 'string') throw new TypeError('invalid project');
+  return checkoutMetrics(db,(body as {project:string}).project);
 }
 
 async function installation(db: Pool, body: unknown, action: string) {
@@ -166,4 +172,8 @@ incidentQuery.addEventListener('submit',async event=>{event.preventDefault(); co
  form.addEventListener('submit',async e=>{e.preventDefault();try {await request('incident-status',{project,host:row.host,incident_id:row.incident_id,expected:row.status,version:row.triage_version,status:select.value,justification:reason.value});el('incident-message').textContent='Classificação e auditoria registradas. Consulte novamente.';form.remove()}catch(err){el('incident-message').textContent=err.status===409?'Incidente alterado em outra sessão; consulte novamente.':err.status===400?'Verifique o novo estado e a justificativa.':'Não foi possível registrar a classificação.'}});
  box.append(heading,details,form);list.append(box);
  }} catch(err) {el('incident-message').textContent=err.status===401||err.status===403?'Sessão inválida ou expirada.':'Consulta indisponível.'}});
+const checkoutSection=document.createElement('section');
+checkoutSection.innerHTML='<h2>Vendas reportadas pelo checkout</h2><p>Fonte: remetente autenticado. Atribuição à proteção não verificada. Cliques, handoffs, estimativa e receita recuperada indisponíveis.</p><form id="checkout-query"><label>Projeto do checkout <input name="project" required pattern="[a-zA-Z0-9_-]{1,64}"></label><button>Consultar vendas reportadas</button></form><p id="checkout-status" role="status"></p><div id="checkout-sales"></div>';
+section.append(checkoutSection);
+el('checkout-query').addEventListener('submit',async event=>{event.preventDefault();el('checkout-sales').replaceChildren();try{const data=await request('checkout-metrics',{project:event.currentTarget.elements.project.value});el('checkout-status').textContent=data.currencies.length?'Vendas reportadas, sem atribuição comprovada à proteção.':'Nenhuma venda reportada neste projeto.';for(const row of data.currencies){const line=document.createElement('p');line.textContent=row.currency+': '+row.reported_sales+' venda(s) reportada(s), '+row.reported_amount_minor+' unidades menores da moeda. Não é receita recuperada.';el('checkout-sales').append(line)}}catch{el('checkout-status').textContent='Consulta indisponível. Verifique sessão, projeto e configuração do checkout.'}});
 bootstrap().catch(failure);` + protectionScript;
