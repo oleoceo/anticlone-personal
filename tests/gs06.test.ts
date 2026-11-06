@@ -131,7 +131,7 @@ test('GS06 integration: persisted policy, controlled LOW and original', {timeout
     assert.equal((await decision()).action,'OBSERVE_ONLY');
     // Browser-controlled headers, sessions and forged risk fields cannot create LOW.
     for (const phase of ['entry-decision','cta-refresh']) {
-      for (const injected of [{level:'LOW'},{confidence:'high'},{provenance:'independent'}]) {
+      for (const injected of [{},{level:'LOW'},{confidence:'high'},{provenance:'independent'}]) {
         for (const session of ['0123456789abcdef0123456789abcdef','fedcba9876543210fedcba9876543210']) {
           const response=await fetch('http://127.0.0.1:3000/'+phase,{method:'POST',headers:{origin:clone,referer:'https://forged.example/', 'user-agent':'forged-agent','x-forwarded-for':'192.0.2.1','content-type':'text/plain'},body:JSON.stringify({session,signals:{},...injected})});
           assert.equal((await response.json() as {action:string}).action,'OBSERVE_ONLY');
