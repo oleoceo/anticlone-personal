@@ -4,6 +4,8 @@ import type { Pool } from 'pg';
 import { Conflict, getNotificationSettings, saveNotificationSettings, setNotificationPreference } from './notification-settings.js';
 import { approveCommercial, selectObservation, SelectionConflict } from './cta-inventory.js';
 import { disableInstallation, enableInstallation, installationDiagnostic, InstallationOriginConflict } from './installation.js';
+import { investigation } from './investigation.js';
+import { classifyIncident, IncidentConflict } from './incident-triage.js';
 
 type Session = { expiry: number; kind: 'bearer' | 'web'; csrf: string };
 
@@ -32,13 +34,17 @@ export function handleAdminUi(req: IncomingMessage, res: ServerResponse, db: Poo
       if (!valid) res.setHeader('Set-Cookie', `admin_login_csrf=${csrf}; HttpOnly; SameSite=Strict; Path=/admin/ui/`);
       res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify({authenticated:!!valid, csrf})); return false;
     }
+    if (req.url === '/admin/ui/projects') {
+      if (!valid) { res.writeHead(401).end(); return false; }
+      void db.query('SELECT id,name FROM projects ORDER BY name,id').then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result.rows))).catch(()=>res.writeHead(503).end()); return false;
+    }
     if (req.url === '/admin/ui/settings') {
       if (!valid) { res.writeHead(401).end(); return false; }
       void getNotificationSettings(db).then(result => res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify(result))).catch(() => res.writeHead(503).end()); return false;
     }
     res.writeHead(404).end(); return false;
   }
-  if (req.method !== 'POST' || !['/admin/ui/login','/admin/ui/logout','/admin/ui/settings','/admin/ui/preference','/admin/ui/cta-inventory','/admin/ui/cta-selection','/admin/ui/cta-commercial','/admin/ui/installation','/admin/ui/installation-enable','/admin/ui/installation-disable'].includes(req.url ?? '')) { res.writeHead(404).end(); return false; }
+  if (req.method !== 'POST' || !['/admin/ui/incidents','/admin/ui/incident-status','/admin/ui/login','/admin/ui/logout','/admin/ui/settings','/admin/ui/preference','/admin/ui/cta-inventory','/admin/ui/cta-selection','/admin/ui/cta-commercial','/admin/ui/installation','/admin/ui/installation-enable','/admin/ui/installation-disable'].includes(req.url ?? '')) { res.writeHead(404).end(); return false; }
   if (req.headers.origin !== origin || site !== 'same-origin' || req.headers['content-type'] !== 'application/json') { res.writeHead(403).end(); return false; }
   const expected = login ? cookie('admin_login_csrf') : valid ? session.csrf : undefined;
   if (!expected || !/^[a-f0-9]{64}$/.test(expected) || req.headers['x-csrf-token'] !== expected) { res.writeHead(403).end(); return false; }
@@ -50,9 +56,14 @@ export function handleAdminUi(req: IncomingMessage, res: ServerResponse, db: Poo
   req.on('end',()=>{
     if(rejected) return;
     let body:unknown; try { body=JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { res.writeHead(400).end(); return; }
-    const operation=req.url === '/admin/ui/settings' ? saveNotificationSettings(db,body) : req.url === '/admin/ui/preference' ? setNotificationPreference(db,body) : req.url === '/admin/ui/cta-inventory' ? inventory(db,body) : req.url?.startsWith('/admin/ui/installation') ? installation(db,body,req.url) : req.url === '/admin/ui/cta-commercial' ? approveCommercial(db,body).then(()=>({state:'APPROVED'})) : selectObservation(db,body).then(()=>({state:'PENDING'}));
-    void operation.then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error:unknown)=>res.writeHead(error instanceof Conflict || error instanceof SelectionConflict || error instanceof InstallationOriginConflict ? 409 : error instanceof TypeError ? 400 : 503).end());
+    const operation=req.url === '/admin/ui/incidents' ? incidentList(db,body) : req.url === '/admin/ui/incident-status' ? classifyIncident(db,body) : req.url === '/admin/ui/settings' ? saveNotificationSettings(db,body) : req.url === '/admin/ui/preference' ? setNotificationPreference(db,body) : req.url === '/admin/ui/cta-inventory' ? inventory(db,body) : req.url?.startsWith('/admin/ui/installation') ? installation(db,body,req.url) : req.url === '/admin/ui/cta-commercial' ? approveCommercial(db,body).then(()=>({state:'APPROVED'})) : selectObservation(db,body).then(()=>({state:'PENDING'}));
+    void operation.then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error:unknown)=>res.writeHead(error instanceof IncidentConflict || error instanceof Conflict || error instanceof SelectionConflict || error instanceof InstallationOriginConflict ? 409 : error instanceof TypeError ? 400 : 503).end());
   }); return false;
+}
+
+async function incidentList(db: Pool, body: unknown) {
+  if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).join(',') !== 'project' || typeof (body as {project?:unknown}).project !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test((body as {project:string}).project)) throw new TypeError('invalid project');
+  return investigation(db,(body as {project:string}).project);
 }
 
 async function installation(db: Pool, body: unknown, action: string) {
@@ -111,7 +122,7 @@ installationForm.addEventListener('submit',e=>{e.preventDefault();void showInsta
 el('installation-enable').addEventListener('click',()=>void showInstallation('-enable'));
 el('installation-disable').addEventListener('click',()=>void showInstallation('-disable'));
 async function request(path,body) { const r=await fetch('/admin/ui/'+path,{method:body===undefined?'GET':'POST',headers:body===undefined?{}:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:body===undefined?undefined:JSON.stringify(body)}); if(!r.ok) {const e=new Error();e.status=r.status;throw e} return r.status===204?null:r.json() }
-async function bootstrap() {const b=await request('bootstrap'); csrf=b.csrf; login.hidden=b.authenticated; section.hidden=!b.authenticated; if(b.authenticated) await load()}
+async function bootstrap() {const b=await request('bootstrap'); csrf=b.csrf; login.hidden=b.authenticated; section.hidden=!b.authenticated; if(b.authenticated) {await load(); try {await loadIncidentProjects()} catch {el('incident-message').textContent='Lista de projetos indisponível.'}}}
 function show(data,updateFields=true) {const snapshot=snapshotOf(data); if(updateFields || known===snapshot) version=data.version; if(updateFields) {known=snapshot; for(const name of names) config.elements[name].value=data[name]??''} el('status').textContent=({incomplete:'Configuração incompleta',configured_disabled:'Configurada / desativada',enablement_requested:'Habilitação solicitada — envio não operacional'})[data.status]; status=data.status; updateEnablement(); el('disable').disabled=!data.preference_requested}
 config.addEventListener('input',updateEnablement);
 config.addEventListener('change',updateEnablement);
@@ -136,4 +147,18 @@ ctaQuery.addEventListener('submit',async e=>{e.preventDefault(); ctaChoice=null;
  } catch(err){failure(err)} });
 ctaSelect.addEventListener('submit',async e=>{e.preventDefault(); if(!ctaChoice || !ctaData) return; const d=ctaData.destinations.find(x=>x.id===ctaSelect.elements.destination.value); if(!d)return;
  try {await request('cta-selection',{...ctaScope,captureId:ctaData.captureId,observationId:ctaChoice.observation_id,pointId:ctaChoice.point_id,offer:d.offer,destinationId:d.id}); el('cta-message').textContent='Seleção PENDENTE registrada; redirecionamento não ativado.'; ctaSelect.hidden=true;} catch(err){el('cta-message').textContent=err.status===409?'Captura ou seleção indisponível; consulte novamente.':'Não foi possível registrar a seleção.'} });
+const incidentSection=document.createElement('section');
+incidentSection.innerHTML='<h2>Incidentes</h2><p>Classificação manual não identifica o responsável e não altera a proteção. Alertas pendentes e enviados permanecem inalterados.</p><form id="incident-query"><label>Selecionar escopo <select name="project" required></select></label><button>Consultar incidentes</button></form><p id="incident-message" role="status"></p><div id="incident-list"></div>';
+section.append(incidentSection);
+const incidentQuery=el('incident-query');
+async function loadIncidentProjects() {const projects=await request('projects'); const select=incidentQuery.elements.project; select.replaceChildren(); for(const project of projects) {const option=document.createElement('option'); option.value=project.id; option.textContent=project.name+' ('+project.id+')'; select.append(option)}}
+incidentQuery.addEventListener('submit',async event=>{event.preventDefault(); const project=incidentQuery.elements.project.value, list=el('incident-list'); list.replaceChildren(); el('incident-message').textContent=''; try {const rows=await request('incidents',{project}); if(!rows.length) el('incident-message').textContent='Nenhum incidente observado.'; for(const row of rows) {
+ const box=document.createElement('section'), heading=document.createElement('h3'), details=document.createElement('pre'), form=document.createElement('form'), select=document.createElement('select'), reason=document.createElement('input'), button=document.createElement('button');
+ heading.textContent=row.host+' — '+row.status+' | primeira: '+row.first_observed_at+' | última: '+row.last_observed_at;
+ details.textContent=JSON.stringify({timeline:row.timeline,auditoria:row.status_audit,fontes:row.observation_sources,alegacoes:row.browser_claims,canarios:row.canary_claims,avaliacoes:row.assessments,degradacao:row.degradation,dns:row.infrastructure,lacuna:row.collection_gap,limitacoes:row.limitations},null,2);
+ for(const [value,label] of [['unverified','Não verificado'],['investigating','Em investigação'],['confirmed_copy','Cópia confirmada manualmente'],['false_positive','Falso positivo']]) {const option=document.createElement('option');option.value=value;option.textContent=label;option.selected=value===row.status;select.append(option)}
+ reason.required=true;reason.maxLength=500;reason.placeholder='Justificativa curta';reason.setAttribute('aria-label','Justificativa');button.textContent='Registrar classificação';form.append(select,reason,button);
+ form.addEventListener('submit',async e=>{e.preventDefault();try {await request('incident-status',{project,host:row.host,incident_id:row.incident_id,expected:row.status,version:row.triage_version,status:select.value,justification:reason.value});el('incident-message').textContent='Classificação e auditoria registradas. Consulte novamente.';form.remove()}catch(err){el('incident-message').textContent=err.status===409?'Incidente alterado em outra sessão; consulte novamente.':err.status===400?'Verifique o novo estado e a justificativa.':'Não foi possível registrar a classificação.'}});
+ box.append(heading,details,form);list.append(box);
+ }} catch(err) {el('incident-message').textContent=err.status===401||err.status===403?'Sessão inválida ou expirada.':'Consulta indisponível.'}});
 bootstrap().catch(failure);`;

@@ -3,8 +3,8 @@ import { isIP } from 'node:net';
 
 // Callers hold the project advisory transaction lock. No user-provided payloads are accepted.
 export type TimelineEvent = {
-  project: string; host: string; type: 'first_observation' | 'source_observed' | 'risk_assessment' | 'degradation_transition' | 'dns_change';
-  source: string; provenance: 'gateway' | 'browser' | 'evaluator' | 'infrastructure';
+  project: string; host: string; type: 'first_observation' | 'source_observed' | 'risk_assessment' | 'degradation_transition' | 'dns_change' | 'incident_status_transition';
+  source: string; provenance: 'gateway' | 'browser' | 'evaluator' | 'infrastructure' | 'administrator';
   reference?: string; summary: Record<string, string>; confidence: string; limitations: string;
 };
 export async function recordTimeline(client: PoolClient, event: TimelineEvent): Promise<void> {
