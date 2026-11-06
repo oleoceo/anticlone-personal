@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -120,8 +120,10 @@ test('GS16: real backup, isolated restore, complete data integrity and restarted
         await stop(gateway);gateway=undefined;
       }
     } finally {if(admin){admin.close();await once(admin,'close');admin=undefined;}await restored.end();}
-    const dump=join(directory,'database.dump');await writeFile(dump,Buffer.from('corrupted synthetic archive'));
-    await assert.rejects(restore(targetUrl,directory,targetName,tool),/integrity/);
+    const corrupted=directory+'-corrupted';await mkdir(corrupted,{mode:0o700});
+    await writeFile(join(corrupted,'manifest.json'),await readFile(join(directory,'manifest.json')),{mode:0o600});
+    await writeFile(join(corrupted,'database.dump'),Buffer.from('corrupted synthetic archive'),{mode:0o600});
+    await assert.rejects(restore(targetUrl,corrupted,targetName,tool),/integrity/);
   } finally {
     if(gateway)await stop(gateway);
     if(admin){admin.close();await once(admin,'close');}
