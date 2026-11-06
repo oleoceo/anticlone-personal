@@ -16,7 +16,8 @@ export async function investigation(pool: Pool, project: string) {
   // Optional migrations may be absent on older installations. Catalog errors and
   // query errors propagate as 503 rather than being presented as missing data.
   const schema = await pool.query(`SELECT to_regclass('degradation_events') IS NOT NULL AND to_regclass('degradation_audit') IS NOT NULL AS degradation,
-    to_regclass('degradation_collection_gaps') IS NOT NULL AS gaps`);
+    to_regclass('degradation_collection_gaps') IS NOT NULL AS gaps,
+    to_regclass('infrastructure_dns_observations') IS NOT NULL AS infrastructure`);
   const available = schema.rows[0];
   const states = available.degradation ? await pool.query(`SELECT DISTINCT ON (host) host,state,observed_at,window_start,uncertainty FROM degradation_audit
     WHERE project_id=$1 AND observed_at>=now()-interval '7 days' ORDER BY host,observed_at DESC`,[project]) : {rows:[]};
@@ -24,7 +25,19 @@ export async function investigation(pool: Pool, project: string) {
     WHERE project_id=$1 AND observed_at>=now()-interval '24 hours' ORDER BY observed_at DESC LIMIT 10000`,[project]) : {rows:[]};
   const gaps = available.gaps ? await pool.query(`SELECT last_dropped_at FROM degradation_collection_gaps
     WHERE project_id=$1 AND last_dropped_at>=now()-interval '30 minutes'`,[project]) : {rows:[]};
+  const dns = available.infrastructure ? await pool.query(`SELECT d.host,d.record_type,d.result,d.source,d.state,d.observed_at,d.valid_until,d.limitations,
+    p.result AS previous_result,p.observed_at AS previous_observed_at,
+    EXISTS(SELECT 1 FROM infrastructure_dns_observations g WHERE g.project_id=d.project_id AND g.host=d.host AND g.record_type=d.record_type AND g.state<>'OK' AND g.observed_at>p.observed_at AND g.observed_at<d.observed_at) AS intervening_gap
+    FROM infrastructure_dns_observations d LEFT JOIN LATERAL (SELECT result,observed_at FROM infrastructure_dns_observations x
+      WHERE x.project_id=d.project_id AND x.host=d.host AND x.record_type=d.record_type AND x.state='OK' AND (x.observed_at,x.id)<(d.observed_at,d.id)
+      ORDER BY x.observed_at DESC,x.id DESC LIMIT 1) p ON true
+    WHERE d.project_id=$1 AND d.observed_at>=now()-interval '30 days' ORDER BY d.observed_at DESC,d.id DESC LIMIT 12000`,[project]) : {rows:[]};
   return result.rows.map(row => ({ ...row,
+    infrastructure: {available:available.infrastructure, dns:dns.rows.filter(item=>item.host===row.host).map(item=>({...item,
+      validity:'UNKNOWN',
+      changed:item.state==='OK' && item.previous_result!==null && JSON.stringify(item.result)!==JSON.stringify(item.previous_result),
+      reliability:'resolver_response_not_identity'})), asn:'NOT_AVAILABLE', hosting:'NOT_AVAILABLE',
+      limitations:['DNS describes infrastructure, not visitor or operator identity.', 'No authoritative ASN or hosting source configured.', 'Expired, failed and absent records do not establish current infrastructure.']},
     assessments: row.assessments.map((assessment: {version:string; level:string; source:string; confidence:string; evidence_provenance:string; evidence_reliability:string; evidence_kind:string}) => {
       // v3 receives these exact two categories at request time. Older rows and
       // unknown writes cannot be reconstructed; daily upserts retain only the latest.

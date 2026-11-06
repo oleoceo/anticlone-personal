@@ -27,7 +27,7 @@ test('pilot browser: multiple exact origins, untrusted copy, uncertain decisions
   await root.query(`CREATE SCHEMA ${schema}`);
   const options = `-c search_path=${schema}`;
   const db = new Pool({connectionString:process.env.TEST_DATABASE_URL,options});
-  for (const file of ['001_initial','002_alerts','003_projects','004_observation_sources','005_canaries','008_traffic_observations','009_risk_assessments','024_risk_evidence','018_notification_budget','019_alert_outbox_expiry']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
+  for (const file of ['001_initial','002_alerts','003_projects','004_observation_sources','005_canaries','008_traffic_observations','009_risk_assessments','024_risk_evidence','018_notification_budget','019_alert_outbox_expiry','030_infrastructure_dns']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
   await db.query("INSERT INTO projects VALUES('pilot','Pilot','https://owner.test')");
   for (const file of ['007_protection_policy','010_policy_allocation','012_cta_policy']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
   const allocation = {PAID_ATTRIBUTED:100,ORGANIC:100,REFERRAL:100,DIRECT_UNKNOWN:100};
@@ -38,7 +38,7 @@ test('pilot browser: multiple exact origins, untrusted copy, uncertain decisions
   const reserve = createServer().listen(0,'127.0.0.1'); await once(reserve,'listening');
   const address = reserve.address(); assert.ok(address && typeof address !== 'string');
   const port = address.port; await new Promise<void>(resolve => reserve.close(() => resolve()));
-  const child = spawn(process.execPath,['dist/apps/server.js'], {env:{...process.env, PGOPTIONS:options,DATABASE_URL:process.env.TEST_DATABASE_URL,PROJECT_ID:'pilot',PORT:String(port),SMTP_PORT:'1',GATEWAY_MODE:'PILOT_OBSERVE',PILOT_ORIGINS:'["https://owner.test","https://preview.owner.test"]',ALLOWED_ORIGIN:'',LAB_CONTROLLED_ORIGIN:'',LAB_CONTROLLED_RISK:''},stdio:'ignore'});
+  const child = spawn(process.execPath,['dist/apps/server.js'], {env:{...process.env, PGOPTIONS:options,DATABASE_URL:process.env.TEST_DATABASE_URL,PROJECT_ID:'pilot',PORT:String(port),SMTP_PORT:'1',GATEWAY_MODE:'PILOT_OBSERVE',PILOT_ORIGINS:'["https://owner.test","https://preview.owner.test"]',ALLOWED_ORIGIN:'',LAB_CONTROLLED_ORIGIN:'',LAB_CONTROLLED_RISK:'',INFRASTRUCTURE_DNS_ENABLED:''},stdio:'ignore'});
   const browser = await chromium.launch();
   try {
     const base = `http://127.0.0.1:${port}`;
@@ -67,6 +67,12 @@ test('pilot browser: multiple exact origins, untrusted copy, uncertain decisions
     }
     const incidents = await db.query('SELECT host FROM incidents ORDER BY host');
     assert.deepEqual(incidents.rows,[{host:'copy.test'},{host:'owner.test.evil.test'}]);
+    await db.query(`INSERT INTO infrastructure_dns_observations(incident_id,project_id,host,record_type,result,source,state,valid_until,limitations)
+      SELECT id,project_id,host,'A','["8.8.8.8"]'::jsonb,'controlled-test-resolver','OK',now(),'TTL unknown' FROM incidents WHERE project_id='pilot' AND host='copy.test'`);
+    for (const path of ['/entry-decision','/cta-refresh']) {
+      const response=await fetch(base+path,{method:'POST',headers:{origin:'https://copy.test','content-type':'text/plain'},body:JSON.stringify({session:'a'.repeat(32),signals:{medium:'cpc'}})});
+      assert.deepEqual(await response.json(),{action:'OBSERVE_ONLY'});
+    }
     const risks = await db.query('SELECT level,source,evaluator_version,evidence_kind,evidence_provenance,evidence_reliability FROM risk_assessment_days');
     assert.equal(risks.rowCount,4);
     assert.ok(risks.rows.every(row => row.level==='UNCERTAIN' && row.source==='server_default' && row.evaluator_version==='conservative-risk-v3'));

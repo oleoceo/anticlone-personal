@@ -1,3 +1,4 @@
+import { authorizedHosts, collectInfrastructure, realResolver } from './infrastructure-dns.js';
 import http from 'node:http';
 import { readFileSync } from 'node:fs';
 import { Pool } from 'pg';
@@ -41,6 +42,10 @@ function observeFailure(source: string, failed: boolean, code?: string) {
   failures.observe(source,failed,code);
 }
 const optional = await optionalSchemas(pool,observeFailure);
+// Explicit operator authorization is required even when a host already has an incident.
+const dnsHosts = authorizedHosts(process.env);
+const dnsResolver = dnsHosts.length ? realResolver(process.env.INFRASTRUCTURE_DNS_SERVER!) : undefined;
+let dnsIndex = 0, dnsBusy = false, dnsRetentionAfter = 0;
 if (legacyOrigin && legacyOrigin !== normalizedOrigin) throw new Error('legacy configuration conflicts with project');
 // The operator controls this local experiment; requests never provide risk.
 const controlledOrigin = process.env.LAB_CONTROLLED_ORIGIN ? configuredOrigin(process.env.LAB_CONTROLLED_ORIGIN) : undefined;
@@ -279,5 +284,25 @@ async function maintenance() {
   }
   finally { busy = false; }
 }
+async function infrastructureMaintenance() {
+  if (dnsBusy) return;
+  dnsBusy = true;
+  try {
+    const installed = await pool.query("SELECT to_regclass('infrastructure_dns_observations') IS NOT NULL AS installed");
+    if (!installed.rows[0].installed) return;
+    if (Date.now() >= dnsRetentionAfter) {
+      await pool.query("DELETE FROM infrastructure_dns_observations WHERE project_id=$1 AND observed_at<now()-interval '30 days'",[activeProject]);
+      dnsRetentionAfter=Date.now()+3600_000;
+    }
+    if (dnsResolver) {
+      const host = dnsHosts[dnsIndex++ % dnsHosts.length];
+      await collectInfrastructure(pool,activeProject,host,dnsHosts,dnsResolver,`configured-dns:${process.env.INFRASTRUCTURE_DNS_SERVER}`);
+    }
+  } catch { process.stderr.write('infrastructure DNS maintenance failed\n'); }
+  finally { dnsBusy = false; }
+}
+void infrastructureMaintenance();
+const dnsTimer = setInterval(() => void infrastructureMaintenance(),60_000);
+dnsTimer.unref();
 void maintenance(); const timer = setInterval(() => void maintenance(), 1000);
-process.on('SIGTERM', () => { clearInterval(timer); server.close(() => { void pool.end().finally(() => process.exit()); }); });
+process.on('SIGTERM', () => { clearInterval(timer); clearInterval(dnsTimer); server.close(() => { void pool.end().finally(() => process.exit()); }); });
