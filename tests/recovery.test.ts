@@ -43,7 +43,7 @@ test('GS16: real backup, isolated restore, complete data integrity and restarted
   const source=new Pool({connectionString:sourceUrl}),target=new Pool({connectionString:targetUrl});
   const directory=join(await mkdtemp(join(tmpdir(),'anticlone-recovery-')),'backup');
   const tool=process.env.RECOVERY_TEST_CONTAINER?localTool:postgresTool;
-  let gateway:ChildProcess|undefined,browser:Awaited<ReturnType<typeof chromium.launch>>|undefined;
+  let gateway:ChildProcess|undefined,adminProcess:ChildProcess|undefined,browser:Awaited<ReturnType<typeof chromium.launch>>|undefined;
   let admin:ReturnType<typeof createAdminServer>|undefined;
   const secret='GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';let clock=Date.now();
   const token=new TOTP({secret:Secret.fromBase32(secret)}).generate({timestamp:clock});
@@ -119,6 +119,16 @@ test('GS16: real backup, isolated restore, complete data integrity and restarted
         assert.deepEqual(await response.json(),{action:'OBSERVE_ONLY'});
         await stop(gateway);gateway=undefined;
       }
+      admin.close();await once(admin,'close');admin=undefined;
+      for(let restart=0;restart<2;restart++) {
+        adminProcess=spawn(process.execPath,['dist/apps/admin-server.js'],{env:{...process.env,DATABASE_URL:targetUrl,PGOPTIONS:'',ADMIN_PORT:'3098',ADMIN_PASSWORD_RECORD:record,ADMIN_TOTP_SECRET:secret},stdio:'ignore'});
+        let ready=false;
+        for(let retry=0;retry<100&&!ready;retry++){try{ready=(await fetch('http://127.0.0.1:3098/admin/ui/')).ok;}catch{/* startup */}if(!ready)await new Promise(resolve=>setTimeout(resolve,50));}
+        assert.ok(ready,'recovered administrator process starts');
+        assert.equal((await login('http://127.0.0.1:3098')).status,401,'real restarted process preserves replay rejection');
+        await page.goto('http://127.0.0.1:3098/admin/ui/');await page.locator('input[name="password"]').waitFor();
+        await stop(adminProcess);adminProcess=undefined;
+      }
     } finally {if(admin){admin.close();await once(admin,'close');admin=undefined;}await restored.end();}
     const corrupted=directory+'-corrupted';await mkdir(corrupted,{mode:0o700});
     await writeFile(join(corrupted,'manifest.json'),await readFile(join(directory,'manifest.json')),{mode:0o600});
@@ -126,6 +136,7 @@ test('GS16: real backup, isolated restore, complete data integrity and restarted
     await assert.rejects(restore(targetUrl,corrupted,targetName,tool),/integrity/);
   } finally {
     if(gateway)await stop(gateway);
+    if(adminProcess)await stop(adminProcess);
     if(admin){admin.close();await once(admin,'close');}
     await browser?.close();await source.end();if(!target.ended)await target.end();await root.end();
     // Dedicated synthetic DBs and private recovery artifact remain for inspection;

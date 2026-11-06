@@ -66,8 +66,9 @@ Teste reproduzível: `npm run build` e `node --test dist/tests/recovery.test.js`
 `TEST_DATABASE_URL` de laboratório e permissão `CREATE DATABASE`. Cria bancos
 sintéticos exclusivos e artifacts privados temporários; preserva-os para inspeção,
 sem apagar bancos. Exercita dados completos, hash, recusa de banco ocupado/online,
-identidade de sequência, TOTP após reinício, consulta autenticada, tela Chromium e
-dois reinícios do gateway PILOT_OBSERVE. CI Linux usa ferramentas PostgreSQL nativas;
+identidade de sequência, TOTP após reinício, consulta autenticada, tela Chromium,
+dois reinícios do processo gateway PILOT_OBSERVE e dois do processo admin real.
+CI Linux usa ferramentas PostgreSQL nativas;
 Windows pode definir `RECOVERY_TEST_CONTAINER=anticlone-drift-test` apenas no teste
 para usar as ferramentas do container WSL já documentado. Nenhum deploy é realizado.
 
