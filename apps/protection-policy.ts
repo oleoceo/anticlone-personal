@@ -1,5 +1,5 @@
 import type { Pool } from 'pg';
-import { approvedDestination } from './page-redirect.js';
+import { approvedDestination, configurationOrigin } from './page-redirect.js';
 
 import { validateAllocation, type Allocation } from './allocation.js';
 
@@ -8,7 +8,7 @@ export function validateDraft(body: unknown, origin: string): Draft {
   if (!body || typeof body !== 'object' || Array.isArray(body)) throw Error('invalid policy');
   const value = body as Record<string, unknown>;
   if (Object.keys(value).sort().join(',') !== 'allocation,approved_destination,enabled,stealth' || typeof value.enabled !== 'boolean' || value.stealth !== true || typeof value.approved_destination !== 'string') throw Error('invalid or conflicting policy');
-  if (!['localhost','127.0.0.1'].includes(new URL(origin).hostname)) throw Error('laboratory only');
+  configurationOrigin(origin);
   return {enabled:value.enabled, approved_destination:approvedDestination(value.approved_destination, origin), stealth:true, allocation:validateAllocation(value.allocation)};
 }
 export async function saveDraft(db: Pool, project: string, body: unknown) {
