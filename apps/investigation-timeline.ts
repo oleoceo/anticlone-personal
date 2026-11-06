@@ -18,3 +18,19 @@ export async function recordTimeline(client: PoolClient, event: TimelineEvent): 
   await client.query(`DELETE FROM investigation_timeline WHERE id IN (SELECT id FROM investigation_timeline
     WHERE project_id=$1 ORDER BY recorded_at DESC,id DESC OFFSET 10000)`, [event.project]);
 }
+
+// The caller owns the transaction. Recovery failures deliberately propagate.
+export async function tryRecordTimeline(client: PoolClient, event: TimelineEvent): Promise<void> {
+  await client.query('SAVEPOINT complementary_timeline');
+  try {
+    await recordTimeline(client, event);
+  } catch (error) {
+    await client.query('ROLLBACK TO SAVEPOINT complementary_timeline');
+    await client.query('RELEASE SAVEPOINT complementary_timeline');
+    const code = (error as {code?: string}).code;
+    if (code?.startsWith('08') || code?.startsWith('40') || code === '57P01') throw error;
+    process.stderr.write('Investigation timeline event unavailable; history may be incomplete\n');
+    return;
+  }
+  await client.query('RELEASE SAVEPOINT complementary_timeline');
+}

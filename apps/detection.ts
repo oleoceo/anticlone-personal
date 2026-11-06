@@ -1,4 +1,4 @@
-import { recordTimeline } from './investigation-timeline.js';
+import { tryRecordTimeline } from './investigation-timeline.js';
 import type { Pool } from 'pg';
 import { tryIntent } from './notification-intents.js';
 import { classifyTraffic } from './traffic.js';
@@ -46,7 +46,7 @@ export async function observe(pool: Pool, project: string, allowedOrigin: string
       ON CONFLICT DO NOTHING RETURNING host`, [project, host, source]);
     if (day.rowCount) {
       const saved = await client.query('INSERT INTO observations (project_id, host, source) VALUES ($1, $2, $3) RETURNING id', [project, host, source]);
-      await recordTimeline(client, {project,host,type:existing.rowCount ? 'source_observed' : 'first_observation',source,provenance:'gateway',reference:'observation:'+saved.rows[0].id,summary:{claimed_host:host},confidence:'receipt_only',limitations:'Gateway received a browser claim; host and source do not establish identity or independence.'});
+      await tryRecordTimeline(client, {project,host,type:existing.rowCount ? 'source_observed' : 'first_observation',source,provenance:'gateway',reference:'observation:'+saved.rows[0].id,summary:{claimed_host:host},confidence:'receipt_only',limitations:'Gateway received a browser claim; host and source do not establish identity or independence.'});
     }
     if (evidence !== undefined) {
       const traffic = classifyTraffic(evidence, origin);

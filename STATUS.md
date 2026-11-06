@@ -82,3 +82,10 @@ Correcao prioritaria F44 apos PR #46 (base 7688bf5):
 - Revisao /root/f44_fix_review favoravel, sem P0/P1/P2, blob a4068e0d19a4600e503614dd020f0da73804280a; detalhes em docs/F44-CI-RACE-FIX.md.
 - Regressao completa e CI HTTPS do SHA final registradas no PR; sem merge/deploy.
 - F44 PARCIAL; F08 BLOCKED; NOT_VERIFIED e OBSERVE_ONLY preservados.
+
+PR #52 - correcao P2 de isolamento da timeline (F11 permanece PARCIAL):
+- Observacao, degradacao e DNS usam savepoint para reverter somente a tentativa complementar; recuperacao/erros transacionais propagam.
+- Diagnostico fixo informa possivel lacuna sem SQL, payload ou evento substituto; sucesso permanece atomico com a operacao principal.
+- tests/timeline-failure.test.ts forca AFTER INSERT e falhas principais: incidente, observacoes, alerta, auditoria e DNS preservados; recuperacao e rollback integral verificados.
+- Testes focados PostgreSQL: 2/2; limites, retencao e isolamento cobertos pela suite investigation-timeline existente.
+- Regressao completa, revisao detached e CI HTTPS do SHA corrigido: evidencias finais no PR; sem merge, auto-merge ou deploy.

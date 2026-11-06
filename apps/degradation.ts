@@ -1,4 +1,4 @@
-import { recordTimeline } from './investigation-timeline.js';
+import { tryRecordTimeline } from './investigation-timeline.js';
 import type { Pool } from 'pg';
 
 export async function markDegradationGap(pool: Pool, project: string): Promise<void> {
@@ -68,7 +68,7 @@ export async function degradationState(pool: Pool, project: string, host: string
       SELECT $1,$2,$3,clock_timestamp()-interval '30 minutes'${canaryOrigin ? ',$4::jsonb' : ''}
       WHERE (SELECT count(*) FROM degradation_audit WHERE project_id=$1)<10000
       AND COALESCE((SELECT state FROM degradation_audit WHERE project_id=$1 AND host=$2 ORDER BY observed_at DESC LIMIT 1),'')<>$3 RETURNING observed_at`, canaryOrigin ? [project,host,state,JSON.stringify(result.rows[0]?.claims ?? [])] : [project,host,state]);
-    if (written.rowCount && (previous.rowCount || state==='POSSIBLE_DEGRADATION')) await recordTimeline(client,{project,host,type:'degradation_transition',source:'degradation_evaluator',provenance:'evaluator',summary:{from:previous.rows[0]?.state ?? 'unavailable',to:state},confidence:'uncertain',limitations:'Inference from potentially dependent unauthenticated signals; absence does not prove tampering.'});
+    if (written.rowCount && (previous.rowCount || state==='POSSIBLE_DEGRADATION')) await tryRecordTimeline(client,{project,host,type:'degradation_transition',source:'degradation_evaluator',provenance:'evaluator',summary:{from:previous.rows[0]?.state ?? 'unavailable',to:state},confidence:'uncertain',limitations:'Inference from potentially dependent unauthenticated signals; absence does not prove tampering.'});
     await client.query('COMMIT');
     return state;
   } catch (error) { await client.query('ROLLBACK'); throw error; }

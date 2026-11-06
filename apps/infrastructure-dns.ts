@@ -1,4 +1,4 @@
-import { recordTimeline } from './investigation-timeline.js';
+import { tryRecordTimeline } from './investigation-timeline.js';
 import { Resolver } from 'node:dns/promises';
 import { BlockList, isIP } from 'node:net';
 import type { Pool } from 'pg';
@@ -68,7 +68,7 @@ export async function collectInfrastructure(pool:Pool, project:string, host:stri
       const prior=await client.query('SELECT state,result,source FROM infrastructure_dns_observations WHERE project_id=$1 AND host=$2 AND record_type=$3 ORDER BY observed_at DESC,id DESC LIMIT 1',[project,host,types[i]]);
       const saved=await client.query(`INSERT INTO infrastructure_dns_observations(incident_id,project_id,host,record_type,result,source,state,valid_until,limitations) VALUES($1,$2,$3,$4,$5,$6,$7,clock_timestamp(),$8) RETURNING id`,[incident.rows[0].id,project,host,types[i],JSON.stringify(results[i].result),source,results[i].state,'DNS response is not proof of identity or operator; TTL unavailable; current validity unknown. CNAME chains are not followed or verified.']);
       if (prior.rowCount && prior.rows[0].source===source && ['OK','NO_DATA'].includes(prior.rows[0].state) && ['OK','NO_DATA'].includes(results[i].state) && (prior.rows[0].state!==results[i].state || JSON.stringify(prior.rows[0].result)!==JSON.stringify(results[i].result)))
-        await recordTimeline(client,{project,host,type:'dns_change',source:source==='controlled-test-resolver' ? source : 'configured-dns',provenance:'infrastructure',reference:'dns:'+saved.rows[0].id,summary:{record_type:types[i],previous_state:prior.rows[0].state,state:results[i].state},confidence:'resolver_response',limitations:'Comparable DNS responses changed; TTL and current validity unknown; not identity.'});
+        await tryRecordTimeline(client,{project,host,type:'dns_change',source:source==='controlled-test-resolver' ? source : 'configured-dns',provenance:'infrastructure',reference:'dns:'+saved.rows[0].id,summary:{record_type:types[i],previous_state:prior.rows[0].state,state:results[i].state},confidence:'resolver_response',limitations:'Comparable DNS responses changed; TTL and current validity unknown; not identity.'});
     }
     await client.query("DELETE FROM infrastructure_dns_observations WHERE project_id=$1 AND (observed_at<now()-interval '30 days' OR id IN (SELECT id FROM infrastructure_dns_observations WHERE project_id=$1 AND host=$2 ORDER BY observed_at DESC,id DESC OFFSET 120))",[project,host]);
     await client.query('COMMIT'); return true;
