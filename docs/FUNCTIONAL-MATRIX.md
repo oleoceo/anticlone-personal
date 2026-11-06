@@ -43,7 +43,7 @@ Legenda: **P** = planejada no Personal; **PARCIAL** = parte comprovada, capacida
 | F35 | Persistência PostgreSQL, fila/outbox e dedup a reinício | 12-MVP-SCOPE, 29-DATABASE-PERSISTENCE | GS02, GS13 | PARCIAL |
 | F36 | Histórico preservado com projeto pausado/arquivado | 12-MVP-SCOPE, 34-PRIVACY-DATA-RETENTION | GS15 | P |
 | F37 | Proteção de privacidade, minimização e retenção | 34-PRIVACY-DATA-RETENTION | GS15 | PARCIAL |
-| F38 | Backups, recuperação e deploy/rollback verificados | 36-BACKUP-DISASTER-RECOVERY, 38-CI-CD-MIGRATIONS-RELEASE | Imagem/Compose e smoke HTTPS em tests/https-gateway.test.ts; backup/restore e rollback VPS de GS16 pendentes, sem deploy | PARCIAL |
+| F38 | Backups, recuperação e deploy/rollback verificados | 36-BACKUP-DISASTER-RECOVERY, 38-CI-CD-MIGRATIONS-RELEASE | Backup/restore PostgreSQL sintético e smoke PILOT_OBSERVE em tests/recovery.test.ts; imagem/Compose e smoke HTTPS em tests/https-gateway.test.ts. Offsite, arquivos operacionais e rollback VPS pendentes; sem deploy | PARCIAL |
 | F39 | Testes navegador e performance reais, sem números inventados | 27-COMPATIBILITY-MATRIX, 28-PERFORMANCE-BUDGETS-BENCHMARKS | GS10, GS16 | PARCIAL |
 | F40 | Um painel responsivo de projetos, proteção, conversões e incidentes | 12-MVP-SCOPE, 39-INFORMATION-ARCHITECTURE | GS16 | PARCIAL |
 | F41 | Identidade de CTA por marcador estável ou correspondência estrutural com confiança; candidato novo ou incerto exige revisão antes de substituir | 26-CONVERSION-SURFACES-DRIFT §§3, 12, 23 | Laboratorio: marcador por superficie e sugestoes estruturais sem associacao automatica, tests/cta-inventory.test.ts, CI 41726344521; GS17 integral pendente | PARCIAL |
