@@ -1,4 +1,5 @@
-﻿import { TOTP, Secret } from 'otpauth';
+import { investigation } from './investigation.js';
+import { TOTP, Secret } from 'otpauth';
 import { Pool } from 'pg';
 import http from 'node:http';
 import { randomBytes, scryptSync, timingSafeEqual, createHash, createHmac } from 'node:crypto';
@@ -80,6 +81,10 @@ export function createAdminServer(passwordRecord: string, totpSecret: string, db
       if (installationPath && (req.method === 'GET' || req.method === 'POST')) {
         const operation = req.method === 'GET' ? installationDiagnostic(db,installationPath[1]) : installationPath[2] ? disableInstallation(db,installationPath[1]) : enableInstallation(db,installationPath[1]);
         void operation.then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error:unknown)=>res.writeHead(error instanceof InstallationOriginConflict ? 409 : error instanceof TypeError ? 404 : 503).end()); return;
+      }
+      const investigationPath = /^\/admin\/projects\/([a-zA-Z0-9_-]{1,64})\/investigation$/.exec(req.url ?? '');
+      if (req.method === 'GET' && investigationPath) {
+        void investigation(db, investigationPath[1]).then(result => res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify(result))).catch(() => res.writeHead(503).end()); return;
       }
       const riskPath = /^\/admin\/projects\/([a-zA-Z0-9_-]{1,64})\/risk-assessments$/.exec(req.url ?? '');
       if (req.method === 'GET' && riskPath) {

@@ -77,7 +77,7 @@ Este quadro complementa as provas acima, sem mudar criterios. `Parcial` signific
 | F10 · A | Ausente: sem prova completa file/iframe | Matriz de transporte/sandbox com degradacao GS10. |
 | F11 · A | Parcial: detection.test.ts/gs02.test.ts | Evidencias operacionais e GS12 completos. |
 | F12 · A | Parcial: detection.test.ts | Lifecycle e falso positivo auditados no painel (GS12). |
-| F13 · B | Parcial: risk.test.ts, somente UNCERTAIN operacional | Classificador versionado multissinal, validacao conservadora GS05/GS12. |
+| F13 · B | Parcial: risk.test.ts, somente UNCERTAIN operacional; consulta investigativa inicial em tests/investigation.test.ts, sem avaliador estruturado ou diagnostico de degradacao | Classificador versionado multissinal, validacao conservadora GS05/GS12. |
 | F14 · B | Parcial: protection-policy.test.ts | Precedencia operacional de Stealth com classificador e GS05/GS19 completos. |
 | F15 · B | Parcial: traffic.test.ts | Sessao e fatos reais para GS04/GS14. |
 | F16 · B | Parcial: traffic.test.ts | Atribuicao revisavel, incerteza e GS12 completos. |
