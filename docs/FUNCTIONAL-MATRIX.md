@@ -37,7 +37,7 @@ Legenda: **P** = planejada no Personal; **PARCIAL** = parte comprovada, capacida
 | F29 | Métricas de sessões, ações, redirecionamentos e fontes reais | 22-METRIC-DICTIONARY | GS14 | P |
 | F30 | Estimativa recuperada rotulada; conversão ≠ venda | 22-METRIC-DICTIONARY, 01- Decisoes Tecnicas | GS14 | P |
 | F31 | Webhook mínimo de checkout com autenticação e idempotência | 33-INTEGRATIONS-WEBHOOKS-ADAPTIVE-MAPPING | GS14 | P |
-| F32 | DNS/ASN/hosting externo separado do IP do visitante | 25-INCIDENT-EVIDENCE-MODEL, 16-SECURITY-PRINCIPLES | GS12 | P |
+| F32 | DNS/ASN/hosting externo separado do IP do visitante | 25-INCIDENT-EVIDENCE-MODEL, 16-SECURITY-PRINCIPLES | GS12 parcial: DNS autorizado, ASN/hosting indisponiveis | PARCIAL |
 | F33 | Segurança do gateway: body, spoofing, rate, replay, validação | 16-SECURITY-PRINCIPLES, 02- Observacoes Tecnicas | tests/https-gateway.test.ts: headers, limites, corpo e falha upstream; GS11 integral (replay/queue/SSRF) pendente; gates no PR | PARCIAL |
 | F34 | Admin único, login seguro, MFA, sessão e trilha de alterações | 18-AUTHENTICATION-AUTHORIZATION (simplificado) | GS16; senha, sessão e TOTP com prevenção de replay implementados e testados em laboratório: tests/admin-auth.test.ts e tests/admin-totp.test.ts; faltam trilha de auditoria e requisitos de produção | PARCIAL |
 | F35 | Persistência PostgreSQL, fila/outbox e dedup a reinício | 12-MVP-SCOPE, 29-DATABASE-PERSISTENCE | GS02, GS13 | PARCIAL |
@@ -96,7 +96,7 @@ Este quadro complementa as provas acima, sem mudar criterios. `Parcial` signific
 | F29 · C | Ausente: agregados parciais nao sao metricas completas | Fatos de sessao/acao/handoff e GS14. |
 | F30 · C | Ausente: sem receita operacional | Preco confirmado/snapshot, estimativa rotulada e GS14. |
 | F31 · C | Ausente: webhook de vendas | Integracao escolhida, assinatura/idempotencia e GS14. |
-| F32 · A | Ausente: enriquecimento DNS/ASN | Worker com anti-SSRF, fontes separadas do visitante e GS12. |
+| F32 · A | Parcial: DNS autorizado e historico em tests/infrastructure-dns.test.ts; ASN/hosting NOT_AVAILABLE | Fonte confiavel de ASN/hosting, TTL verificavel e GS12 integral pendentes. |
 | F33 · C | Parcial: https-gateway.test.ts + limites existentes | Proxy/TLS integrado neste PR; replay/queue/SSRF e GS11 integral pendentes. |
 | F34 · C | Parcial: admin-auth.test.ts/admin-totp.test.ts | Administracao de producao, auditoria e GS16. |
 | F35 · C | Parcial: detection.test.ts/notification-intents.test.ts | Worker/Redis conforme D03 ainda proposto; reinicios operacionais GS02/GS13. |
