@@ -1,5 +1,7 @@
 # Matriz de Cobertura Funcional — AntiClone Personal
 
+Frente B, recorte laboratorial F17/F20/F21/F23/F24/F43: `tests/protection-admin-ui.test.ts` acrescenta configuração no painel, quatro classes declaradas e 0/50/100 por ação, destinos HTTPS externos autorizados por URL exata, múltiplas ofertas e revisão isolada de drift. Capacidade integral continua PARCIAL: LOW operacional, formulários (D07), destinos comerciais reais e cenários adversariais integrais permanecem pendentes. Detalhes em `PROTECTION-ADMIN.md`; gates finais no PR.
+
 **Estado:** cobertura documental F01–F40 **AUDITADA** nas fontes temáticas consultadas; F41–F45 registram lacunas. Não é código implementado nem prova de comportamento; a auditoria não garante exaustividade.
 
 Legenda: **P** = planejada no Personal; **PARCIAL** = parte comprovada, capacidade incompleta; **V** = validada por teste; **B** = bloqueada com explicação. Inicialmente tudo está `P`. Cada `Fxx` só vira `V` depois de evidência de teste, não por texto ou interface.

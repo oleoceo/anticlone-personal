@@ -22,7 +22,7 @@ export async function publishCtaPolicy(db:Pool, project:string, body:unknown) {
     await client.query('COMMIT'); return version;
   } catch(error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
 }
-export async function ctaDecision(db:Pool, project:string, original:string, origin:string, controlledOrigin:string|undefined, risk:string, session:unknown, trafficClass:string) {
+export async function ctaDecision(db:Pool, project:string, original:string, origin:string, controlledOrigin:string|undefined, risk:string, session:unknown, trafficClass:string): Promise<{action:string;ctaVersion?:number;version?:number;pathname?:string;original?:string;mappings?:{marker:string;kind:string;destination:string}[];externalDestinations?:string[]}> {
   if (origin===original || !controlledOrigin || origin!==controlledOrigin || risk!=='LOW') return {action:'OBSERVE_ONLY'};
   const client=await db.connect().catch(()=>undefined);
   if (!client) return {action:'OBSERVE_ONLY'};
@@ -36,7 +36,8 @@ export async function ctaDecision(db:Pool, project:string, original:string, orig
     const rows=await client.query(`SELECT p.marker,p.kind,d.url FROM cta_points p JOIN cta_mappings m ON m.project_id=p.project_id AND m.point_id=p.id AND m.offer=p.offer JOIN cta_destinations d ON d.project_id=m.project_id AND d.offer=m.offer AND d.id=m.destination_id LEFT JOIN cta_commercial_references r ON r.project_id=p.project_id AND r.point_id=p.id WHERE p.project_id=$1 AND p.surface=$2 AND p.kind='a' AND p.marker IS NOT NULL AND p.review_required=false AND r.suspension IS NULL ORDER BY p.id LIMIT 101`,[project,policy.surface]);
     if (rows.rows.length>100) return {action:'OBSERVE_ONLY'};
     const mappings=rows.rows.map((row:{marker:string;kind:string;url:string})=>({marker:row.marker,kind:row.kind,destination:approvedDestination(row.url,original)}));
-    return {action:'REPLACE_CONVERSION',version:policy.version,pathname:policy.pathname,original,mappings};
+    const externalDestinations=mappings.filter(row=>new URL(row.destination).origin!==original).map(row=>row.destination);
+    return {action:'REPLACE_CONVERSION',version:policy.version,pathname:policy.pathname,original,mappings,...(externalDestinations.length?{externalDestinations}:{})};
   } catch { return {action:'OBSERVE_ONLY'}; }
   finally { try { await client.query('ROLLBACK'); client.release(); } catch { client.release(true); } }
 }

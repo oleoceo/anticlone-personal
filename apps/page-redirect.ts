@@ -1,11 +1,30 @@
 ﻿import { selected, validateAllocation } from './allocation.js';
 import { configuredOrigin } from './detection.js';
+import { isIP } from 'node:net';
 
-// The destination is pre-approved by the owner and constrained to the project origin.
+// Private owner configuration: exact URLs, grouped by project origin. No wildcard hosts.
+export function externalDestinations(projectOrigin: string): string[] {
+  const raw = process.env.PROTECTION_APPROVED_EXTERNAL_URLS;
+  if (!raw) return [];
+  if (raw.length > 65536) throw Error('invalid external destination configuration');
+  const config: unknown = JSON.parse(raw);
+  if (!config || typeof config !== 'object' || Array.isArray(config)) throw Error('invalid external destination configuration');
+  const values = (config as Record<string, unknown>)[configuredOrigin(projectOrigin)];
+  if (values === undefined) return [];
+  if (!Array.isArray(values) || values.length > 100) throw Error('invalid external destination configuration');
+  return values.map(value => {
+    if (typeof value !== 'string' || value.length > 2048 || /[\u0000-\u0020\\]/.test(value)) throw Error('invalid external destination');
+    const url = new URL(value), host = url.hostname;
+    if (url.protocol !== 'https:' || url.username || url.password || url.hash || isIP(host) || host.includes(':') || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/.test(host) || /\.(localhost|local|internal|invalid)$/.test(host)) throw Error('invalid external destination');
+    return url.href;
+  });
+}
+
+// Same-origin destinations or an exact URL in the owner's private allowlist.
 export function approvedDestination(value: string, projectOrigin: string): string {
   if (typeof value !== 'string' || value.length > 2048 || /[\u0000-\u0020\\]/.test(value)) throw new Error('invalid destination');
   const url = new URL(value);
-  if (url.username || url.password || url.origin !== configuredOrigin(projectOrigin) || url.hash) throw new Error('invalid destination');
+  if (url.username || url.password || url.hash || (url.origin !== configuredOrigin(projectOrigin) && !externalDestinations(projectOrigin).includes(url.href))) throw new Error('invalid destination');
   if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('invalid destination');
   return url.href;
 }
