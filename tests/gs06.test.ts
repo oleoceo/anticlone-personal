@@ -187,10 +187,9 @@ test('GS06 integration: persisted policy, controlled LOW and original', {timeout
     }
     assert.ok((await db.query("SELECT 1 FROM canary_observations WHERE project_id=$1 AND host='localhost' AND source='html_canary'",[project])).rowCount);
     const browserPage=await adversarial.newPage();
-    await browserPage.goto(clone+'/adversarial');
     const core=browserPage.waitForResponse(r=>r.url().endsWith('/observe'));
     const coreDecision=browserPage.waitForResponse(r=>r.url().endsWith('/entry-decision'));
-    await browserPage.reload(); assert.equal((await core).status(),204);
+    await browserPage.goto(clone+'/adversarial'); assert.equal((await core).status(),204);
     assert.deepEqual(await (await coreDecision).json(),{action:'OBSERVE_ONLY'});
     await browserPage.route('**/core.js',route=>route.abort());
     const fallbackOnly=browserPage.waitForResponse(r=>r.url().endsWith('/observe/fallback'));
