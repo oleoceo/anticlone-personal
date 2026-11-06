@@ -66,6 +66,12 @@ test('DNS history is incident-scoped, authorized, bounded, isolated and conserva
     const excessive=fixture(); excessive.resolveCname=async()=>Array.from({length:33},(_,i)=>`edge${i}.owner-domain.com`);
     await collectInfrastructure(db,'a',host,allowed,excessive,source);
     assert.equal((await db.query("SELECT state FROM infrastructure_dns_observations WHERE record_type='CNAME' ORDER BY id DESC LIMIT 1")).rows[0].state,'INVALID');
+    await db.query("UPDATE infrastructure_dns_observations SET observed_at=now()-interval '7 hours'");
+    const removed=fixture(); removed.resolveCname=async()=>{throw Object.assign(Error('no data'),{code:'ENODATA'});};
+    removed.resolveNs=async()=>[];
+    await collectInfrastructure(db,'a',host,allowed,removed,source);
+    const afterRemoval=(await investigation(db,'a'))[0].infrastructure.dns;
+    for (const type of ['CNAME','NS']) assert.ok(afterRemoval.some((x:{record_type:string;state:string;changed:boolean})=>x.record_type===type && x.state==='NO_DATA' && x.changed));
     await db.query("UPDATE infrastructure_dns_observations SET observed_at=now()-interval '31 days'");
     const invalid=fixture(); invalid.resolve4=async()=>['169.254.169.254']; invalid.resolve6=async()=>{throw Object.assign(Error('timeout'),{code:'ETIMEOUT'});};
     await collectInfrastructure(db,'a',host,allowed,invalid,source);

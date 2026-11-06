@@ -40,10 +40,10 @@ async function resolveType(resolver:DnsResolver, host:string, type:RecordType): 
     if (!Array.isArray(values) || values.length > 32 || values.some(value => typeof value !== 'string')) return {state:'INVALID',result:[]};
     const normalized = values.map(value => type === 'A' || type === 'AAAA' ? (type === 'AAAA' && isIP(value) === 6 ? new URL('http://['+value+']/').hostname.slice(1,-1) : value.toLowerCase()) : value.toLowerCase().replace(/\.$/,'')).sort();
     if (normalized.some(value => type === 'A' ? isIP(value)!==4 || !publicAddress(value) : type === 'AAAA' ? isIP(value)!==6 || !publicAddress(value) : !validDnsHost(value)) || type === 'CNAME' && normalized.length > 1 || normalized.includes(host)) return {state:'INVALID',result:[]};
-    return {state:normalized.length ? 'OK' : 'NOT_AVAILABLE',result:[...new Set(normalized)]};
+    return {state:normalized.length ? 'OK' : 'NO_DATA',result:[...new Set(normalized)]};
   } catch (error) {
     const code = (error as {code?:string}).code;
-    return {state:code === 'TIMEOUT' || code === 'ETIMEOUT' ? 'TIMEOUT' : code === 'ENODATA' || code === 'ENOTFOUND' ? 'NOT_AVAILABLE' : 'ERROR',result:[]};
+    return {state:code === 'TIMEOUT' || code === 'ETIMEOUT' ? 'TIMEOUT' : code === 'ENODATA' ? 'NO_DATA' : code === 'ENOTFOUND' ? 'NOT_AVAILABLE' : 'ERROR',result:[]};
   } finally { if (timer) clearTimeout(timer); }
 }
 

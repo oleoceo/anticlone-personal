@@ -26,16 +26,16 @@ export async function investigation(pool: Pool, project: string) {
   const gaps = available.gaps ? await pool.query(`SELECT last_dropped_at FROM degradation_collection_gaps
     WHERE project_id=$1 AND last_dropped_at>=now()-interval '30 minutes'`,[project]) : {rows:[]};
   const dns = available.infrastructure ? await pool.query(`SELECT d.host,d.record_type,d.result,d.source,d.state,d.observed_at,d.valid_until,d.limitations,
-    p.result AS previous_result,p.observed_at AS previous_observed_at,
-    EXISTS(SELECT 1 FROM infrastructure_dns_observations g WHERE g.project_id=d.project_id AND g.host=d.host AND g.record_type=d.record_type AND g.state<>'OK' AND g.observed_at>p.observed_at AND g.observed_at<d.observed_at) AS intervening_gap
-    FROM infrastructure_dns_observations d LEFT JOIN LATERAL (SELECT result,observed_at FROM infrastructure_dns_observations x
-      WHERE x.project_id=d.project_id AND x.host=d.host AND x.record_type=d.record_type AND x.state='OK' AND (x.observed_at,x.id)<(d.observed_at,d.id)
+    p.result AS previous_result,p.state AS previous_state,p.observed_at AS previous_observed_at,
+    EXISTS(SELECT 1 FROM infrastructure_dns_observations g WHERE g.project_id=d.project_id AND g.host=d.host AND g.record_type=d.record_type AND g.state NOT IN ('OK','NO_DATA') AND g.observed_at>p.observed_at AND g.observed_at<d.observed_at) AS intervening_gap
+    FROM infrastructure_dns_observations d LEFT JOIN LATERAL (SELECT result,state,observed_at FROM infrastructure_dns_observations x
+      WHERE x.project_id=d.project_id AND x.host=d.host AND x.record_type=d.record_type AND x.state IN ('OK','NO_DATA') AND (x.observed_at,x.id)<(d.observed_at,d.id)
       ORDER BY x.observed_at DESC,x.id DESC LIMIT 1) p ON true
     WHERE d.project_id=$1 AND d.observed_at>=now()-interval '30 days' ORDER BY d.observed_at DESC,d.id DESC LIMIT 12000`,[project]) : {rows:[]};
   return result.rows.map(row => ({ ...row,
     infrastructure: {available:available.infrastructure, dns:dns.rows.filter(item=>item.host===row.host).map(item=>({...item,
       validity:'UNKNOWN',
-      changed:item.state==='OK' && item.previous_result!==null && JSON.stringify(item.result)!==JSON.stringify(item.previous_result),
+      changed:['OK','NO_DATA'].includes(item.state) && item.previous_result!==null && (item.state!==item.previous_state || JSON.stringify(item.result)!==JSON.stringify(item.previous_result)),
       reliability:'resolver_response_not_identity'})), asn:'NOT_AVAILABLE', hosting:'NOT_AVAILABLE',
       limitations:['DNS describes infrastructure, not visitor or operator identity.', 'No authoritative ASN or hosting source configured.', 'Expired, failed and absent records do not establish current infrastructure.']},
     assessments: row.assessments.map((assessment: {version:string; level:string; source:string; confidence:string; evidence_provenance:string; evidence_reliability:string; evidence_kind:string}) => {
