@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { Pool } from 'pg';
+import http from 'node:http';
+import https from 'node:https';
 import { authorizedHosts, collectInfrastructure, publicAddress, validDnsHost, type DnsResolver } from '../apps/infrastructure-dns.js';
 import { investigation } from '../apps/investigation.js';
 import { assessObservation } from '../apps/risk.js';
@@ -25,6 +27,11 @@ test('DNS history is incident-scoped, authorized, bounded, isolated and conserva
   const schema='dns_'+crypto.randomUUID().replaceAll('-',''); await root.query(`CREATE SCHEMA ${schema}`);
   const db=new Pool({connectionString:process.env.TEST_DATABASE_URL,options:`-c search_path=${schema}`});
   const host='copy.owner-domain.com', allowed=[host];
+  const oldFetch=globalThis.fetch, oldHttpRequest=http.request, oldHttpsRequest=https.request;
+  let httpAttempts=0;
+  globalThis.fetch=(async()=>{httpAttempts++; throw Error('unexpected HTTP');}) as typeof fetch;
+  http.request=(()=>{httpAttempts++; throw Error('unexpected HTTP');}) as typeof http.request;
+  https.request=(()=>{httpAttempts++; throw Error('unexpected HTTPS');}) as typeof https.request;
   try {
     for (const f of ['001_initial','002_alerts','004_observation_sources','005_canaries','008_traffic_observations','009_risk_assessments','024_risk_evidence','018_notification_budget','019_alert_outbox_expiry','030_infrastructure_dns']) await db.query(await readFile(`infra/${f}.sql`,'utf8'));
     await db.query("INSERT INTO incidents(project_id,host) VALUES('a',$1),('b',$1)",[host]);
@@ -84,5 +91,6 @@ test('DNS history is incident-scoped, authorized, bounded, isolated and conserva
     assert.equal((await db.query("SELECT count(*)::int n FROM infrastructure_dns_observations WHERE project_id='a'")).rows[0].n,120);
     await db.query('ALTER TABLE infrastructure_dns_observations RENAME TO absent_dns');
     assert.equal((await investigation(db,'a'))[0].infrastructure.available,false);
-  } finally { await db.end(); await root.query(`DROP SCHEMA ${schema} CASCADE`); await root.end(); }
+    assert.equal(httpAttempts,0);
+  } finally { globalThis.fetch=oldFetch; http.request=oldHttpRequest; https.request=oldHttpsRequest; await db.end(); await root.query(`DROP SCHEMA ${schema} CASCADE`); await root.end(); }
 });
