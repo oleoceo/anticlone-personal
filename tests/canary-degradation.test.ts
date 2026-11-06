@@ -40,20 +40,56 @@ test('F44 canaries through real gateway and browser: bounded temporal claims rem
     await wait(async()=> (await db.query("SELECT count(*)::int n FROM degradation_collection_gaps WHERE project_id='lab'")).rows[0].n===1);
     await db.query("UPDATE degradation_collection_gaps SET last_dropped_at=now()-interval '31 minutes' WHERE project_id='lab'");
     browser=await chromium.launch(); const page=await browser.newPage();
-    const count=async(source:string)=>(await db.query("SELECT count(*)::int n FROM degradation_events WHERE project_id='lab' AND source=$1",[source])).rows[0].n;
+    const count=async(source:string)=>(await db.query("SELECT count(*)::int n FROM degradation_events WHERE project_id='lab' AND host=$2 AND origin=$3 AND source=$1",[source,host,origin])).rows[0].n;
     const state=()=>degradationState(db,'lab',host,origin);
     const visit=async(core:boolean)=>{
-      const before=await count('html_canary');
+      const sources=core?['html_canary','css_canary','core']:['html_canary','css_canary'];
+      const before=await Promise.all(sources.map(count));
       const html=page.waitForResponse(r=>r.url()===gateway+'/canary/html.gif');
       const css=page.waitForResponse(r=>r.url()===gateway+'/canary/css.gif');
       const coreResponse=core?page.waitForResponse(r=>r.url()===gateway+'/observe'):undefined;
       await page.goto(origin); assert.equal((await html).status(),200); assert.equal((await css).status(),200);
       if(coreResponse) assert.equal((await coreResponse).status(),204);
-      await wait(async()=>await count('html_canary')>before && await count('css_canary')>before);
+      // HTTP completion precedes the asynchronous temporal journal. Every
+      // expected source must commit before callers may age or delete evidence.
+      await wait(async()=>{
+        const persisted=await Promise.all(sources.map(count));
+        return persisted.every((n,i)=>n===before[i]+1);
+      });
     };
     const age=async(minutes:number)=>db.query("UPDATE degradation_events SET observed_at=clock_timestamp()-$1*interval '1 minute',bucket=date_trunc('minute',clock_timestamp()-$1*interval '1 minute') WHERE project_id='lab' AND observed_at>clock_timestamp()-interval '2 minutes'",[minutes]);
     assert.equal(await state(),'UNKNOWN');
-    await visit(true); assert.equal(await state(),'UNKNOWN');
+    // Deterministically hold Core's INSERT after both canaries and the 204.
+    // A canary-only barrier returns too soon under this exact schedule.
+    const blocker=await db.connect();
+    const lockId=(await blocker.query('SELECT pg_backend_pid() AS pid')).rows[0].pid as number;
+    let pendingVisit: Promise<void> | undefined;
+    try {
+      await blocker.query('SELECT pg_advisory_lock(44146,$1)',[lockId]);
+      await db.query(`CREATE FUNCTION delay_core() RETURNS trigger LANGUAGE plpgsql AS $body$
+        BEGIN IF NEW.source='core' THEN PERFORM pg_advisory_xact_lock(44146,${lockId}); END IF; RETURN NEW; END $body$;
+        CREATE TRIGGER delay_core BEFORE INSERT ON degradation_events FOR EACH ROW EXECUTE FUNCTION delay_core()`);
+      await page.route('**/observe',async route=>{
+        await wait(async()=>await count('html_canary')===1 && await count('css_canary')===1);
+        await route.continue();
+      });
+      const response=page.waitForResponse(r=>r.url()===gateway+'/observe');
+      let settled=false;
+      pendingVisit=visit(true).finally(()=>{settled=true;});
+      // Attach rejection handling immediately; await below still propagates it.
+      void pendingVisit.catch(()=>{});
+      assert.equal((await response).status(),204);
+      await wait(async()=>(await db.query("SELECT count(*)::int n FROM pg_locks WHERE locktype='advisory' AND classid=44146 AND objid=$1 AND NOT granted",[lockId])).rows[0].n===1);
+      assert.equal(await count('core'),0);
+      assert.equal(settled,false,'visit must wait for Core persistence after HTTP 204');
+    } finally {
+      await blocker.query('SELECT pg_advisory_unlock(44146,$1)',[lockId]); blocker.release();
+      await pendingVisit;
+      await page.unroute('**/observe');
+      await db.query('DROP TRIGGER IF EXISTS delay_core ON degradation_events; DROP FUNCTION IF EXISTS delay_core()');
+    }
+    assert.equal(await count('core'),1);
+    assert.equal(await state(),'UNKNOWN');
     await age(20); await visit(true); await age(15);
     await page.route('**/core.js',route=>route.abort());
     await visit(false); assert.equal(await state(),'UNKNOWN');
