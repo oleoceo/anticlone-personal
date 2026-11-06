@@ -17,7 +17,8 @@ export async function investigation(pool: Pool, project: string) {
   // query errors propagate as 503 rather than being presented as missing data.
   const schema = await pool.query(`SELECT to_regclass('degradation_events') IS NOT NULL AND to_regclass('degradation_audit') IS NOT NULL AS degradation,
     to_regclass('degradation_collection_gaps') IS NOT NULL AS gaps,
-    to_regclass('infrastructure_dns_observations') IS NOT NULL AS infrastructure`);
+    to_regclass('infrastructure_dns_observations') IS NOT NULL AS infrastructure,
+    to_regclass('investigation_timeline') IS NOT NULL AS timeline`);
   const available = schema.rows[0];
   const states = available.degradation ? await pool.query(`SELECT DISTINCT ON (host) host,state,observed_at,window_start,uncertainty FROM degradation_audit
     WHERE project_id=$1 AND observed_at>=now()-interval '7 days' ORDER BY host,observed_at DESC`,[project]) : {rows:[]};
@@ -32,7 +33,11 @@ export async function investigation(pool: Pool, project: string) {
       WHERE x.project_id=d.project_id AND x.host=d.host AND x.record_type=d.record_type AND x.state IN ('OK','NO_DATA') AND (x.observed_at,x.id)<(d.observed_at,d.id)
       ORDER BY x.observed_at DESC,x.id DESC LIMIT 1) p ON true
     WHERE d.project_id=$1 AND d.observed_at>=now()-interval '30 days' ORDER BY d.observed_at DESC,d.id DESC LIMIT 12000`,[project]) : {rows:[]};
+  const timeline = available.timeline ? await pool.query(`SELECT * FROM (SELECT id,host,event_type,source,provenance,recorded_at,original_ref,summary,confidence,limitations,
+    row_number() OVER (PARTITION BY host ORDER BY recorded_at DESC,id DESC) AS rank FROM investigation_timeline
+    WHERE project_id=$1 AND recorded_at>=clock_timestamp()-interval '30 days') t WHERE rank<=100 ORDER BY recorded_at,id`,[project]) : {rows:[]};
   return result.rows.map(row => ({ ...row,
+    timeline: {available:available.timeline, limit:100, retention_days:30, events:timeline.rows.filter(event=>event.host===row.host), limitations:['Events begin with installation; legacy history is not reconstructed. Capacity and retention may remove older events. Recording errors may leave gaps.']},
     infrastructure: {available:available.infrastructure, dns:dns.rows.filter(item=>item.host===row.host).map(item=>({...item,
       validity:'UNKNOWN',
       changed:['OK','NO_DATA'].includes(item.state) && item.previous_result!==null && (item.state!==item.previous_state || JSON.stringify(item.result)!==JSON.stringify(item.previous_result)),

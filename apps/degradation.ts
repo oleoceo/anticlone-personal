@@ -1,3 +1,4 @@
+import { tryRecordTimeline } from './investigation-timeline.js';
 import type { Pool } from 'pg';
 
 export async function markDegradationGap(pool: Pool, project: string): Promise<void> {
@@ -62,10 +63,12 @@ export async function degradationState(pool: Pool, project: string, host: string
         AND latest_fallback > now-interval '2 minutes') ${canaryOrigin ? "OR (origin_baseline>=2 AND recent_core=0 AND canary_buckets>=2 AND latest_canary>now-interval '2 minutes')" : ''}) AS possible
         ${canaryOrigin ? ', claims' : ''} FROM evidence`, canaryOrigin ? [project,host,canaryOrigin] : [project,host]);
     const state = result.rows[0]?.possible === true ? 'POSSIBLE_DEGRADATION' : 'UNKNOWN';
-    await client.query(`INSERT INTO degradation_audit(project_id,host,state,window_start${canaryOrigin ? ',evidence' : ''})
+    const previous = await client.query('SELECT state FROM degradation_audit WHERE project_id=$1 AND host=$2 ORDER BY observed_at DESC LIMIT 1',[project,host]);
+    const written = await client.query(`INSERT INTO degradation_audit(project_id,host,state,window_start${canaryOrigin ? ',evidence' : ''})
       SELECT $1,$2,$3,clock_timestamp()-interval '30 minutes'${canaryOrigin ? ',$4::jsonb' : ''}
       WHERE (SELECT count(*) FROM degradation_audit WHERE project_id=$1)<10000
-      AND COALESCE((SELECT state FROM degradation_audit WHERE project_id=$1 AND host=$2 ORDER BY observed_at DESC LIMIT 1),'')<>$3`, canaryOrigin ? [project,host,state,JSON.stringify(result.rows[0]?.claims ?? [])] : [project,host,state]);
+      AND COALESCE((SELECT state FROM degradation_audit WHERE project_id=$1 AND host=$2 ORDER BY observed_at DESC LIMIT 1),'')<>$3 RETURNING observed_at`, canaryOrigin ? [project,host,state,JSON.stringify(result.rows[0]?.claims ?? [])] : [project,host,state]);
+    if (written.rowCount && (previous.rowCount || state==='POSSIBLE_DEGRADATION')) await tryRecordTimeline(client,{project,host,type:'degradation_transition',source:'degradation_evaluator',provenance:'evaluator',summary:{from:previous.rows[0]?.state ?? 'unavailable',to:state},confidence:'uncertain',limitations:'Inference from potentially dependent unauthenticated signals; absence does not prove tampering.'});
     await client.query('COMMIT');
     return state;
   } catch (error) { await client.query('ROLLBACK'); throw error; }

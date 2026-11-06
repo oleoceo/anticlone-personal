@@ -1,0 +1,80 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { Pool } from 'pg';
+import { observe, cleanup } from '../apps/detection.js';
+import { investigation } from '../apps/investigation.js';
+import { recordRisk, evaluateRisk } from '../apps/risk.js';
+import { recordTimeline } from '../apps/investigation-timeline.js';
+import { degradationState } from '../apps/degradation.js';
+import { collectInfrastructure } from '../apps/infrastructure-dns.js';
+
+test('timeline records bounded transactional observations without reconstructing legacy history', async () => {
+  assert.ok(process.env.TEST_DATABASE_URL);
+  const root=new Pool({connectionString:process.env.TEST_DATABASE_URL});
+  const schema='timeline_'+crypto.randomUUID().replaceAll('-','');
+  await root.query(`CREATE SCHEMA ${schema}`);
+  const db=new Pool({connectionString:process.env.TEST_DATABASE_URL,options:`-c search_path=${schema}`});
+  try {
+    for(const file of ['001_initial','002_alerts','004_observation_sources','005_canaries','008_traffic_observations','009_risk_assessments','024_risk_evidence','018_notification_budget','019_alert_outbox_expiry']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
+    await observe(db,'a','https://original.test','https://legacy.test');
+    assert.equal((await investigation(db,'a'))[0].timeline.available,false);
+    await db.query(await readFile('infra/031_investigation_timeline.sql','utf8'));
+    assert.equal((await investigation(db,'a'))[0].timeline.events.length,0);
+    await Promise.all(Array.from({length:10},()=>observe(db,'a','https://original.test','https://copy.test','core')));
+    await observe(db,'a','https://original.test','https://copy.test','fallback');
+    await observe(db,'b','https://original.test','https://copy.test','core');
+    await observe(db,'a','https://original.test','https://192.0.2.1','core');
+    await recordRisk(db,'a','copy.test',evaluateRisk(false));
+    await db.query("CREATE FUNCTION fail_timeline_risk() RETURNS trigger LANGUAGE plpgsql AS $timeline$ BEGIN IF NEW.event_type='risk_assessment' THEN RAISE EXCEPTION 'test failure'; END IF; RETURN NEW; END; $timeline$");
+    await db.query('CREATE TRIGGER fail_timeline BEFORE INSERT ON investigation_timeline FOR EACH ROW EXECUTE FUNCTION fail_timeline_risk()');
+    await recordRisk(db,'a','copy.test',evaluateRisk(true));
+    await db.query('DROP TRIGGER fail_timeline ON investigation_timeline');
+    assert.equal((await db.query("SELECT count(*)::int n FROM risk_assessment_days WHERE project_id='a' AND level='LOW'")).rows[0].n,1);
+    await recordRisk(db,'a','copy.test',evaluateRisk(false));
+    const events=(await investigation(db,'a')).find(row=>row.host==='copy.test').timeline.events;
+    assert.deepEqual(events.map((row:{event_type:string})=>row.event_type),['first_observation','source_observed','risk_assessment']);
+    assert.equal(events[2].summary.version,'conservative-risk-v2');
+    assert.equal(events[2].summary.reason,'insufficient_evidence');
+    assert.equal((await db.query("SELECT count(*)::int n FROM investigation_timeline WHERE host='192.0.2.1'")).rows[0].n,0);
+    assert.equal((await investigation(db,'b'))[0].timeline.events.length,1);
+    const client=await db.connect();
+    try { await client.query('BEGIN'); await recordTimeline(client,{project:'a',host:'copy.test',type:'source_observed',source:'core',provenance:'gateway',summary:{},confidence:'receipt_only',limitations:'test'}); await client.query('ROLLBACK'); } finally { client.release(); }
+    assert.equal((await db.query("SELECT count(*)::int n FROM investigation_timeline WHERE project_id='a' AND host='copy.test'")).rows[0].n,3);
+    await db.query(await readFile('infra/026_degradation.sql','utf8'));
+    await db.query("INSERT INTO degradation_events(project_id,host,source,bucket,observed_at) VALUES ('a','new-degradation.test','core',date_trunc('minute',now()-interval '20 minutes'),now()-interval '20 minutes'),('a','new-degradation.test','core',date_trunc('minute',now()-interval '19 minutes'),now()-interval '19 minutes'),('a','new-degradation.test','fallback',date_trunc('minute',now()-interval '1 minute'),now()-interval '1 minute'),('a','new-degradation.test','fallback',date_trunc('minute',now()),now())");
+    assert.equal(await degradationState(db,'a','new-degradation.test'),'POSSIBLE_DEGRADATION');
+    assert.equal((await db.query("SELECT summary->>'from' AS state FROM investigation_timeline WHERE host='new-degradation.test'")).rows[0].state,'unavailable');
+    await db.query("INSERT INTO degradation_audit(project_id,host,state,window_start) VALUES('a','copy.test','POSSIBLE_DEGRADATION',now())");
+    assert.equal(await degradationState(db,'a','copy.test'),'UNKNOWN');
+    assert.equal((await db.query("SELECT summary->>'to' AS state FROM investigation_timeline WHERE event_type='degradation_transition' AND host='copy.test'")).rows[0].state,'UNKNOWN');
+    await db.query(await readFile('infra/030_infrastructure_dns.sql','utf8'));
+    await observe(db,'a','https://original.test','https://copy.example.org');
+    // The DNS module intentionally refuses documentation domains; use an authorized real-shaped hostname.
+    await observe(db,'a','https://original.test','https://copy.publicdomain.com');
+    let address='8.8.8.8';
+    const resolver={resolve4:async()=>[address],resolve6:async()=>[],resolveCname:async()=>[],resolveNs:async()=>[]};
+    assert.equal(await collectInfrastructure(db,'a','copy.publicdomain.com',['copy.publicdomain.com'],resolver,'controlled-test-resolver'),true);
+    await db.query("UPDATE infrastructure_dns_observations SET observed_at=now()-interval '7 hours' WHERE host='copy.publicdomain.com'");
+    address='1.1.1.1';
+    assert.equal(await collectInfrastructure(db,'a','copy.publicdomain.com',['copy.publicdomain.com'],resolver,'controlled-test-resolver'),true);
+    await db.query("UPDATE infrastructure_dns_observations SET observed_at=now()-interval '7 hours' WHERE host='copy.publicdomain.com'");
+    const failedResolver={...resolver,resolve4:async()=>{throw Object.assign(Error('offline'),{code:'TIMEOUT'});}};
+    await collectInfrastructure(db,'a','copy.publicdomain.com',['copy.publicdomain.com'],failedResolver,'controlled-test-resolver');
+    await db.query("UPDATE infrastructure_dns_observations SET observed_at=now()-interval '7 hours' WHERE host='copy.publicdomain.com' AND observed_at>now()-interval '6 hours'");
+    address='9.9.9.9';
+    await collectInfrastructure(db,'a','copy.publicdomain.com',['copy.publicdomain.com'],resolver,'controlled-test-resolver');
+    const dns=await db.query("SELECT summary,source FROM investigation_timeline WHERE event_type='dns_change'");
+    assert.equal(dns.rowCount,1); assert.equal(dns.rows[0].summary.record_type,'A'); assert.equal(JSON.stringify(dns.rows).includes('1.1.1.1'),false);
+    await observe(db,'c','https://original.test','https://ordered.test');
+    await db.query("INSERT INTO investigation_timeline(project_id,host,event_type,source,provenance,recorded_at,summary,confidence,limitations) SELECT 'c','ordered.test','source_observed','core','gateway',now(),jsonb_build_object('n',n::text),'receipt','test' FROM generate_series(1,2) n");
+    const ordered=(await investigation(db,'c'))[0].timeline.events.filter((event:{summary:{n?:string}})=>event.summary.n);
+    assert.deepEqual(ordered.map((event:{summary:{n:string}})=>event.summary.n),['1','2']);
+    await db.query("INSERT INTO investigation_timeline(project_id,host,event_type,source,provenance,summary,confidence,limitations) SELECT 'capacity','copy.test','source_observed','core','gateway','{}'::jsonb,'receipt','test' FROM generate_series(1,10000)");
+    const cap=await db.connect(); try {await cap.query('BEGIN'); await cap.query('SELECT pg_advisory_xact_lock(hashtext($1))',['capacity']); await recordTimeline(cap,{project:'capacity',host:'copy.test',type:'source_observed',source:'core',provenance:'gateway',summary:{},confidence:'receipt',limitations:'test'}); await cap.query('COMMIT');} finally {cap.release();}
+    assert.equal((await db.query("SELECT count(*)::int AS n FROM investigation_timeline WHERE project_id='capacity'")).rows[0].n,10000);
+    await db.query("UPDATE investigation_timeline SET recorded_at=clock_timestamp()-interval '31 days' WHERE project_id='b'");
+    await cleanup(db,'b');
+    assert.equal((await db.query("SELECT count(*)::int n FROM investigation_timeline WHERE project_id='b'")).rows[0].n,0);
+  } finally {await db.end(); await root.query(`DROP SCHEMA ${schema} CASCADE`); await root.end();}
+});

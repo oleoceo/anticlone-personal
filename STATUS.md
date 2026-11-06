@@ -1,4 +1,5 @@
 # STATUS — AntiClone Personal
+- **F11/GS12 em andamento:** timeline opcional 031 com eventos prospectivos, limite e retencao; revisao independente, testes de fronteira e CI HTTPS final pendentes. F13, F32/GS12, F43/GS19 e F44 PARCIAIS; F08 BLOCKED, NOT_VERIFIED e OBSERVE_ONLY preservados.
 - **F32/GS12 PARCIAL:** DNS com autorizacao explicita por host e projeto, fonte configurada, historico limitado e consulta autenticada; ASN/hosting NOT_AVAILABLE, TTL desconhecido e cadeia CNAME nao verificada. Resolver controlado e PostgreSQL em tests/infrastructure-dns.test.ts; CI HTTPS e revisao detached devem ser verificadas no SHA final do PR. F13 PARCIAL, F43/GS19 PARCIAL, F44 PARCIAL, F08 BLOCKED, NOT_VERIFIED e OBSERVE_ONLY preservados.
 - **F13/GS05 em andamento:** consulta investigativa por projeto/host, degradacao e lacunas opcionais e avaliador v3 conservador; agregados diarios nao representam sessoes e fontes nao sao independentes. Classificacao operacional e provas adversariais integrais pendentes; F13 PARCIAL, F08 BLOCKED, F44 PARCIAL, F43/GS19 PARCIAL, NOT_VERIFIED e OBSERVE_ONLY preservados.
 - **F43/GS19 PARCIAL:** fases separadas e D09 com revogacao eventual, resposta CTA em ate 5 s e validade maxima de 120 s. PostgreSQL/gateway/Chromium: testes temporais repetidos; HIGH e erro com entrada habilitada e trafego pago. Revisao detached favoravel e CI HTTPS do SHA final registradas no PR. Publicacao concorrente exercitada no snapshot; classificacao operacional permanece pendente; sem validacao de producao. F13 PARCIAL, F08 BLOCKED, F44 PARCIAL, NOT_VERIFIED e OBSERVE_ONLY preservados.
@@ -81,3 +82,10 @@ Correcao prioritaria F44 apos PR #46 (base 7688bf5):
 - Revisao /root/f44_fix_review favoravel, sem P0/P1/P2, blob a4068e0d19a4600e503614dd020f0da73804280a; detalhes em docs/F44-CI-RACE-FIX.md.
 - Regressao completa e CI HTTPS do SHA final registradas no PR; sem merge/deploy.
 - F44 PARCIAL; F08 BLOCKED; NOT_VERIFIED e OBSERVE_ONLY preservados.
+
+PR #52 - correcao P2 de isolamento da timeline (F11 permanece PARCIAL):
+- Observacao, degradacao e DNS usam savepoint para reverter somente a tentativa complementar; recuperacao/erros transacionais propagam.
+- Diagnostico fixo informa possivel lacuna sem SQL, payload ou evento substituto; sucesso permanece atomico com a operacao principal.
+- tests/timeline-failure.test.ts forca AFTER INSERT e falhas principais: incidente, observacoes, alerta, auditoria e DNS preservados; recuperacao e rollback integral verificados.
+- Testes focados PostgreSQL: 2/2; limites, retencao e isolamento cobertos pela suite investigation-timeline existente.
+- Regressao completa, revisao detached e CI HTTPS do SHA corrigido: evidencias finais no PR; sem merge, auto-merge ou deploy.
