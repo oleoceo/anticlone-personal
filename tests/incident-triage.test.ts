@@ -19,12 +19,15 @@ test('incident triage: atomic audit, concurrency, observations, API and browser'
   const db=new Pool({connectionString:process.env.TEST_DATABASE_URL,options:`-c search_path=${schema}`});
   let server:ReturnType<typeof createAdminServer>|undefined, browser:Awaited<ReturnType<typeof chromium.launch>>|undefined;
   try {
-    for(const file of ['001_initial','002_alerts','003_projects','004_observation_sources','005_canaries','008_traffic_observations','009_risk_assessments','024_risk_evidence','017_notification_settings','018_notification_budget','019_alert_outbox_expiry','031_investigation_timeline','032_incident_status_audit']) await db.query((await readFile(`infra/${file}.sql`,'utf8')).replace(/^\uFEFF/,''));
+    for(const file of ['001_initial','002_alerts','003_projects','004_observation_sources','005_canaries','008_traffic_observations','009_risk_assessments','024_risk_evidence','017_notification_settings','018_notification_budget','019_alert_outbox_expiry','031_investigation_timeline']) await db.query((await readFile(`infra/${file}.sql`,'utf8')).replace(/^\uFEFF/,''));
     await db.query('CREATE TABLE admin_totp_replay (factor_id text PRIMARY KEY, last_counter bigint NOT NULL)');
     await db.query('CREATE TABLE admin_totp_codes (factor_id text NOT NULL, digest text NOT NULL, valid_until bigint NOT NULL, PRIMARY KEY(factor_id,digest))');
     await db.query("INSERT INTO projects VALUES ('a','<img src=x onerror=alert(1)>','https://original.test'),('b','Second','https://second.test')");
     await observe(db,'a','https://original.test','https://copy.test');
     await observe(db,'b','https://second.test','https://copy.test');
+    const legacy=await investigation(db,'a'); assert.equal(legacy[0].status,'unverified'); assert.equal(legacy[0].triage_version,null);
+    await db.query(await readFile('infra/032_incident_status_audit.sql','utf8'));
+    const upgraded=await investigation(db,'a'); assert.equal(upgraded[0].status,'unverified'); assert.equal(upgraded[0].triage_version,'0'); assert.equal(upgraded[0].status_audit.events.length,0);
     const incidentId=(await db.query("SELECT id FROM incidents WHERE project_id='a'")).rows[0].id as string;
     const payload={project:'a',host:'copy.test',incident_id:incidentId,version:'0',expected:'unverified',status:'investigating',justification:'Initial review'};
     assert.equal((await db.query("SELECT status FROM incidents WHERE project_id='a'")).rows[0].status,'unverified');
