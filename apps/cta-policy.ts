@@ -1,6 +1,6 @@
 import type { Pool } from 'pg';
 import { validateAllocation, selected } from './allocation.js';
-import { approvedDestination } from './page-redirect.js';
+import { approvedDestination, configurationOrigin } from './page-redirect.js';
 
 type Policy = {version:number; enabled:boolean; surface:string; pathname:string; allocation:unknown};
 function validate(body: unknown) {
@@ -14,7 +14,8 @@ export async function publishCtaPolicy(db:Pool, project:string, body:unknown) {
   try {
     await client.query('BEGIN');
     const projectRow=await client.query('SELECT origin FROM projects WHERE id=$1 FOR UPDATE',[project]);
-    if (!projectRow.rowCount || !['localhost','127.0.0.1'].includes(new URL(projectRow.rows[0].origin).hostname)) throw Error('laboratory only');
+    if (!projectRow.rowCount) throw Error('invalid project');
+    configurationOrigin(projectRow.rows[0].origin);
     const result=await client.query(`INSERT INTO cta_policy_versions(project_id,version,enabled,surface,pathname,allocation)
       SELECT $1,COALESCE(MAX(version),0)+1,$2,$3,$4,$5 FROM cta_policy_versions WHERE project_id=$1 RETURNING version`,[project,p.enabled,p.surface,p.pathname,JSON.stringify(p.allocation)]);
     const version=result.rows[0].version as number;

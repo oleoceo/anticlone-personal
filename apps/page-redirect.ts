@@ -2,6 +2,13 @@
 import { configuredOrigin } from './detection.js';
 import { isIP } from 'node:net';
 
+// Administrative configuration grants no runtime eligibility or risk classification.
+export function configurationOrigin(value: string): string {
+  const origin = configuredOrigin(value), url = new URL(origin);
+  if (!['localhost','127.0.0.1'].includes(url.hostname) && url.protocol !== 'https:') throw Error('HTTPS project required');
+  return origin;
+}
+
 // Private owner configuration: exact URLs, grouped by project origin. No wildcard hosts.
 export function externalDestinations(projectOrigin: string): string[] {
   const raw = process.env.PROTECTION_APPROVED_EXTERNAL_URLS;

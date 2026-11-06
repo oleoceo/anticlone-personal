@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
-import { approvedDestination } from './page-redirect.js';
+import { approvedDestination, configurationOrigin } from './page-redirect.js';
 import { tryIntent } from './notification-intents.js';
 
 type Candidate = {marker: string | null; kind: string; parent: string; ordinal: number; url: string | null; context: string | null; amount: number | null; currency: string | null};
@@ -120,7 +120,7 @@ export async function approveDestination(db: Pool, project: string, body: unknow
   const row = fields(body,'offer,url');
   if (typeof row.offer !== 'string' || !offerPattern.test(row.offer) || typeof row.url !== 'string') throw Error('invalid destination');
   const p = await db.query('SELECT origin FROM projects WHERE id=$1',[project]); if (!p.rowCount) throw Error('invalid project');
-  lab(p.rows[0].origin); const url = approvedDestination(row.url,p.rows[0].origin); const id = randomUUID();
+  configurationOrigin(p.rows[0].origin); const url = approvedDestination(row.url,p.rows[0].origin); const id = randomUUID();
   await db.query('INSERT INTO cta_destinations(project_id,offer,id,url) VALUES($1,$2,$3,$4)',[project,row.offer,id,url]);
   return {id};
 }

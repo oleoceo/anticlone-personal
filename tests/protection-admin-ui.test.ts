@@ -80,6 +80,10 @@ test('protection admin: real PostgreSQL/Chromium policies, classes, mappings, ap
     await page.locator('#cta-query [name=project]').fill(project);await page.locator('#cta-query [name=surface]').fill('landing');
     for(const [marker,offer] of [['basic001','basic'],['premium1','premium']]) {
       await page.getByRole('button',{name:'Consultar CTAs',exact:true}).click();await page.locator('#cta-list label').filter({hasText:'marcador: '+marker}).locator('input').check();
+      if(marker==='basic001') {
+        await page.locator('#cta-query [name=project]').fill(other);assert.equal(await page.locator('#cta-select').isHidden(),true);assert.equal(await page.locator('#cta-list label').count(),0);assert.equal((await db.query('SELECT count(*)::int AS n FROM cta_mappings')).rows[0].n,0);
+        await page.locator('#cta-query [name=project]').fill(project);await page.getByRole('button',{name:'Consultar CTAs',exact:true}).click();await page.locator('#cta-list label').filter({hasText:'marcador: '+marker}).locator('input').check();
+      }
       const destination=(await db.query('SELECT id FROM cta_destinations WHERE project_id=$1 AND offer=$2',[project,offer])).rows[0].id;
       await page.locator('#cta-select [name=destination]').selectOption(destination);await page.getByRole('button',{name:'Mapear CTA ao destino aprovado'}).click();await page.getByText('Mapeamento aprovado registrado. Consulte novamente; a política CTA controla sua aplicação.',{exact:true}).waitFor();
     }
@@ -90,6 +94,9 @@ test('protection admin: real PostgreSQL/Chromium policies, classes, mappings, ap
     for(const kind of classes)await page.getByLabel('CTA '+kind+' (%)').fill('100');await page.getByRole('button',{name:'Publicar REPLACE_CONVERSION',exact:true}).click();await page.getByText('REPLACE_CONVERSION publicado. Versão 1.',{exact:true}).waitFor();
     const state=await (await post({project,action:'inspect',data:null})).json();assert.equal(state.page.allocation.PAID_ATTRIBUTED,0);assert.equal(state.cta.allocation.PAID_ATTRIBUTED,100);
     const otherState=await (await post({project:other,action:'inspect',data:null})).json();assert.equal(otherState.page,null);assert.equal(otherState.destinations.length,0);
+    await db.query("INSERT INTO projects(id,name,origin) VALUES('https_project','HTTPS configuration','https://owner.test')");
+    for(const [action,data] of [['destination',{offer:'official',url:'https://owner.test/approved'}],['page-publish',{enabled:true,approved_destination:'https://owner.test/approved',stealth:true,allocation:allocation(100)}],['cta-publish',{enabled:true,surface:'landing',pathname:'/clone',allocation:allocation(100)}]] as const) assert.equal((await post({project:'https_project',action,data})).status,200);
+    const httpsState=await (await post({project:'https_project',action:'inspect',data:null})).json();assert.equal(httpsState.page.enabled,true);assert.equal(httpsState.cta.enabled,true);assert.equal(httpsState.destinations.length,1);
     const invalid=await post({project,action:'cta-publish',data:{enabled:true,surface:'landing',pathname:'/clone',allocation:{...allocation(100),ORGANIC:55}}});assert.equal(invalid.status,400);
     await page.reload();await page.getByLabel('Projeto de proteção').selectOption(project);await page.getByRole('button',{name:'Carregar proteção'}).click();await page.getByText('Configuração persistida carregada.',{exact:true}).waitFor();assert.equal(await page.getByLabel('Página ORGANIC (%)').inputValue(),'50');assert.equal(await page.getByLabel('CTA ORGANIC (%)').inputValue(),'100');
     await page.getByLabel('Habilitar PAGE_REDIRECT laboratorial').uncheck();await page.getByRole('button',{name:'Publicar PAGE_REDIRECT',exact:true}).click();await page.getByText('PAGE_REDIRECT publicado. Versão 2.',{exact:true}).waitFor();
@@ -153,6 +160,11 @@ test('protection admin: real PostgreSQL/Chromium policies, classes, mappings, ap
     // Exact page publication is serialized and keeps each caller's snapshot.
     const published=await Promise.all([10,90].map(n=>publishPagePolicy(db,project,{enabled:true,approved_destination:original+'/official-basic',stealth:true,allocation:allocation(n)})));
     for(const [i,result] of published.entries())assert.equal((await db.query('SELECT allocation FROM protection_policy_versions WHERE project_id=$1 AND version=$2',[project,result.version])).rows[0].allocation.ORGANIC,[10,90][i]);
+    // Configuration on an owned HTTPS project cannot enable operational mitigation.
+    app.kill();await once(app,'exit');
+    app=spawn(process.execPath,['dist/apps/server.js'],{env:{...process.env,PGOPTIONS:options,DATABASE_URL:process.env.TEST_DATABASE_URL,PROJECT_ID:'https_project',PORT:String(gatewayPort),SMTP_PORT:'1',GATEWAY_MODE:'PILOT_OBSERVE',PILOT_ORIGINS:'["https://owner.test"]',LAB_CONTROLLED_ORIGIN:'',LAB_CONTROLLED_RISK:'',ALLOWED_ORIGIN:''},stdio:['ignore','ignore','inherit']});
+    ready=false;for(let i=0;i<100;i++){try{if((await fetch(gateway+'/runtime.js')).ok){ready=true;break}}catch{}await new Promise(resolve=>setTimeout(resolve,100))}assert.ok(ready);
+    for(const path of ['/entry-decision','/cta-refresh']) {const result=await fetch(gateway+path,{method:'POST',headers:{origin:'https://copy.fixture.test','content-type':'text/plain'},body:JSON.stringify({session:session(1),signals:{medium:'cpc'}})});assert.deepEqual(await result.json(),{action:'OBSERVE_ONLY'});}
   } finally {
     if(previous===undefined)delete process.env.PROTECTION_APPROVED_EXTERNAL_URLS;else process.env.PROTECTION_APPROVED_EXTERNAL_URLS=previous;
     if(app && app.exitCode===null){app.kill();await once(app,'exit')}

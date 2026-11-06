@@ -2,7 +2,7 @@ import type { Pool } from 'pg';
 import { validateDraft, activatePolicy } from './protection-policy.js';
 import { publishCtaPolicy } from './cta-policy.js';
 import { approveDestination, mapPoint, reviewPoint } from './cta-inventory.js';
-import { externalDestinations } from './page-redirect.js';
+import { externalDestinations, configurationOrigin } from './page-redirect.js';
 
 // Publish the exact form snapshot, not a draft another admin tab may have replaced.
 export async function publishPagePolicy(db: Pool, project: string, body: unknown) {
@@ -29,7 +29,8 @@ export async function protectionAdmin(db: Pool, body: unknown) {
   const project = input.project;
   try {
     const found = await db.query('SELECT id,name,origin FROM projects WHERE id=$1', [project]);
-    if (!found.rowCount || !['localhost','127.0.0.1'].includes(new URL(found.rows[0].origin).hostname)) throw new TypeError('laboratory only');
+    if (!found.rowCount) throw new TypeError('invalid project');
+    configurationOrigin(found.rows[0].origin);
     if (input.action === 'inspect') {
       if (input.data !== null) throw new TypeError('invalid inspection');
       const page = await db.query('SELECT v.* FROM active_protection_policies a JOIN protection_policy_versions v USING(project_id,version) WHERE a.project_id=$1',[project]);
