@@ -1,4 +1,4 @@
-﻿import { test } from 'node:test';
+import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
@@ -7,6 +7,9 @@ import { spawn } from 'node:child_process';
 import { Pool } from 'pg';
 import { chromium } from 'playwright';
 import { saveDraft, activatePolicy } from '../apps/protection-policy.js';
+import { observe } from '../apps/detection.js';
+import { classifyIncident } from '../apps/incident-triage.js';
+import { collectInfrastructure, type DnsResolver } from '../apps/infrastructure-dns.js';
 
 test('GS06 integration: persisted policy, controlled LOW and original', {timeout:60000}, async () => {
   assert.ok(process.env.TEST_DATABASE_URL);
@@ -18,9 +21,9 @@ test('GS06 integration: persisted policy, controlled LOW and original', {timeout
   await db.query(await readFile('infra/009_risk_assessments.sql', 'utf8'));
   await db.query(await readFile('infra/024_risk_evidence.sql', 'utf8'));
   for (const file of ['001_initial','002_alerts','003_projects','004_observation_sources','005_canaries','006_page_redirect','007_protection_policy','010_policy_allocation','018_notification_budget','019_alert_outbox_expiry']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
-  await db.query(await readFile('infra/031_investigation_timeline.sql','utf8'));
+  for (const file of ['030_infrastructure_dns','031_investigation_timeline','032_incident_status_audit']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
   const project='gs06_'+crypto.randomUUID();
-  const fixture=createServer((_req,res)=>res.writeHead(200,{'content-type':'text/html'}).end('<h1>site</h1><a href="/next">next</a><script src="http://127.0.0.1:3000/runtime.js"></script>'));
+  const fixture=createServer((req,res)=>res.writeHead(200,{'content-type':'text/html'}).end(req.url?.startsWith('/adversarial') ? '<a href="/next">Native</a><script src="http://127.0.0.1:3000/runtime.js"></script><script src="http://127.0.0.1:3000/fallback.js"></script><img src="http://127.0.0.1:3000/canary/html.gif">' : '<h1>site</h1><a href="/next">next</a><script src="http://127.0.0.1:3000/runtime.js"></script>'));
   fixture.listen(0,'127.0.0.1'); await once(fixture,'listening'); const address=fixture.address(); if (!address || typeof address==='string') throw Error('address');
   const original=`http://127.0.0.1:${address.port}`, clone=`http://localhost:${address.port}`;
   await db.query('INSERT INTO projects(id,name,origin) VALUES($1,$1,$2)',[project,original]);
@@ -129,6 +132,27 @@ test('GS06 integration: persisted policy, controlled LOW and original', {timeout
     await page.goto(clone+'/paid?utm_medium=cpc&gclid=abc&risk=LOW'); await page.waitForTimeout(500);
     assert.equal(page.url(),clone+'/paid?utm_medium=cpc&gclid=abc&risk=LOW');
     assert.equal((await decision()).action,'OBSERVE_ONLY');
+    // An incident and infrastructure history are host aggregates, not evidence about this visit.
+    const host='copy.owner-domain.com', claimed='https://'+host;
+    await observe(db,project,original,claimed);
+    const visit=async () => {
+      for (const phase of ['entry-decision','cta-refresh']) {
+        const response=await fetch('http://127.0.0.1:3000/'+phase,{method:'POST',headers:{origin:claimed,'content-type':'text/plain'},body:JSON.stringify({session:'b'.repeat(32),signals:{medium:'cpc'}})});
+        assert.deepEqual(await response.json(),{action:'OBSERVE_ONLY'});
+      }
+      const rows=await db.query('SELECT level,source FROM risk_assessment_days WHERE project_id=$1 AND host=$2',[project,host]);
+      assert.ok(rows.rowCount && rows.rows.every(row=>row.level==='UNCERTAIN' && row.source==='server_default'));
+    };
+    await visit();
+    const id=(await db.query('SELECT id FROM incidents WHERE project_id=$1 AND host=$2',[project,host])).rows[0].id as string;
+    const triage={project,host,incident_id:id,version:'0',expected:'unverified',status:'confirmed_copy',justification:'Controlled fixture'};
+    await classifyIncident(db,triage); await visit();
+    await classifyIncident(db,{...triage,version:'1',expected:'confirmed_copy',status:'false_positive'}); await visit();
+    const resolver=(address:string):DnsResolver=>({resolve4:async()=>[address],resolve6:async()=>['2606:4700:4700::1111'],resolveCname:async()=>['edge.owner-domain.com'],resolveNs:async()=>['ns.owner-domain.com']});
+    assert.equal(await collectInfrastructure(db,project,host,[host],resolver('8.8.8.8'),'controlled-test-resolver'),true); await visit();
+    await db.query("UPDATE infrastructure_dns_observations SET observed_at=now()-interval '7 hours' WHERE project_id=$1",[project]);
+    assert.equal(await collectInfrastructure(db,project,host,[host],resolver('1.1.1.1'),'controlled-test-resolver'),true); await visit();
+    assert.equal((await db.query("SELECT count(*)::int n FROM infrastructure_dns_observations WHERE project_id=$1 AND record_type='A' AND state='OK'",[project])).rows[0].n,2);
     // Browser-controlled headers, sessions and forged risk fields cannot create LOW.
     for (const phase of ['entry-decision','cta-refresh']) {
       for (const injected of [{},{level:'LOW'},{confidence:'high'},{provenance:'independent'}]) {
@@ -137,6 +161,44 @@ test('GS06 integration: persisted policy, controlled LOW and original', {timeout
           assert.equal((await response.json() as {action:string}).action,'OBSERVE_ONLY');
         }
       }
+    }
+    for (const phase of ['entry-decision','cta-refresh']) {
+      for (const signals of [{clickId:'fixture',clickKey:'gclid',medium:'cpc'},{referrerHost:'google.com'},{referrerHost:'referrer.test'},{}]) {
+        for (const origin of [clone,claimed]) {
+          const response=await fetch('http://127.0.0.1:3000/'+phase,{method:'POST',headers:{origin,referer:'https://forged.example/', 'user-agent':'forged-agent','x-forwarded-for':'203.0.113.7','content-type':'text/plain'},body:JSON.stringify({session:'d'.repeat(32),signals})});
+          assert.deepEqual(await response.json(),{action:'OBSERVE_ONLY'});
+        }
+      }
+    }
+    // Chromium delivers the real scripts and canary to the gateway in one browser context.
+    const adversarial=await browser.newContext({userAgent:'adversarial-test-agent'});
+    const browserPage=await adversarial.newPage();
+    for (const scenario of [{query:'?utm_medium=cpc&gclid=fixture',referrer:''},{query:'',referrer:'https://google.com/'},{query:'',referrer:'https://referrer.test/'},{query:'',referrer:''}]) {
+      const result=browserPage.waitForResponse(r=>r.url().endsWith('/entry-decision'));
+      const fallback=browserPage.waitForResponse(r=>r.url().endsWith('/observe/fallback'));
+      const canary=browserPage.waitForResponse(r=>r.url().endsWith('/canary/html.gif'));
+      await browserPage.goto(clone+'/adversarial'+scenario.query,scenario.referrer ? {referer:scenario.referrer} : undefined);
+      assert.deepEqual(await (await result).json(),{action:'OBSERVE_ONLY'});
+      assert.equal((await fallback).status(),204); assert.equal((await canary).status(),200);
+      assert.equal(new URL(browserPage.url()).pathname,'/adversarial');
+    }
+    assert.ok((await db.query("SELECT 1 FROM canary_observations WHERE project_id=$1 AND host='localhost' AND source='html_canary'",[project])).rowCount);
+    const core=browserPage.waitForResponse(r=>r.url().endsWith('/observe'));
+    const coreDecision=browserPage.waitForResponse(r=>r.url().endsWith('/entry-decision'));
+    await browserPage.reload(); assert.equal((await core).status(),204);
+    assert.deepEqual(await (await coreDecision).json(),{action:'OBSERVE_ONLY'});
+    await browserPage.route('**/core.js',route=>route.abort());
+    const fallbackOnly=browserPage.waitForResponse(r=>r.url().endsWith('/observe/fallback'));
+    const blockedCanary=browserPage.waitForResponse(r=>r.url().endsWith('/canary/html.gif'));
+    let blockedDecisions=0; browserPage.on('request',request=>{ if (request.url().endsWith('/entry-decision')) blockedDecisions++; });
+    await browserPage.reload();
+    assert.equal((await fallbackOnly).status(),204); assert.equal((await blockedCanary).status(),200);
+    assert.equal(blockedDecisions,0);
+    await browserPage.locator('a').click(); await browserPage.waitForURL(clone+'/next');
+    await adversarial.close();
+    for (const phase of ['entry-decision','cta-refresh']) {
+      const malformed=await fetch('http://127.0.0.1:3000/'+phase,{method:'POST',headers:{origin:'not-an-origin','content-type':'text/plain'},body:JSON.stringify({session:'c'.repeat(32),signals:{}})});
+      assert.equal(malformed.status,400);
     }
     const assessment=await db.query("SELECT level,source,confidence FROM risk_assessment_days WHERE project_id=$1 AND host='localhost' AND level='UNCERTAIN'",[project]);
     assert.deepEqual(assessment.rows,[{level:'UNCERTAIN',source:'server_default',confidence:'insufficient'}]);
