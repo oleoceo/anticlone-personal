@@ -69,3 +69,11 @@ PR #45 — compatibilidade de manutencao em schemas legados (delta sobre 692f7c5
 - Validacao local: 63 testes aprovados, 1 HTTPS reservado para CI; lint/typecheck/build e 9 testes Python passaram. Revisao /root/legacy_maintenance_review favoravel ao delta, sem bloqueios; CI final no PR. F44 PARCIAL, NOT_VERIFIED e OBSERVE_ONLY preservados.
 - BLOCKED publicacao/CI: git push origin feat/f44-conservative-correlation rejeitado duas vezes com remote: fatal error in commit_refs_rules; codigo testado/revisado 95306649d52728754f05740d64537c51fd58174f, remoto/PR45 ainda 692f7c5.
 - Diagnostico independente /root/legacy_maintenance_review: commit valido, push=true, branch protected=false; APIs rules/rulesets 403 por plano, sem prova de regra bloqueante. Sem correcao local segura; investigar erro no GitHub e retomar push normal na mesma branch quando resolvido. CI antiga nao valida novo delta.
+
+Correcao prioritaria F44 apos PR #46 (base 7688bf5):
+- Barreira do teste exige Core e cada canario persistidos antes de age(); sem mudanca de producao ou enfraquecimento de UNKNOWN.
+- Corrida reproduzida com Core retido apos HTTP 204: canarios envelhecidos antes do commit, baseline insuficiente.
+- Estabilidade: 20 focados consecutivos + 3 independentes; mutacao sem Core falha 3/3. Lint/typecheck/build e 9 testes Python verdes.
+- Revisao /root/f44_fix_review favoravel, sem P0/P1/P2, blob a4068e0d19a4600e503614dd020f0da73804280a; detalhes em docs/F44-CI-RACE-FIX.md.
+- Regressao completa e CI HTTPS do SHA final registradas no PR; sem merge/deploy.
+- F44 PARCIAL; F08 BLOCKED; NOT_VERIFIED e OBSERVE_ONLY preservados.
