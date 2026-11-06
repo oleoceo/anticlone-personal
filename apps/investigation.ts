@@ -7,7 +7,9 @@ export async function investigation(pool: Pool, project: string) {
     to_regclass('degradation_collection_gaps') IS NOT NULL AS gaps,
     to_regclass('infrastructure_dns_observations') IS NOT NULL AS infrastructure,
     to_regclass('investigation_timeline') IS NOT NULL AS timeline,
-    to_regclass('incident_status_audit') IS NOT NULL AS audit`);
+    to_regclass('incident_status_audit') IS NOT NULL AS audit,
+    to_regclass('alert_outbox') IS NOT NULL AS notifications,
+    to_regclass('clone_delivery_attempts') IS NOT NULL AS notification_history`);
   const available = schema.rows[0];
   const result = await pool.query(`SELECT i.id AS incident_id, i.host, i.status, ${available.audit ? 'i.triage_version' : 'NULL AS triage_version'}, i.first_seen AS first_observed_at, i.last_seen AS last_observed_at,
     COALESCE((SELECT jsonb_agg(jsonb_build_object('source',s.source,'day',s.day) ORDER BY s.day,s.source)
@@ -38,7 +40,16 @@ export async function investigation(pool: Pool, project: string) {
     row_number() OVER (PARTITION BY host ORDER BY recorded_at DESC,id DESC) AS rank FROM investigation_timeline
     WHERE project_id=$1 AND recorded_at>=clock_timestamp()-interval '30 days') t WHERE rank<=100 ORDER BY recorded_at,id`,[project]) : {rows:[]};
   const audit = available.audit ? await pool.query(`SELECT i.host,a.id,a.actor,a.previous_status,a.new_status,a.justification,a.alert_disposition,a.recorded_at FROM incident_status_audit a JOIN incidents i ON i.id=a.incident_id WHERE i.project_id=$1 ORDER BY a.recorded_at,a.id`,[project]) : {rows:[]};
+  const notifications = available.notifications ? await pool.query(`SELECT i.id AS incident_id,a.id AS outbox_id,a.attempts,a.next_attempt,a.sent_at,
+    CASE WHEN a.sent_at IS NOT NULL THEN 'ACCEPTED_BY_TRANSPORT' WHEN to_jsonb(a)->>'expired_at' IS NOT NULL THEN 'EXPIRED' WHEN a.attempts>=3 THEN 'EXHAUSTED' ELSE 'PENDING' END AS state
+    FROM alert_outbox a JOIN incidents i ON i.id=a.incident_id WHERE i.project_id=$1`,[project]) : {rows:[]};
+  const notificationHistory = available.notification_history ? await pool.query(`SELECT h.outbox_id,h.attempt,h.transport,h.started_at,h.finished_at,h.outcome
+    FROM clone_delivery_attempts h JOIN alert_outbox a ON a.id=h.outbox_id JOIN incidents i ON i.id=a.incident_id WHERE i.project_id=$1 ORDER BY h.outbox_id,h.attempt`,[project]) : {rows:[]};
   return result.rows.map(row => ({ ...row,
+    notification: {available:available.notifications,history_available:available.notification_history,
+      outbox:notifications.rows.find(item=>item.incident_id===row.incident_id) ?? null,
+      history:notificationHistory.rows.filter(item=>item.outbox_id===notifications.rows.find(notification=>notification.incident_id===row.incident_id)?.outbox_id),
+      limitation:'Transport acceptance is not mailbox delivery. Interrupted acceptance can cause duplicates on retry.'},
     status_audit: {available:available.audit, events:audit.rows.filter(event=>event.host===row.host)},
     timeline: {available:available.timeline, limit:100, retention_days:30, events:timeline.rows.filter(event=>event.host===row.host), limitations:['Events begin with installation; legacy history is not reconstructed. Capacity and retention may remove older events. Recording errors may leave gaps.']},
     infrastructure: {available:available.infrastructure, dns:dns.rows.filter(item=>item.host===row.host).map(item=>({...item,

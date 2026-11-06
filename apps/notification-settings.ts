@@ -1,4 +1,5 @@
-﻿import type { Pool } from 'pg';
+import type { Pool } from 'pg';
+import { smtpProvider } from './smtp-provider.js';
 
 type Settings = {provider: string|null; host: string|null; port: number|null; tls_mode: string|null; sender: string|null; recipient: string|null};
 const names = ['provider','host','port','tls_mode','sender','recipient'] as const;
@@ -26,8 +27,13 @@ function validate(input: unknown): {version:number; settings:Settings} {
 }
 function present(row: Record<string, unknown>) {
   const complete=names.every(name=>row[name] !== null);
+  let cloneTransport='PRIVATE_ENVIRONMENT_NOT_CONFIGURED';
+  try {
+    const config=smtpProvider(process.env);
+    if (config) cloneTransport=!names.every(name=>row[name]===config[name])?'PRIVATE_ENVIRONMENT_MISMATCH':row.requested?'AUTHORIZED_CONFIGURATION':'DISABLED';
+  } catch {cloneTransport='PRIVATE_ENVIRONMENT_INVALID';}
   return {version:row.version, ...Object.fromEntries(names.map(name=>[name,row[name]])), preference_requested:row.requested,
-    status:!complete?'incomplete':row.requested?'enablement_requested':'configured_disabled', real_delivery_operational:false, updated_at:row.updated_at};
+    status:!complete?'incomplete':row.requested?'enablement_requested':'configured_disabled', real_delivery_operational:false, clone_transport:cloneTransport, updated_at:row.updated_at};
 }
 export async function getNotificationSettings(db:Pool) {
   const result=await db.query('SELECT * FROM notification_settings WHERE singleton=true');
