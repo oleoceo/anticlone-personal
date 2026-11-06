@@ -1,3 +1,4 @@
+import { recordTimeline } from './investigation-timeline.js';
 import type { Pool } from 'pg';
 import { tryIntent } from './notification-intents.js';
 import { classifyTraffic } from './traffic.js';
@@ -15,6 +16,8 @@ export function configuredOrigin(input: string): string {
   return url.origin;
 }
 export async function cleanup(pool: Pool, project: string): Promise<void> {
+  const timeline = await pool.query("SELECT to_regclass('investigation_timeline') IS NOT NULL AS installed");
+  if (timeline.rows[0].installed) await pool.query("DELETE FROM investigation_timeline WHERE project_id=$1 AND recorded_at < clock_timestamp()-interval '30 days'",[project]);
   await pool.query("DELETE FROM risk_assessment_days WHERE project_id = $1 AND observed_at < now() - interval '7 days'", [project]);
   await pool.query("DELETE FROM traffic_observation_days WHERE project_id = $1 AND observed_at < now() - interval '7 days'", [project]);
   await pool.query("DELETE FROM canary_observations WHERE project_id = $1 AND observed_at < now() - interval '7 days'", [project]);
@@ -41,7 +44,10 @@ export async function observe(pool: Pool, project: string, allowedOrigin: string
       ON CONFLICT (project_id, host) DO UPDATE SET last_seen = now() RETURNING id`, [project, host]);
     const day = await client.query(`INSERT INTO observation_source_days(project_id,host,day,source) VALUES($1,$2,(now() AT TIME ZONE 'UTC')::date,$3)
       ON CONFLICT DO NOTHING RETURNING host`, [project, host, source]);
-    if (day.rowCount) await client.query('INSERT INTO observations (project_id, host, source) VALUES ($1, $2, $3)', [project, host, source]);
+    if (day.rowCount) {
+      const saved = await client.query('INSERT INTO observations (project_id, host, source) VALUES ($1, $2, $3) RETURNING id', [project, host, source]);
+      await recordTimeline(client, {project,host,type:existing.rowCount ? 'source_observed' : 'first_observation',source,provenance:'gateway',reference:'observation:'+saved.rows[0].id,summary:{claimed_host:host},confidence:'receipt_only',limitations:'Gateway received a browser claim; host and source do not establish identity or independence.'});
+    }
     if (evidence !== undefined) {
       const traffic = classifyTraffic(evidence, origin);
       await client.query(`INSERT INTO traffic_observation_days(project_id,host,day,traffic_class,evidence,certainty,source)

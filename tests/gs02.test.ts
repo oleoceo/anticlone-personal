@@ -34,6 +34,7 @@ test('GS02: browser visits, durable incident and test SMTP alert after restart',
   await db.query(await readFile('infra/009_risk_assessments.sql', 'utf8'));
   await db.query(await readFile('infra/024_risk_evidence.sql', 'utf8'));
   await db.query(await readFile('infra/001_initial.sql', 'utf8')); await db.query(await readFile('infra/002_alerts.sql', 'utf8')); await db.query(await readFile('infra/003_projects.sql', 'utf8')); await db.query(await readFile('infra/004_observation_sources.sql', 'utf8')); await db.query(await readFile('infra/005_canaries.sql', 'utf8')); await db.query(await readFile('infra/018_notification_budget.sql', 'utf8')); await db.query(await readFile('infra/019_alert_outbox_expiry.sql', 'utf8'));
+  await db.query(await readFile('infra/031_investigation_timeline.sql','utf8'));
   const project = 'gs02_' + crypto.randomUUID();
   const fixture = createServer(async (req, res) => {
     if (req.url === '/checkout') { res.writeHead(200, {'content-type':'text/html'}).end('<h1>Checkout</h1>'); return; }
@@ -175,6 +176,8 @@ test('GS02: browser visits, durable incident and test SMTP alert after restart',
     await page.reload();
     await until(async () => (await db.query('SELECT id FROM observations WHERE project_id=$1',[project])).rowCount === 2, 'both sources');
     assert.deepEqual((await db.query('SELECT source FROM observations WHERE project_id=$1 ORDER BY source',[project])).rows.map(row => row.source), ['core', 'fallback']);
+    const timelineBefore = await db.query("SELECT t.id FROM investigation_timeline t JOIN observations o ON o.project_id=t.project_id AND t.original_ref='observation:'||o.id::text WHERE t.project_id=$1 AND t.host='localhost' AND t.event_type IN ('first_observation','source_observed') ORDER BY t.id",[project]);
+    assert.equal(timelineBefore.rowCount,2);
     const before = await db.query('SELECT i.host,i.status,a.sent_at FROM incidents i JOIN alert_outbox a ON a.incident_id=i.id WHERE i.project_id=$1',[project]);
     await until(async () => (await db.query("SELECT * FROM canary_observations WHERE project_id=$1 AND host='localhost'", [project])).rowCount === 2, 'combined canaries');
     assert.deepEqual((await db.query("SELECT source FROM canary_observations WHERE project_id=$1 AND host='localhost' ORDER BY source", [project])).rows.map(row => row.source), ['css_canary','html_canary']);
@@ -200,6 +203,7 @@ test('GS02: browser visits, durable incident and test SMTP alert after restart',
       assert.equal(messages.length,1); assert.match(messages[0], /Unverified browser claim for host: localhost/);
       assert.equal((await reconnected.query('SELECT id FROM incidents WHERE project_id=$1',[project])).rowCount,1);
       assert.equal((await reconnected.query('SELECT id FROM observations WHERE project_id=$1',[project])).rowCount,2);
+      assert.deepEqual((await reconnected.query("SELECT t.id FROM investigation_timeline t JOIN observations o ON o.project_id=t.project_id AND t.original_ref='observation:'||o.id::text WHERE t.project_id=$1 AND t.host='localhost' AND t.event_type IN ('first_observation','source_observed') ORDER BY t.id",[project])).rows,timelineBefore.rows);
       const request = (body: string, origin = clone, contentType = 'text/plain') => fetch('http://127.0.0.1:3000/observe',{method:'POST',headers:{origin,'content-type':contentType},body});
       await page.goto(clone + '/clone?gclid=labToken123&unrelated=private');
       await until(async () => (await reconnected.query("SELECT * FROM traffic_observation_days WHERE project_id=$1 AND source='gclid'", [project])).rowCount === 1, 'declared attribution');

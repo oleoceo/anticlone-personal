@@ -10,18 +10,22 @@ import { saveDraft, activatePolicy } from '../apps/protection-policy.js';
 
 test('GS06 integration: persisted policy, controlled LOW and original', {timeout:60000}, async () => {
   assert.ok(process.env.TEST_DATABASE_URL);
-  const db = new Pool({connectionString:process.env.TEST_DATABASE_URL});
+  const root = new Pool({connectionString:process.env.TEST_DATABASE_URL});
+  const schema='gs06_'+crypto.randomUUID().replaceAll('-',''); await root.query(`CREATE SCHEMA ${schema}`);
+  const options=`-c search_path=${schema}`;
+  const db = new Pool({connectionString:process.env.TEST_DATABASE_URL,options});
   await db.query(await readFile('infra/008_traffic_observations.sql', 'utf8'));
   await db.query(await readFile('infra/009_risk_assessments.sql', 'utf8'));
   await db.query(await readFile('infra/024_risk_evidence.sql', 'utf8'));
   for (const file of ['001_initial','002_alerts','003_projects','004_observation_sources','005_canaries','006_page_redirect','007_protection_policy','010_policy_allocation','018_notification_budget','019_alert_outbox_expiry']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
+  await db.query(await readFile('infra/031_investigation_timeline.sql','utf8'));
   const project='gs06_'+crypto.randomUUID();
   const fixture=createServer((_req,res)=>res.writeHead(200,{'content-type':'text/html'}).end('<h1>site</h1><a href="/next">next</a><script src="http://127.0.0.1:3000/runtime.js"></script>'));
   fixture.listen(0,'127.0.0.1'); await once(fixture,'listening'); const address=fixture.address(); if (!address || typeof address==='string') throw Error('address');
   const original=`http://127.0.0.1:${address.port}`, clone=`http://localhost:${address.port}`;
   await db.query('INSERT INTO projects(id,name,origin) VALUES($1,$1,$2)',[project,original]);
   await db.query('INSERT INTO page_redirect_policies VALUES($1,1,true,$2)',[project,original+'/approved']);
-  const start = (risk = 'LOW') => spawn(process.execPath,['dist/apps/server.js'],{env:{...process.env,DATABASE_URL:process.env.TEST_DATABASE_URL,PROJECT_ID:project,SMTP_PORT:'25252',PORT:'3000',LAB_CONTROLLED_ORIGIN:clone,LAB_CONTROLLED_RISK:risk},stdio:['ignore','ignore','inherit']});
+  const start = (risk = 'LOW') => spawn(process.execPath,['dist/apps/server.js'],{env:{...process.env,DATABASE_URL:process.env.TEST_DATABASE_URL,PGOPTIONS:options,PROJECT_ID:project,SMTP_PORT:'25252',PORT:'3000',LAB_CONTROLLED_ORIGIN:clone,LAB_CONTROLLED_RISK:risk},stdio:['ignore','ignore','inherit']});
   let app=start();
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
   try {
@@ -32,6 +36,10 @@ test('GS06 integration: persisted policy, controlled LOW and original', {timeout
     app.kill('SIGTERM'); await once(app,'exit'); app=start();
     let restarted=false; for(let n=0;n<100;n++){try { if((await fetch('http://127.0.0.1:3000/runtime.js')).ok){restarted=true;break;} }catch {} await new Promise(r=>setTimeout(r,100));} assert.ok(restarted);
     assert.equal((await decision()).action,'PAGE_REDIRECT');
+    await db.query("CREATE FUNCTION fail_timeline_gs06() RETURNS trigger LANGUAGE plpgsql AS $failure$ BEGIN IF NEW.event_type='risk_assessment' THEN RAISE EXCEPTION 'test'; END IF; RETURN NEW; END; $failure$");
+    await db.query('CREATE TRIGGER fail_timeline_gs06 BEFORE INSERT ON investigation_timeline FOR EACH ROW EXECUTE FUNCTION fail_timeline_gs06()');
+    await db.query("DELETE FROM investigation_timeline WHERE project_id=$1 AND event_type='risk_assessment'",[project]);
+    try { assert.equal((await decision()).action,'PAGE_REDIRECT'); } finally { await db.query('DROP TRIGGER fail_timeline_gs06 ON investigation_timeline'); }
     const submit = async (body:object) => (await (await fetch('http://127.0.0.1:3000/entry-decision',{method:'POST',headers:{origin:clone,'content-type':'text/plain'},body:JSON.stringify(body)})).json()) as {action:string};
     assert.equal((await submit({signals:{}})).action,'OBSERVE_ONLY');
     assert.equal((await submit({session:'invalid',signals:{medium:'cpc'}})).action,'OBSERVE_ONLY');
@@ -128,6 +136,6 @@ test('GS06 integration: persisted policy, controlled LOW and original', {timeout
     const response=await fetch('http://127.0.0.1:3000/entry-decision?risk=LOW&destination=http://evil.test/',{headers:{origin:clone}}); assert.equal(response.status,404);
   } finally {
     if(browser) await browser.close(); app.kill('SIGTERM'); if(app.exitCode===null && app.signalCode===null) await once(app,'exit');
-    await db.query('DELETE FROM incidents WHERE project_id=$1',[project]); await db.query('DELETE FROM observations WHERE project_id=$1',[project]); await db.query('DELETE FROM observation_source_days WHERE project_id=$1',[project]); await db.query('DELETE FROM observation_days WHERE project_id=$1',[project]); await db.end(); await new Promise<void>(r=>fixture.close(()=>r()));
+    await db.query('DELETE FROM incidents WHERE project_id=$1',[project]); await db.query('DELETE FROM observations WHERE project_id=$1',[project]); await db.query('DELETE FROM observation_source_days WHERE project_id=$1',[project]); await db.query('DELETE FROM observation_days WHERE project_id=$1',[project]); await db.end(); await root.query(`DROP SCHEMA ${schema} CASCADE`); await root.end(); await new Promise<void>(r=>fixture.close(()=>r()));
   }
 });

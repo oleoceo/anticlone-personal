@@ -1,3 +1,4 @@
+import { recordTimeline } from './investigation-timeline.js';
 import { Resolver } from 'node:dns/promises';
 import { BlockList, isIP } from 'node:net';
 import type { Pool } from 'pg';
@@ -60,8 +61,15 @@ export async function collectInfrastructure(pool:Pool, project:string, host:stri
     if (recent.rowCount) { await client.query('ROLLBACK'); return false; }
     const results = await Promise.all(types.map(type => resolveType(resolver,host,type)));
     if (results[2].state === 'INVALID') for (const i of [0,1]) { results[i] = {state:'INVALID',result:[]}; }
-    for (let i=0;i<types.length;i++) await client.query(`INSERT INTO infrastructure_dns_observations(incident_id,project_id,host,record_type,result,source,state,valid_until,limitations)
-      VALUES($1,$2,$3,$4,$5,$6,$7,clock_timestamp(),$8)`,[incident.rows[0].id,project,host,types[i],JSON.stringify(results[i].result),source,results[i].state,'DNS response is not proof of identity or operator; TTL unavailable; current validity unknown. CNAME chains are not followed or verified.']);
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))',[project]);
+    const stillExists = await client.query("SELECT 1 FROM incidents WHERE id=$1 AND project_id=$2 AND host=$3 AND last_seen>=now()-interval '30 days'",[incident.rows[0].id,project,host]);
+    if (!stillExists.rowCount) { await client.query('ROLLBACK'); return false; }
+    for (let i=0;i<types.length;i++) {
+      const prior=await client.query('SELECT state,result,source FROM infrastructure_dns_observations WHERE project_id=$1 AND host=$2 AND record_type=$3 ORDER BY observed_at DESC,id DESC LIMIT 1',[project,host,types[i]]);
+      const saved=await client.query(`INSERT INTO infrastructure_dns_observations(incident_id,project_id,host,record_type,result,source,state,valid_until,limitations) VALUES($1,$2,$3,$4,$5,$6,$7,clock_timestamp(),$8) RETURNING id`,[incident.rows[0].id,project,host,types[i],JSON.stringify(results[i].result),source,results[i].state,'DNS response is not proof of identity or operator; TTL unavailable; current validity unknown. CNAME chains are not followed or verified.']);
+      if (prior.rowCount && prior.rows[0].source===source && ['OK','NO_DATA'].includes(prior.rows[0].state) && ['OK','NO_DATA'].includes(results[i].state) && (prior.rows[0].state!==results[i].state || JSON.stringify(prior.rows[0].result)!==JSON.stringify(results[i].result)))
+        await recordTimeline(client,{project,host,type:'dns_change',source:source==='controlled-test-resolver' ? source : 'configured-dns',provenance:'infrastructure',reference:'dns:'+saved.rows[0].id,summary:{record_type:types[i],previous_state:prior.rows[0].state,state:results[i].state},confidence:'resolver_response',limitations:'Comparable DNS responses changed; TTL and current validity unknown; not identity.'});
+    }
     await client.query("DELETE FROM infrastructure_dns_observations WHERE project_id=$1 AND (observed_at<now()-interval '30 days' OR id IN (SELECT id FROM infrastructure_dns_observations WHERE project_id=$1 AND host=$2 ORDER BY observed_at DESC,id DESC OFFSET 120))",[project,host]);
     await client.query('COMMIT'); return true;
   } catch (error) { await client.query('ROLLBACK'); throw error; }

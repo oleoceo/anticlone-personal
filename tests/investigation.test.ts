@@ -62,12 +62,15 @@ test('investigation isolates projects, preserves first receipt and marks claims 
       const login=await fetch(base+'/admin/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:'password',code})});
       assert.equal(login.status,200); const {token}=await login.json() as {token:string};
       const headers={authorization: `Bearer ${token}`};
+      await db.query(await readFile('infra/031_investigation_timeline.sql','utf8'));
+      await observe(db,'a','https://original.test','https://new-copy.test','core');
       await db.query(await readFile('infra/030_infrastructure_dns.sql','utf8'));
       await db.query(`INSERT INTO infrastructure_dns_observations(incident_id,project_id,host,record_type,result,source,state,valid_until,limitations)
         SELECT id,project_id,host,'A','["8.8.8.8"]'::jsonb,'controlled-test-resolver','OK',now(),'TTL unknown' FROM incidents WHERE project_id='a' AND host='copy.test'`);
       const response=await fetch(base+path,{headers}); assert.equal(response.status,200);
       const investigationResponse = await response.json() as {host:string;infrastructure:{dns:unknown[]}}[];
-      assert.equal(investigationResponse[0].host,'copy.test'); assert.equal(investigationResponse[0].infrastructure.dns.length,1);
+      assert.equal(investigationResponse.find(item=>item.host==='copy.test')?.infrastructure.dns.length,1);
+      assert.equal((investigationResponse.find(item=>item.host==='new-copy.test') as unknown as {timeline:{events:unknown[]}}).timeline.events.length,1);
       assert.equal(((await (await fetch(base+'/admin/projects/missing/investigation',{headers})).json()) as unknown[]).length,0);
       assert.equal((await fetch(base+path,{headers:{...headers,origin:'https://evil.test'}})).status,403);
       await db.query(`INSERT INTO incidents(project_id,host,first_seen,last_seen) VALUES('a','expired.test',now()-interval '40 days',now()-interval '31 days')`);
