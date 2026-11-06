@@ -1,7 +1,7 @@
 import http from 'node:http';
 import { readFileSync } from 'node:fs';
 import { Pool } from 'pg';
-import { configuredOrigin, cleanup, observe, observeCanary } from './detection.js';
+import { configuredOrigin, hostFromUrl, cleanup, observe, observeCanary } from './detection.js';
 import { deliverOne } from './alerts.js';
 import { classifyTraffic } from './traffic.js';
 import { entryDecision, approvedDestination } from './page-redirect.js';
@@ -11,7 +11,7 @@ import { safeEvaluateRisk, assessObservation, recordRisk, stealthEligible, type 
 import { gatewayMode } from './gateway-mode.js';
 import { gatewayBoundary } from './gateway-boundary.js';
 import { recordInstallationClaim } from './installation.js';
-import { recordDegradationClaim, degradationState, maintainDegradation } from './degradation.js';
+import { recordDegradationClaim, degradationState, maintainDegradation, markDegradationGap } from './degradation.js';
 import { optionalSchemas } from './optional-schema.js';
 const boundary = gatewayBoundary(process.env);
 const connectionString = process.env.DATABASE_URL, project = process.env.PROJECT_ID;
@@ -45,6 +45,43 @@ let decisionWindowStart = Date.now(), decisionCount = 0;
 let refreshWindowStart = Date.now(), refreshCount = 0;
 const claimPending = new Set<string>();
 const claimAfter = new Map<string,number>();
+// Serialize F44 work so an observed collection failure is recorded before any
+// later diagnosis. On restart the preceding collection interval is unknown.
+let degradationQueue: Promise<void> = Promise.resolve();
+let degradationQueued = 0;
+let degradationGapVersion = 1, degradationGapRecorded = 0;
+let gapBarrier: Promise<boolean> | undefined;
+function degradationTask(operation: string, action: () => Promise<unknown>, force = false): Promise<boolean> {
+  if (optional.canaryDegradation.state === 'NOT_INSTALLED' || !controlledOrigin || mode.pilot)
+    return optional.degradation.run(operation, action);
+  if (!force && degradationQueued >= 100) { degradationGapVersion++; return Promise.resolve(false); }
+  degradationQueued++;
+  let completed = false;
+  const task = degradationQueue.then(async () => {
+    completed = await optional.degradation.run(operation, async () => {
+      try {
+        if (degradationGapRecorded !== degradationGapVersion) {
+          const version = degradationGapVersion;
+          await markDegradationGap(pool,activeProject); degradationGapRecorded = version;
+        }
+        await action();
+      } catch (error) { degradationGapVersion++; throw error; }
+    });
+  }).finally(() => { degradationQueued--; });
+  degradationQueue = task.catch(() => { degradationGapVersion++; });
+  return task.then(() => completed);
+}
+function lostDegradationClaim(): void {
+  degradationGapVersion++;
+  if (gapBarrier) return;
+  // One bounded reconciliation, independent of the normal queue limit. The
+  // gateway never holds rejected requests open waiting for database work.
+  gapBarrier = degradationTask('gap', async () => {
+    if (controlledOrigin && optional.canaryDegradation.state !== 'NOT_INSTALLED')
+      await degradationState(pool,activeProject,new URL(controlledOrigin).hostname,controlledOrigin);
+  }, true).finally(() => { gapBarrier = undefined; });
+  void gapBarrier.catch(() => {});
+}
 function recordClaim(origin: string, source: 'core' | 'fallback') {
   if (origin !== normalizedOrigin || claimPending.has(source) || Date.now() < (claimAfter.get(source) ?? 0)) return;
   claimPending.add(source);
@@ -65,11 +102,27 @@ const server = http.createServer((req, res) => {
   }
   if (req.method === 'GET' && (req.url === '/canary/html.gif' || req.url === '/canary/css.gif')) {
     if (Date.now() - windowStart >= 60_000) { windowStart = Date.now(); count = 0; }
-    if (++count > 60 && process.env.GATEWAY_TRANSPORT !== 'HTTPS_PROXY') { res.writeHead(429).end(); return; }
+    if (++count > 60 && process.env.GATEWAY_TRANSPORT !== 'HTTPS_PROXY') { lostDegradationClaim(); res.writeHead(429).end(); return; }
     const source = req.url === '/canary/html.gif' ? 'html_canary' : 'css_canary';
     void observeCanary(pool, activeProject, req.headers.referer, source).then(() => {
       res.writeHead(200, { 'Content-Type': 'image/gif' }).end(Buffer.from('R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==', 'base64'));
-    }).catch(() => res.writeHead(503).end()); return;
+      // Referer is an unauthenticated claim. Only the explicitly configured
+      // laboratory origin can contribute to the existing F44 journal.
+      let claimedOrigin: string | undefined;
+      try {
+        if (req.headers.referer) {
+          hostFromUrl(req.headers.referer);
+          claimedOrigin = configuredOrigin(new URL(req.headers.referer).origin);
+        }
+      } catch { /* Missing or ambiguous claims never contribute. */ }
+      if (!mode.pilot && controlledOrigin && controlledOrigin !== normalizedOrigin && claimedOrigin === controlledOrigin) {
+        if (optional.canaryDegradation.state !== 'NOT_INSTALLED') void degradationTask('correlation', async () => {
+          const host = new URL(controlledOrigin).hostname;
+          await recordDegradationClaim(pool,activeProject,host,source,controlledOrigin);
+          await degradationState(pool,activeProject,host,controlledOrigin);
+        });
+      }
+    }).catch(() => { lostDegradationClaim(); res.writeHead(503).end(); }); return;
   }
   if (req.method === 'POST' && (req.url === '/entry-decision' || req.url === '/cta-refresh')) {
     const refresh = req.url === '/cta-refresh';
@@ -110,7 +163,7 @@ const server = http.createServer((req, res) => {
   }
   if (req.method !== 'POST' || req.url !== '/observe' && req.url !== '/observe/fallback') { res.writeHead(404).end(); return; }
   if (Date.now() - windowStart >= 60_000) { windowStart = Date.now(); count = 0; }
-  if (++count > 60 && process.env.GATEWAY_TRANSPORT !== 'HTTPS_PROXY') { res.writeHead(429).end(); return; }
+  if (++count > 60 && process.env.GATEWAY_TRANSPORT !== 'HTTPS_PROXY') { lostDegradationClaim(); res.writeHead(429).end(); return; }
   if (!/^text\/plain(?:\s*;|$)/i.test(req.headers['content-type'] ?? '')) { res.writeHead(415).end(); return; }
   let length = 0; const chunks: Buffer[] = []; let rejected = false;
   req.on('data', (chunk: Buffer) => {
@@ -137,13 +190,14 @@ const server = http.createServer((req, res) => {
     void observe(pool, activeProject, mode.origins, origin, source, evidence).then(result => {
       if (result === 'authorized') recordClaim(origin,source);
       if (!mode.pilot && controlledOrigin && origin === controlledOrigin && origin !== normalizedOrigin) {
-        void optional.degradation.run('correlation', async () => {
-          await recordDegradationClaim(pool,activeProject,new URL(origin).hostname,source);
-          await degradationState(pool,activeProject,new URL(origin).hostname);
+        void degradationTask('correlation', async () => {
+          const temporalOrigin = optional.canaryDegradation.state === 'NOT_INSTALLED' ? undefined : origin;
+          await recordDegradationClaim(pool,activeProject,new URL(origin).hostname,source,temporalOrigin);
+          await degradationState(pool,activeProject,new URL(origin).hostname,temporalOrigin);
         });
       }
       res.writeHead(result === 'capacity' ? 429 : 204).end();
-    }).catch(() => res.writeHead(503).end());
+    }).catch(() => { lostDegradationClaim(); res.writeHead(503).end(); });
   });
 });
 server.requestTimeout = 5000; server.headersTimeout = 6000;
@@ -156,7 +210,8 @@ async function maintenance() {
   if (busy) return;
   busy = true;
   try {
-    await optional.degradation.run('maintenance', () => maintainDegradation(pool, activeProject));
+    const temporalOrigin = !mode.pilot && optional.canaryDegradation.state !== 'NOT_INSTALLED' ? controlledOrigin : undefined;
+    await degradationTask('maintenance', () => maintainDegradation(pool, activeProject, temporalOrigin, optional.canaryDegradation.state !== 'NOT_INSTALLED'));
     await cleanup(pool, activeProject); await deliverOne(pool, activeProject, smtpPort);
     if (Date.now() >= installationCleanupAfter) {
       const completed = await optional.installation.run('retention', () => pool.query("DELETE FROM installation_signals WHERE project_id=$1 AND last_observed_at < now()-interval '7 days'", [activeProject]));

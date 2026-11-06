@@ -42,9 +42,13 @@ export async function optionalSchemas(pool: Pick<Pool, 'query'>) {
   // to_regclass respects the same search_path as the operational queries, without touching missing tables.
   const result = await pool.query(`SELECT
     to_regclass('installations') IS NOT NULL AND to_regclass('installation_signals') IS NOT NULL AS installation,
-    to_regclass('degradation_events') IS NOT NULL AND to_regclass('degradation_audit') IS NOT NULL AS degradation`);
+    to_regclass('degradation_events') IS NOT NULL AND to_regclass('degradation_audit') IS NOT NULL AS degradation,
+    EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('degradation_audit') AND attname='evidence' AND NOT attisdropped)
+    AND EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('degradation_events') AND attname='origin' AND NOT attisdropped)
+    AND to_regclass('degradation_collection_gaps') IS NOT NULL AS canary_degradation`);
   return {
     installation: new OptionalSchema('installation', result.rows[0].installation === true),
-    degradation: new OptionalSchema('degradation', result.rows[0].degradation === true)
+    degradation: new OptionalSchema('degradation', result.rows[0].degradation === true),
+    canaryDegradation: new OptionalSchema('canary_temporal', result.rows[0].canary_degradation === true)
   };
 }
