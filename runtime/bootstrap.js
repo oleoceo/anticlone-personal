@@ -28,10 +28,13 @@
     }
     // One delegated listener uses the latest bounded snapshot.
     const ctaTtlMs = 120000, refreshIntervalMs = 60000;
-    let activeCtas = null, listenerInstalled = false;
+    let activeCtas = null, listenerInstalled = false, latestCtaVersion = 0;
+    const observeCtaVersion = decision => {
+      if (decision && decision.action === 'OBSERVE_ONLY' && Number.isSafeInteger(decision.ctaVersion) && decision.ctaVersion > latestCtaVersion) latestCtaVersion = decision.ctaVersion;
+    };
     const prepareCtas = (decision, startedWall, startedMono) => {
       try {
-        if (!Number.isSafeInteger(decision.version) || decision.version < 1 || location.pathname !== decision.pathname || !Array.isArray(decision.mappings) || decision.mappings.length > 100) return;
+        if (!Number.isSafeInteger(decision.version) || decision.version < 1 || decision.version < latestCtaVersion || location.pathname !== decision.pathname || !Array.isArray(decision.mappings) || decision.mappings.length > 100) return;
         const original = new URL(decision.original);
         if (!['http:', 'https:'].includes(original.protocol) || original.origin !== decision.original || original.origin === location.origin || !['localhost','127.0.0.1'].includes(original.hostname) || !['localhost','127.0.0.1'].includes(location.hostname)) return;
         const mappings = new Map();
@@ -41,7 +44,8 @@
           if (target.origin !== original.origin || target.username || target.password || target.hash || !['http:', 'https:'].includes(target.protocol)) return;
           mappings.set(row.marker, {kind:row.kind, destination:target.href});
         }
-        if (!validContext() || Date.now() < startedWall || Date.now() - startedWall >= ctaTtlMs || performance.now() - startedMono >= ctaTtlMs) return;
+        if (!validContext() || Date.now() < startedWall || Date.now() - startedWall > 5000 || performance.now() - startedMono > 5000) return;
+        latestCtaVersion = decision.version;
         activeCtas = {mappings, pathname:decision.pathname, startedWall, startedMono};
         if (!listenerInstalled) { listenerInstalled = true; install(); }
       } catch (_) { /* Keep original links. */ }
@@ -100,11 +104,11 @@
         else { const initial = JSON.parse(stored); if (!initial || typeof initial !== 'object' || Array.isArray(initial)) return; Object.keys(signals).forEach(key => delete signals[key]); Object.assign(signals, initial); }
         let inFlight = false, sequence = 0, lastAttempt = Date.now(), backoff = refreshIntervalMs, failed = false, controller, returnTimer;
         const expired = () => !activeCtas || Date.now() < activeCtas.startedWall || Date.now() - activeCtas.startedWall >= ctaTtlMs || performance.now() - activeCtas.startedMono >= ctaTtlMs;
-        const refresh = (onReturn = false) => {
+        const refresh = (onReturn = false, afterEntry = false) => {
           const elapsed = Date.now() - lastAttempt;
           if (!validContext() || document.hidden || inFlight || elapsed < 0) return;
           const delay = failed ? backoff : onReturn && expired() ? 5000 : refreshIntervalMs;
-          if (elapsed < delay) {
+          if (!afterEntry && elapsed < delay) {
             if (onReturn && expired() && !returnTimer) returnTimer = setTimeout(() => { returnTimer = undefined; refresh(true); }, delay - elapsed);
             return;
           }
@@ -114,7 +118,7 @@
           const requestController = controller, timeout = setTimeout(() => requestController.abort(), 5000);
           fetch(new URL('/cta-refresh', source).href, {method:'POST', headers:{'Content-Type':'text/plain'}, body:JSON.stringify({session,signals}), cache:'no-store', signal:requestController.signal})
             .then(response => { if (!response.ok) throw Error('unavailable'); return response.json(); })
-            .then(decision => { if (id !== sequence || !validContext()) return; failed = false; backoff = refreshIntervalMs; activeCtas = null; if (decision && decision.action === 'REPLACE_CONVERSION') prepareCtas(decision, wall, mono); })
+            .then(decision => { if (id !== sequence || !validContext()) return; failed = false; backoff = refreshIntervalMs; activeCtas = null; observeCtaVersion(decision); if (decision && decision.action === 'REPLACE_CONVERSION') prepareCtas(decision, wall, mono); })
             .catch(() => { if (id === sequence) { activeCtas = null; failed = true; backoff = Math.min(backoff * 2, 240000); } })
             .finally(() => { clearTimeout(timeout); if (id === sequence) { inFlight = false; controller = undefined; } });
         };
@@ -128,8 +132,12 @@
           .then(response => { if (!response.ok) throw new Error('decision unavailable'); return response.json(); })
           .then(decision => {
             if (!validContext()) return;
+            if (entrySequence === sequence) observeCtaVersion(decision);
             if (decision.action === 'REPLACE_CONVERSION') { if (entrySequence === sequence) prepareCtas(decision, entryWall, entryMono); return; }
-            if (!redirectPending || redirectInteracted || performance.now() >= deadline) return;
+            if (!redirectPending || redirectInteracted || performance.now() >= deadline) {
+              if (decision.action === 'PAGE_REDIRECT' && entrySequence === sequence) refresh(false, true);
+              return;
+            }
             redirectPending = false;
             if (decision.action !== 'PAGE_REDIRECT' || !Number.isSafeInteger(decision.version) || decision.version < 1 || typeof decision.destination !== 'string') return;
             const target = new URL(decision.destination);
