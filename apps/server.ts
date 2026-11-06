@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { Pool } from 'pg';
 import { configuredOrigin, hostFromUrl, cleanup, observe, observeCanary } from './detection.js';
 import { deliverOne } from './alerts.js';
+import { smtpProvider } from './smtp-provider.js';
 import { classifyTraffic } from './traffic.js';
 import { entryDecision, approvedDestination } from './page-redirect.js';
 import { validateAllocation } from './allocation.js';
@@ -19,9 +20,11 @@ import { OperationalObservations } from './operational-observations.js';
 const boundary = gatewayBoundary(process.env);
 const connectionString = process.env.DATABASE_URL, project = process.env.PROJECT_ID;
 const smtpPort = Number(process.env.SMTP_PORT), port = Number(process.env.PORT ?? 3000);
+const cloneSmtp = smtpProvider(process.env);
 if (!connectionString || !project || !/^[a-zA-Z0-9_-]{1,64}$/.test(project) || !Number.isInteger(smtpPort) || smtpPort < 1 || smtpPort > 65535 || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('invalid local test configuration');
 const activeProject: string = project;
 const pool = new Pool({ connectionString, max: 5, connectionTimeoutMillis: 2000, statement_timeout: 3000, query_timeout: 4000 });
+if (cloneSmtp) await pool.query('SELECT outbox_id,attempt,transport,started_at,finished_at,outcome FROM clone_delivery_attempts LIMIT 0');
 pool.on('error', () => process.stderr.write('database connection failed\n'));
 if (process.env.GATEWAY_MODE === 'PILOT_OBSERVE' && (process.env.ALLOWED_ORIGIN || process.env.LAB_CONTROLLED_ORIGIN || process.env.LAB_CONTROLLED_RISK)) throw Error('laboratory configuration forbidden in pilot');
 // One-time legacy import is driven solely by the local operator's old configuration.
@@ -247,7 +250,7 @@ async function maintenance() {
     const temporalOrigin = !mode.pilot && optional.canaryDegradation.state !== 'NOT_INSTALLED' ? controlledOrigin : undefined;
     await degradationTask('maintenance', () => maintainDegradation(pool, activeProject, temporalOrigin, optional.canaryDegradation.state !== 'NOT_INSTALLED'));
     try {
-      await cleanup(pool, activeProject); await deliverOne(pool, activeProject, smtpPort);
+      await cleanup(pool, activeProject); await deliverOne(pool, activeProject, cloneSmtp ?? smtpPort);
       observeFailure('maintenance',false);
     } catch (error) {
       const code=(error as {code?:unknown} | null)?.code;
@@ -265,7 +268,7 @@ async function maintenance() {
       const version=healthBaselineVersion;
       if (version === healthBaselinePersisted && claimPending.size === 0)
         await evaluateInactivity(pool, activeProject, () => version===healthBaselineVersion && claimPending.size===0);
-      if (version === healthBaselineVersion && version === healthBaselinePersisted) await deliverHealth(pool, activeProject, smtpPort, () => version===healthBaselineVersion);
+      if (!cloneSmtp && version === healthBaselineVersion && version === healthBaselinePersisted) await deliverHealth(pool, activeProject, smtpPort, () => version===healthBaselineVersion);
       if (Date.now() >= healthCleanupAfter) {
         await maintainHealthHistory(pool, activeProject);
         healthCleanupAfter = Date.now() + 60 * 60_000;

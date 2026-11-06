@@ -1,5 +1,7 @@
 # Matriz de Cobertura Funcional — AntiClone Personal
 
+Frente A / F26: `tests/smtp-provider.test.ts` demonstra transporte SMTP configurável por ambiente privado, TLS implícito/STARTTLS, retry com histórico 033 e consulta no painel, em PostgreSQL/Chromium/SMTP local. Configuração pública deve coincidir com ambiente privado; credenciais não chegam ao browser. Capacidade permanece PARCIAL: aceitação local não prova entrega externa, nem provedor real autorizado configurado. Limites em `CLONE-SMTP.md`; gates e revisão do SHA final no PR.
+
 **Estado:** cobertura documental F01–F40 **AUDITADA** nas fontes temáticas consultadas; F41–F45 registram lacunas. Não é código implementado nem prova de comportamento; a auditoria não garante exaustividade.
 
 Legenda: **P** = planejada no Personal; **PARCIAL** = parte comprovada, capacidade incompleta; **V** = validada por teste; **B** = bloqueada com explicação. Inicialmente tudo está `P`. Cada `Fxx` só vira `V` depois de evidência de teste, não por texto ou interface.
