@@ -3,7 +3,13 @@ import { assessEvidence } from './risk.js';
 
 // These are retained observations, not an identity or a session decision.
 export async function investigation(pool: Pool, project: string) {
-  const result = await pool.query(`SELECT i.host, i.status, i.first_seen AS first_observed_at, i.last_seen AS last_observed_at,
+  const schema = await pool.query(`SELECT to_regclass('degradation_events') IS NOT NULL AND to_regclass('degradation_audit') IS NOT NULL AS degradation,
+    to_regclass('degradation_collection_gaps') IS NOT NULL AS gaps,
+    to_regclass('infrastructure_dns_observations') IS NOT NULL AS infrastructure,
+    to_regclass('investigation_timeline') IS NOT NULL AS timeline,
+    to_regclass('incident_status_audit') IS NOT NULL AS audit`);
+  const available = schema.rows[0];
+  const result = await pool.query(`SELECT i.id AS incident_id, i.host, i.status, ${available.audit ? 'i.triage_version' : 'NULL AS triage_version'}, i.first_seen AS first_observed_at, i.last_seen AS last_observed_at,
     COALESCE((SELECT jsonb_agg(jsonb_build_object('source',s.source,'day',s.day) ORDER BY s.day,s.source)
       FROM observation_source_days s WHERE s.project_id=i.project_id AND s.host=i.host AND s.day >= (now() AT TIME ZONE 'UTC')::date-7), '[]'::jsonb) AS observation_sources,
     COALESCE((SELECT jsonb_agg(jsonb_build_object('source',t.source,'kind',t.evidence,'day',t.day,'observed_at',t.observed_at) ORDER BY t.observed_at)
@@ -15,12 +21,6 @@ export async function investigation(pool: Pool, project: string) {
     FROM incidents i WHERE i.project_id=$1 AND i.last_seen >= now()-interval '30 days' ORDER BY i.last_seen DESC,i.host LIMIT 100`, [project]);
   // Optional migrations may be absent on older installations. Catalog errors and
   // query errors propagate as 503 rather than being presented as missing data.
-  const schema = await pool.query(`SELECT to_regclass('degradation_events') IS NOT NULL AND to_regclass('degradation_audit') IS NOT NULL AS degradation,
-    to_regclass('degradation_collection_gaps') IS NOT NULL AS gaps,
-    to_regclass('infrastructure_dns_observations') IS NOT NULL AS infrastructure,
-    to_regclass('investigation_timeline') IS NOT NULL AS timeline,
-    to_regclass('incident_status_audit') IS NOT NULL AS audit`);
-  const available = schema.rows[0];
   const states = available.degradation ? await pool.query(`SELECT DISTINCT ON (host) host,state,observed_at,window_start,uncertainty FROM degradation_audit
     WHERE project_id=$1 AND observed_at>=now()-interval '7 days' ORDER BY host,observed_at DESC`,[project]) : {rows:[]};
   const events = available.degradation ? await pool.query(`SELECT host,source,observed_at FROM degradation_events

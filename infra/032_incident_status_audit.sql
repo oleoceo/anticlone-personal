@@ -1,3 +1,4 @@
+ALTER TABLE incidents ADD COLUMN triage_version bigint NOT NULL DEFAULT 0 CHECK (triage_version >= 0);
 CREATE TABLE incident_status_audit (
  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
  incident_id bigint NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,

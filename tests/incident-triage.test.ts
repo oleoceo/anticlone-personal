@@ -25,7 +25,8 @@ test('incident triage: atomic audit, concurrency, observations, API and browser'
     await db.query("INSERT INTO projects VALUES ('a','<img src=x onerror=alert(1)>','https://original.test'),('b','Second','https://second.test')");
     await observe(db,'a','https://original.test','https://copy.test');
     await observe(db,'b','https://second.test','https://copy.test');
-    const payload={project:'a',host:'copy.test',expected:'unverified',status:'investigating',justification:'Initial review'};
+    const incidentId=(await db.query("SELECT id FROM incidents WHERE project_id='a'")).rows[0].id as string;
+    const payload={project:'a',host:'copy.test',incident_id:incidentId,version:'0',expected:'unverified',status:'investigating',justification:'Initial review'};
     assert.equal((await db.query("SELECT status FROM incidents WHERE project_id='a'")).rows[0].status,'unverified');
     await assert.rejects(classifyIncident(db,{...payload,status:'confirmed'}),TypeError);
     await assert.rejects(classifyIncident(db,{...payload,status:'unverified'}),TypeError);
@@ -35,16 +36,16 @@ test('incident triage: atomic audit, concurrency, observations, API and browser'
     await db.query("CREATE FUNCTION fail_triage() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'failure'; END $$");
     await db.query('CREATE TRIGGER fail_audit BEFORE INSERT ON incident_status_audit FOR EACH ROW EXECUTE FUNCTION fail_triage()');
     const before=Number((await db.query('SELECT count(*) n FROM investigation_timeline')).rows[0].n);
-    await assert.rejects(classifyIncident(db,{...payload,expected:current,status:'confirmed_copy'}));
+    await assert.rejects(classifyIncident(db,{...payload,version:'1',expected:current,status:'confirmed_copy'}));
     assert.equal((await db.query("SELECT status FROM incidents WHERE project_id='a'")).rows[0].status,current);
     assert.equal(Number((await db.query('SELECT count(*) n FROM investigation_timeline')).rows[0].n),before);
     await db.query('DROP TRIGGER fail_audit ON incident_status_audit');
     await db.query('CREATE TRIGGER fail_timeline BEFORE INSERT ON investigation_timeline FOR EACH ROW EXECUTE FUNCTION fail_triage()');
-    await classifyIncident(db,{...payload,expected:current,status:'confirmed_copy'}); current='confirmed_copy';
+    await classifyIncident(db,{...payload,version:'1',expected:current,status:'confirmed_copy'}); current='confirmed_copy';
     assert.equal((await db.query('SELECT count(*)::int n FROM incident_status_audit')).rows[0].n,2);
     assert.equal(Number((await db.query('SELECT count(*) n FROM investigation_timeline')).rows[0].n),before);
     await db.query('DROP TRIGGER fail_timeline ON investigation_timeline');
-    await classifyIncident(db,{...payload,expected:current,status:'false_positive',justification:'<img src=x onerror=alert(1)>'});
+    await classifyIncident(db,{...payload,version:'2',expected:current,status:'false_positive',justification:'<img src=x onerror=alert(1)>'});
     await observe(db,'a','https://original.test','https://copy.test','fallback');
     assert.equal((await db.query("SELECT status FROM incidents WHERE project_id='a'")).rows[0].status,'false_positive');
     assert.equal((await db.query("SELECT count(*)::int n FROM observations WHERE project_id='a'")).rows[0].n,2);
@@ -72,7 +73,7 @@ test('incident triage: atomic audit, concurrency, observations, API and browser'
     await page.locator('#incident-list select').selectOption('investigating'); await page.getByLabel('Justificativa').fill('Revisão manual'); await page.getByRole('button',{name:'Registrar classificação'}).click();
     await page.getByText('Classificação e auditoria registradas. Consulte novamente.').waitFor();
     await db.query("UPDATE alert_outbox SET sent_at=now() WHERE incident_id=(SELECT id FROM incidents WHERE project_id='a')");
-    await classifyIncident(db,{...payload,expected:'investigating',status:'false_positive'});
+    await classifyIncident(db,{...payload,version:'4',expected:'investigating',status:'false_positive'});
     assert.ok((await db.query("SELECT sent_at FROM alert_outbox a JOIN incidents i ON i.id=a.incident_id WHERE i.project_id='a'")).rows[0].sent_at);
     await browser.close(); browser=undefined; server.close(); await once(server,'close');
     const later=clock+90000;
@@ -84,8 +85,13 @@ test('incident triage: atomic audit, concurrency, observations, API and browser'
     const persisted=await (await fetch(restarted+'/admin/projects/a/investigation',{headers:bearer})).json() as {status:string;status_audit:{events:unknown[]}}[];
     assert.equal(persisted[0].status,'false_positive'); assert.equal(persisted[0].status_audit.events.length,5);
     assert.equal((await fetch(restarted+'/admin/projects/a/incident-status',{method:'GET',headers:bearer})).status,404);
-    assert.equal((await fetch(restarted+'/admin/projects/b/incident-status',{method:'POST',headers:bearer,body:JSON.stringify({host:'copy.test',expected:'false_positive',status:'investigating',justification:'wrong project'})})).status,409);
-    assert.equal((await fetch(restarted+'/admin/projects/a/incident-status',{method:'POST',headers:bearer,body:JSON.stringify({host:'copy.test',expected:'false_positive',status:'investigating',justification:'API review'})})).status,200);
+    assert.equal((await fetch(restarted+'/admin/projects/b/incident-status',{method:'POST',headers:bearer,body:JSON.stringify({host:'copy.test',incident_id:incidentId,version:'5',expected:'false_positive',status:'investigating',justification:'wrong project'})})).status,409);
+    assert.equal((await fetch(restarted+'/admin/projects/a/incident-status',{method:'POST',headers:bearer,body:JSON.stringify({host:'copy.test',incident_id:incidentId,version:'5',expected:'false_positive',status:'investigating',justification:'API review'})})).status,200);
+    const bId=(await db.query("SELECT id FROM incidents WHERE project_id='b'")).rows[0].id as string;
+    const stale={...payload,project:'b',incident_id:bId};
+    await classifyIncident(db,stale);
+    await classifyIncident(db,{...stale,version:'1',expected:'investigating',status:'unverified'});
+    await assert.rejects(classifyIncident(db,stale));
     await db.query("UPDATE incidents SET last_seen=now()-interval '31 days' WHERE project_id='a'"); await cleanup(db,'a');
     assert.equal((await db.query("SELECT count(*)::int n FROM incident_status_audit a JOIN incidents i ON i.id=a.incident_id WHERE i.project_id='a'")).rows[0].n,0);
   } finally { if(browser) await browser.close(); if(server) {server.close(); await once(server,'close')} await db.end(); await root.query(`DROP SCHEMA ${schema} CASCADE`); await root.end(); }
