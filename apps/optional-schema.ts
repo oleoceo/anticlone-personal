@@ -52,7 +52,7 @@ export async function optionalSchemas(pool: Pick<Pool, 'query'>, onState?: (name
     AND EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('degradation_events') AND attname='origin' AND NOT attisdropped)
     AND to_regclass('degradation_collection_gaps') IS NOT NULL AS canary_degradation`);
   return {
-    health: new OptionalSchema('health', result.rows[0].health === true),
+    health: new OptionalSchema('health', result.rows[0].health === true, undefined, undefined, onState),
     installation: new OptionalSchema('installation', result.rows[0].installation === true, undefined, undefined, onState),
     degradation: new OptionalSchema('degradation', result.rows[0].degradation === true, undefined, undefined, onState),
     canaryDegradation: new OptionalSchema('canary_temporal', result.rows[0].canary_degradation === true, undefined, undefined, onState)

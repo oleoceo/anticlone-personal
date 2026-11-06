@@ -6,6 +6,7 @@ import { once } from 'node:events';
 import { spawn } from 'node:child_process';
 import { Pool } from 'pg';
 import { chromium } from 'playwright';
+import { SMTPServer } from 'smtp-server';
 import { enableInstallation } from '../apps/installation.js';
 import { configureHealth } from '../apps/health-alerts.js';
 
@@ -25,10 +26,16 @@ test('gateway reconciles health episodes after restart and a real maintenance fa
   const siteAddress=site.address(); assert.ok(siteAddress && typeof siteAddress !== 'string');
   const origin=`http://127.0.0.1:${siteAddress.port}`;
   const browser=await chromium.launch();
+  let rejectMail=true, accepted=0;
+  const smtp=new SMTPServer({authOptional:true,disabledCommands:['STARTTLS'],onData(stream,_session,callback){
+    stream.resume(); stream.on('end',()=>{if(rejectMail) callback(new Error('local failure')); else { accepted++; callback(); }});
+  }});
+  const smtpServer=smtp.listen(0,'127.0.0.1'); await once(smtpServer,'listening');
+  const smtpAddress=smtpServer.address(); assert.ok(smtpAddress && typeof smtpAddress !== 'string');
   let child:ReturnType<typeof spawn>|undefined, logs='';
   const wait=async (condition:()=>Promise<boolean>)=>{const deadline=Date.now()+10000; do { if(await condition()) return; await new Promise(r=>setTimeout(r,30)); } while(Date.now()<deadline); throw Error('condition timed out: '+logs);};
   const start=async()=>{
-    child=spawn(process.execPath,['dist/apps/server.js'],{env:{...process.env,PGOPTIONS:options,DATABASE_URL:process.env.TEST_DATABASE_URL,PROJECT_ID:'one',PORT:String(addr.port),SMTP_PORT:'1',ALLOWED_ORIGIN:'',GATEWAY_MODE:undefined,GATEWAY_TRANSPORT:'',PUBLIC_GATEWAY_HOST:'',LAB_CONTROLLED_ORIGIN:''},stdio:['ignore','ignore','pipe']});
+    child=spawn(process.execPath,['dist/apps/server.js'],{env:{...process.env,PGOPTIONS:options,DATABASE_URL:process.env.TEST_DATABASE_URL,PROJECT_ID:'one',PORT:String(addr.port),SMTP_PORT:String(smtpAddress.port),ALLOWED_ORIGIN:'',GATEWAY_MODE:undefined,GATEWAY_TRANSPORT:'',PUBLIC_GATEWAY_HOST:'',LAB_CONTROLLED_ORIGIN:''},stdio:['ignore','ignore','pipe']});
     child.stderr?.on('data',chunk=>{logs+=String(chunk);});
     await wait(async()=>{try{return (await fetch(base+'/healthz')).ok;}catch{return false;}});
   };
@@ -55,8 +62,10 @@ test('gateway reconciles health episodes after restart and a real maintenance fa
     await wait(async()=>(await db.query("SELECT attempts FROM health_delivery")).rows[0].attempts===1);
     await stop();
     await db.query("UPDATE health_delivery SET next_attempt=clock_timestamp()-interval '1 second'");
+    rejectMail=false;
     await start();
-    await wait(async()=>(await db.query("SELECT attempts FROM health_delivery")).rows[0].attempts===2);
+    await wait(async()=>(await db.query("SELECT count(*)::int n FROM health_history WHERE event='SENT'")).rows[0].n===1);
+    assert.equal((await db.query('SELECT attempts FROM health_delivery')).rows[0].attempts,2); assert.equal(accepted,1);
     assert.equal((await db.query("SELECT count(*)::int n FROM health_episodes WHERE project_id='one' AND kind='INACTIVE'")).rows[0].n,1);
     assert.equal((await db.query("SELECT count(*)::int n FROM health_episodes WHERE project_id='two'")).rows[0].n,0);
     await db.query('ALTER TABLE observations RENAME TO observations_unavailable');
@@ -84,6 +93,6 @@ test('gateway reconciles health episodes after restart and a real maintenance fa
     await wait(async()=>(await db.query("SELECT count(*)::int n FROM health_episodes WHERE source='installation_claim'")).rows[0].n===2);
     await db.query('ALTER TABLE unavailable_signals RENAME TO installation_signals');
   } finally {
-    await stop(); await browser.close(); await new Promise<void>(resolve=>site.close(()=>resolve())); await db.end(); await root.query(`DROP SCHEMA ${schema} CASCADE`); await root.end();
+    await stop(); await new Promise<void>(resolve=>smtp.close(()=>resolve())); await browser.close(); await new Promise<void>(resolve=>site.close(()=>resolve())); await db.end(); await root.query(`DROP SCHEMA ${schema} CASCADE`); await root.end();
   }
 });
