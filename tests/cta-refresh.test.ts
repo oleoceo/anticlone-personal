@@ -251,6 +251,17 @@ test('CTA refresh preserves independent mapping and expires locally', {timeout:9
     const low=page.waitForResponse(r=>r.url().endsWith('/cta-refresh'));
     await page.clock.fastForward(60000); await low; await page.clock.runFor(1);
     await click('premium1',original+'/official-premium');
+    for (const risk of ['HIGH','ERROR']) {
+      await restart(risk);
+      for (const phase of ['entry-decision','cta-refresh']) {
+        const response=await fetch('http://127.0.0.1:3000/'+phase,{method:'POST',headers:{origin:clone,'content-type':'text/plain'},body:JSON.stringify({session:'0123456789abcdef0123456789abcdef',signals:{medium:'cpc'}})});
+        assert.equal((await response.json() as {action:string}).action,'OBSERVE_ONLY',`${risk} ${phase} paid`);
+      }
+      const denied=page.waitForResponse(r=>r.url().endsWith('/cta-refresh'));
+      await page.clock.fastForward(60000); await denied; await page.clock.runFor(1);
+      await click('premium1',clone+'/native-premium');
+    }
+    await restart('LOW');
     await page.route('**/cta-refresh',route=>route.fulfill({status:200,body:'invalid json'}));
     const invalid=page.waitForResponse(r=>r.url().endsWith('/cta-refresh'));
     await page.clock.fastForward(60000); await invalid; await page.clock.runFor(1);

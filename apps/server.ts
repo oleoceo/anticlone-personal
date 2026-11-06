@@ -157,7 +157,13 @@ const server = http.createServer((req, res) => {
     let session: unknown; let trafficClass: string; let evidence: RiskEvidence;
     try { const input: unknown = JSON.parse(body); if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).sort().join(',') !== 'session,signals') throw Error('invalid'); const fields = input as Record<string, unknown>; session = fields.session; const traffic = classifyTraffic(fields.signals, origin); trafficClass = traffic.trafficClass; evidence = {source:'browser',reliability:'uncorroborated',trafficClass,kind:traffic.evidence}; } catch { res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify({action:'OBSERVE_ONLY'})); return; }
     void (async () => {
-      const assessment = safeEvaluateRisk(controlledOrigin === origin && origin !== normalizedOrigin && process.env.LAB_CONTROLLED_RISK === 'LOW', fixture => assessObservation(evidence, fixture));
+      const controlled = controlledOrigin === origin && origin !== normalizedOrigin;
+      const assessment = safeEvaluateRisk(controlled && process.env.LAB_CONTROLLED_RISK === 'LOW', fixture => {
+        // Test-only negative fixtures can only suppress mitigation.
+        if (controlled && process.env.LAB_CONTROLLED_RISK === 'ERROR') throw Error('controlled evaluator failure');
+        const result = assessObservation(evidence, fixture);
+        return controlled && process.env.LAB_CONTROLLED_RISK === 'HIGH' ? {...assessObservation(evidence,true),level:'HIGH'} : result;
+      });
       if (!assessment) return {action:'OBSERVE_ONLY'};
       await recordRisk(pool, activeProject, new URL(origin).hostname, assessment, evidence);
       if (!stealthEligible(assessment, mode.pilot)) return {action:'OBSERVE_ONLY'};
