@@ -79,7 +79,11 @@ for(const migrations of [[],['025_installation_signals'],['026_degradation'],['0
         await new Promise(r=>setTimeout(r,1050)); // multiple actual maintenance ticks, not just startup
       }
       if(installed)assert.equal((await db.query("SELECT count(*)::int n FROM installation_signals WHERE project_id='one'")).rows[0].n,2);
-      if(degradation)assert.equal((await db.query("SELECT count(*)::int n FROM degradation_events WHERE project_id='one'")).rows[0].n,2);
+      if(degradation) {
+        // Each source can occupy more than one minute bucket; 204 does not wait
+        // for the asynchronous journal, so wait for both persisted sources.
+        await until(async()=>(await db.query("SELECT count(DISTINCT source)::int n FROM degradation_events WHERE project_id='one'")).rows[0].n===2);
+      }
       assert.equal(logs.split('installation NOT_INSTALLED').length-1,installed?0:1);
       assert.equal(logs.split('degradation NOT_INSTALLED').length-1,degradation?0:1);
       assert.doesNotMatch(logs,/unavailable|DATABASE_ERROR|maintenance failed/);

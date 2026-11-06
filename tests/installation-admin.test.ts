@@ -28,7 +28,7 @@ test('installation admin: authentication, session separation, CSRF, expiry and o
   const ui=(action:string,headers:Record<string,string>={})=>fetch(base+'/admin/ui/installation'+action,{method:'POST',headers:{origin:base,'sec-fetch-site':'same-origin','content-type':'application/json',...headers},body:'{"project":"one"}'});
   const snapshot=async()=>({installations:(await db.query('SELECT * FROM installations ORDER BY project_id')).rows,signals:(await db.query('SELECT * FROM installation_signals ORDER BY project_id,source')).rows});
   try {
-    for (const file of ['003_projects','025_installation_signals']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
+    for (const file of ['003_projects','025_installation_signals','028_health_alerts','029_health_settings_history']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
     await db.query('CREATE TABLE admin_totp_replay (factor_id text PRIMARY KEY, last_counter bigint NOT NULL)');
     await db.query('CREATE TABLE admin_totp_codes (factor_id text NOT NULL, digest text NOT NULL, valid_until bigint NOT NULL, PRIMARY KEY (factor_id,digest))');
     await db.query("INSERT INTO projects VALUES('one','One','http://owner.test')");
@@ -48,6 +48,14 @@ test('installation admin: authentication, session separation, CSRF, expiry and o
       assert.equal((await api(method,suffix,{cookie:`admin_session=${token}`})).status,401);
     }
     assert.equal((await api('GET','',bearer)).status,200);
+    const health=base+'/admin/projects/one/health';
+    assert.equal((await fetch(health)).status,401);
+    assert.equal((await fetch(health,{method:'POST',headers:{...bearer,'content-type':'application/json',origin:base},body:JSON.stringify({enabled:true,inactivity_seconds:60,operational_enabled:true})})).status,403);
+    assert.equal((await fetch(health,{method:'POST',headers:{...bearer,'content-type':'application/json'},body:JSON.stringify({enabled:true,inactivity_seconds:60,operational_enabled:true})})).status,200);
+    const settings=await (await fetch(health,{headers:bearer})).json();
+    assert.equal(settings.enabled,true); assert.equal(settings.inactivity_seconds,60);
+    assert.equal((await fetch(base+'/admin/projects/one/health/history',{headers:bearer})).status,200);
+
     for (const action of ['','-enable','-disable']) {
       assert.equal((await ui(action)).status,403);
       assert.equal((await ui(action,{cookie:`admin_session=${token}`,'x-csrf-token':token})).status,403);

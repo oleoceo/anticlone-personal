@@ -13,6 +13,8 @@ import { gatewayBoundary } from './gateway-boundary.js';
 import { recordInstallationClaim } from './installation.js';
 import { recordDegradationClaim, degradationState, maintainDegradation, markDegradationGap } from './degradation.js';
 import { optionalSchemas } from './optional-schema.js';
+import { evaluateInactivity, deliverHealth, reconcileOperationalEpisode, recoverOperationalSource, maintainHealthHistory, invalidateInactivity, recordInstallationActivity } from './health-alerts.js';
+import { OperationalObservations } from './operational-observations.js';
 const boundary = gatewayBoundary(process.env);
 const connectionString = process.env.DATABASE_URL, project = process.env.PROJECT_ID;
 const smtpPort = Number(process.env.SMTP_PORT), port = Number(process.env.PORT ?? 3000);
@@ -32,7 +34,13 @@ const projectRow = await pool.query('SELECT origin FROM projects WHERE id=$1', [
 if (projectRow.rowCount !== 1) throw new Error('unknown project');
 const normalizedOrigin = configuredOrigin(projectRow.rows[0].origin);
 const mode = gatewayMode(process.env, normalizedOrigin);
-const optional = await optionalSchemas(pool);
+let healthBaselineVersion = 1, healthBaselinePersisted = 0;
+const failures = new OperationalObservations();
+function observeFailure(source: string, failed: boolean, code?: string) {
+  if (source==='installation_claim' && failed) healthBaselineVersion++;
+  failures.observe(source,failed,code);
+}
+const optional = await optionalSchemas(pool,observeFailure);
 if (legacyOrigin && legacyOrigin !== normalizedOrigin) throw new Error('legacy configuration conflicts with project');
 // The operator controls this local experiment; requests never provide risk.
 const controlledOrigin = process.env.LAB_CONTROLLED_ORIGIN ? configuredOrigin(process.env.LAB_CONTROLLED_ORIGIN) : undefined;
@@ -43,6 +51,7 @@ const fallback = readFileSync('runtime/fallback.js');
 let windowStart = Date.now(), count = 0;
 let decisionWindowStart = Date.now(), decisionCount = 0;
 let refreshWindowStart = Date.now(), refreshCount = 0;
+let activityPending = false, activityAfter = 0;
 const claimPending = new Set<string>();
 const claimAfter = new Map<string,number>();
 // Serialize F44 work so an observed collection failure is recorded before any
@@ -72,6 +81,7 @@ function degradationTask(operation: string, action: () => Promise<unknown>, forc
   return task.then(() => completed);
 }
 function lostDegradationClaim(): void {
+  healthBaselineVersion++;
   degradationGapVersion++;
   if (gapBarrier) return;
   // One bounded reconciliation, independent of the normal queue limit. The
@@ -115,6 +125,10 @@ const server = http.createServer((req, res) => {
           claimedOrigin = configuredOrigin(new URL(req.headers.referer).origin);
         }
       } catch { /* Missing or ambiguous claims never contribute. */ }
+      if (claimedOrigin === normalizedOrigin && !activityPending && Date.now() >= activityAfter) {
+        activityPending=true; activityAfter=Date.now()+60_000;
+        void optional.health.run('activity', () => recordInstallationActivity(pool,activeProject,normalizedOrigin)).finally(()=>{activityPending=false;});
+      }
       if (!mode.pilot && controlledOrigin && controlledOrigin !== normalizedOrigin && claimedOrigin === controlledOrigin) {
         if (optional.canaryDegradation.state !== 'NOT_INSTALLED') void degradationTask('correlation', async () => {
           const host = new URL(controlledOrigin).hostname;
@@ -206,19 +220,55 @@ server.setTimeout(10_000, socket => socket.destroy());
 server.listen(port, '127.0.0.1');
 let busy = false;
 let installationCleanupAfter = 0;
+let healthCleanupAfter = 0;
+async function reconcileMaintenanceFailure() {
+  await failures.reconcile(async pending => {
+    if (pending.key) await reconcileOperationalEpisode(pool,activeProject,pending.source,pending.key,pending.openedAt,pending.recoveredAt,pending.safeCode);
+    else await recoverOperationalSource(pool,activeProject,pending.source,pending.openedAt);
+  });
+}
 async function maintenance() {
   if (busy) return;
   busy = true;
   try {
     const temporalOrigin = !mode.pilot && optional.canaryDegradation.state !== 'NOT_INSTALLED' ? controlledOrigin : undefined;
     await degradationTask('maintenance', () => maintainDegradation(pool, activeProject, temporalOrigin, optional.canaryDegradation.state !== 'NOT_INSTALLED'));
-    await cleanup(pool, activeProject); await deliverOne(pool, activeProject, smtpPort);
+    try {
+      await cleanup(pool, activeProject); await deliverOne(pool, activeProject, smtpPort);
+      observeFailure('maintenance',false);
+    } catch (error) {
+      const code=(error as {code?:unknown} | null)?.code;
+      const safeCode=typeof code==='string' && /^[A-Z0-9_]{1,32}$/.test(code) ? code : 'UNKNOWN';
+      observeFailure('maintenance',true,safeCode);
+      process.stderr.write('maintenance MAINTENANCE_ERROR; persistence pending\n');
+    }
+    await optional.health.run('maintenance', async () => {
+      if (healthBaselineVersion !== healthBaselinePersisted) {
+        const version=healthBaselineVersion;
+        await invalidateInactivity(pool,activeProject,version > 1);
+        healthBaselinePersisted = version;
+      }
+      await reconcileMaintenanceFailure();
+      const version=healthBaselineVersion;
+      if (version === healthBaselinePersisted && claimPending.size === 0)
+        await evaluateInactivity(pool, activeProject, () => version===healthBaselineVersion && claimPending.size===0);
+      if (version === healthBaselineVersion && version === healthBaselinePersisted) await deliverHealth(pool, activeProject, smtpPort, () => version===healthBaselineVersion);
+      if (Date.now() >= healthCleanupAfter) {
+        await maintainHealthHistory(pool, activeProject);
+        healthCleanupAfter = Date.now() + 60 * 60_000;
+      }
+    });
     if (Date.now() >= installationCleanupAfter) {
       const completed = await optional.installation.run('retention', () => pool.query("DELETE FROM installation_signals WHERE project_id=$1 AND last_observed_at < now()-interval '7 days'", [activeProject]));
       if (completed) installationCleanupAfter = Date.now() + 60 * 60_000;
     }
   }
-  catch { process.stderr.write('maintenance failed\n'); }
+  catch (error) {
+    const code=(error as {code?:unknown} | null)?.code;
+    const safeCode=typeof code==='string' && /^[A-Z0-9_]{1,32}$/.test(code) ? code : 'UNKNOWN';
+    observeFailure('maintenance',true,safeCode);
+    process.stderr.write('maintenance MAINTENANCE_ERROR; persistence pending\n');
+  }
   finally { busy = false; }
 }
 void maintenance(); const timer = setInterval(() => void maintenance(), 1000);
