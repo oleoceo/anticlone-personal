@@ -108,7 +108,7 @@ Este quadro complementa as provas acima, sem mudar criterios. `Parcial` signific
 | F41 · B | Parcial: cta-inventory.test.ts | Identidade estrutural segura, multiplas ofertas, GS17 integral. |
 | F42 · B | Ausente: propagacao configuravel | Allowlist por destino, parametros adversariais e GS18. |
 | F43 · B | Parcial: policy-admin.test.ts | Precedencia geral/entrada/interacao e conflitos, GS19 integral. |
-| F44 · P | Correlacao laboratorial de Core com fallback e canarios HTML/CSS; sinais sao alegacoes nao autenticadas. | GS20 integral pendente: perdas antes do gateway, inclusive no proxy, nao sao observaveis. |
+| F44 · A | Parcial: correlacao laboratorial de Core com fallback e canarios HTML/CSS; sinais sao alegacoes nao autenticadas. | GS20 integral pendente: perdas antes do gateway, inclusive no proxy, nao sao observaveis. |
 | F45 · A | Ausente: inatividade/falha rastreavel | Instalacoes persistidas, dedup/retry/historico e GS21. |
 
 Caminho critico: publicacao HTTPS observavel -> risco/Stealth -> destinos externos de pagina/CTA -> identidade e superficies -> confirmacao manual de preco por CTA/Offer Snapshot versionado -> associacao contextual segura -> drift/revisao -> atribuicao/metricas/vendas -> seguranca/painel/retencao/restore e aceitacao final. SMTP externo, diagnostico de instalacao e enriquecimento de A devem acompanhar suas dependencias sem considerar a primeira instalacao como encerramento. Preparacao de publicacao nao autoriza DNS/deploy nem conclui A/B/C.
