@@ -45,7 +45,7 @@ export class OptionalSchema {
 export async function optionalSchemas(pool: Pick<Pool, 'query'>, onState?: (name: string, failed: boolean, code?: string) => void) {
   // to_regclass respects the same search_path as the operational queries, without touching missing tables.
   const result = await pool.query(`SELECT
-    to_regclass('health_operational_keys') IS NOT NULL AND to_regclass('health_episodes') IS NOT NULL AND to_regclass('health_delivery') IS NOT NULL AND to_regclass('health_history') IS NOT NULL AND to_regclass('installation_health_settings') IS NOT NULL AND to_regclass('installation_last_signal') IS NOT NULL AS health,
+    to_regclass('health_settings_history') IS NOT NULL AND to_regclass('health_operational_keys') IS NOT NULL AND to_regclass('health_episodes') IS NOT NULL AND to_regclass('health_delivery') IS NOT NULL AND to_regclass('health_history') IS NOT NULL AND to_regclass('installation_health_settings') IS NOT NULL AND to_regclass('installation_last_signal') IS NOT NULL AS health,
     to_regclass('installations') IS NOT NULL AND to_regclass('installation_signals') IS NOT NULL AS installation,
     to_regclass('degradation_events') IS NOT NULL AND to_regclass('degradation_audit') IS NOT NULL AS degradation,
     EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('degradation_audit') AND attname='evidence' AND NOT attisdropped)

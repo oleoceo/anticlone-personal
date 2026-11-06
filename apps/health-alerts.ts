@@ -9,10 +9,34 @@ export async function configureHealth(db: Pool, project: string, enabled: boolea
   try {
     await client.query('BEGIN');
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1), 45)',[project]);
+    const previous = (await client.query('SELECT enabled,inactivity_seconds,operational_enabled FROM installation_health_settings WHERE project_id=$1',[project])).rows[0];
     const result = await client.query(`INSERT INTO installation_health_settings(project_id,enabled,inactivity_seconds,operational_enabled)
       SELECT project_id,$2,$3,$4 FROM installations WHERE project_id=$1
       ON CONFLICT(project_id) DO UPDATE SET enabled=excluded.enabled,inactivity_seconds=excluded.inactivity_seconds,operational_enabled=excluded.operational_enabled RETURNING *`, [project,enabled,seconds,operationalEnabled]);
     if (!result.rowCount) throw new TypeError('unknown installation');
+    const changed = !previous || previous.enabled !== enabled || previous.inactivity_seconds !== seconds || previous.operational_enabled !== operationalEnabled;
+    if (changed) {
+      await client.query(`INSERT INTO health_settings_history(project_id,previous_settings,current_settings)
+        VALUES($1,$2,$3)`,[project,previous ?? null,{enabled,inactivity_seconds:seconds,operational_enabled:operationalEnabled}]);
+      // A diagnosis belongs to its inactivity policy. Keep the evidence and
+      // history, but free the open-episode key and cancel all unsent intentions.
+      if (previous && (previous.enabled !== enabled || previous.inactivity_seconds !== seconds)) {
+        const invalidated = await client.query(`UPDATE health_episodes SET invalidated_at=clock_timestamp()
+          WHERE project_id=$1 AND kind='INACTIVE' AND recovered_at IS NULL AND invalidated_at IS NULL RETURNING id`,[project]);
+        for (const row of invalidated.rows) {
+          await client.query('UPDATE health_delivery SET expired_at=clock_timestamp() WHERE episode_id=$1 AND sent_at IS NULL AND expired_at IS NULL',[row.id]);
+          await client.query("INSERT INTO health_history(episode_id,event) VALUES($1,'INVALIDATED')",[row.id]);
+        }
+      }
+      // Operational diagnoses remain useful for reconciliation. Disabling
+      // notifications cancels their intentions without closing the failure.
+      if (!operationalEnabled) {
+        const expired=await client.query(`UPDATE health_delivery d SET expired_at=clock_timestamp()
+          FROM health_episodes e WHERE e.id=d.episode_id AND e.project_id=$1 AND e.kind='OPERATIONAL'
+          AND d.sent_at IS NULL AND d.expired_at IS NULL RETURNING d.episode_id`,[project]);
+        for (const row of expired.rows) await client.query("INSERT INTO health_history(episode_id,event) VALUES($1,'EXPIRED')",[row.episode_id]);
+      }
+    }
     await client.query('COMMIT');
     return result.rows[0];
   } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
@@ -143,7 +167,7 @@ export async function deliverHealth(db: Pool, project: string, port: number, isC
         const result = await client.query(`SELECT d.episode_id,e.kind FROM health_delivery d JOIN health_episodes e ON e.id=d.episode_id
           JOIN installation_health_settings s ON s.project_id=e.project_id
           JOIN installations i ON i.project_id=e.project_id JOIN projects p ON p.id=i.project_id
-          WHERE ((e.kind='INACTIVE' AND s.enabled AND i.enabled AND i.origin=p.origin) OR (e.kind='OPERATIONAL' AND s.operational_enabled)) AND e.project_id=$1 AND (e.kind='OPERATIONAL' OR (e.recovered_at IS NULL AND e.invalidated_at IS NULL AND NOT EXISTS (SELECT 1 FROM installation_last_signal l WHERE l.project_id=e.project_id AND l.last_observed_at>e.opened_at))) AND d.sent_at IS NULL AND d.expired_at IS NULL
+          WHERE ((e.kind='INACTIVE' AND s.enabled AND i.enabled AND i.origin=p.origin) OR (e.kind='OPERATIONAL' AND s.operational_enabled)) AND e.project_id=$1 AND e.recovered_at IS NULL AND e.invalidated_at IS NULL AND (e.kind='OPERATIONAL' OR NOT EXISTS (SELECT 1 FROM installation_last_signal l WHERE l.project_id=e.project_id AND l.last_observed_at>e.opened_at)) AND d.sent_at IS NULL AND d.expired_at IS NULL
           AND d.attempts<3 AND d.next_attempt<=clock_timestamp() AND e.opened_at>clock_timestamp()-interval '24 hours'
           ORDER BY d.episode_id LIMIT 1 FOR UPDATE OF d SKIP LOCKED`, [project]);
         item = result.rows[0];
@@ -193,6 +217,7 @@ export async function maintainHealthHistory(db: Pool, project: string) {
     for (const row of expired.rows) await client.query("INSERT INTO health_history(episode_id,event) VALUES($1,'EXPIRED')",[row.episode_id]);
     await client.query("DELETE FROM health_operational_keys k USING health_episodes e WHERE k.episode_id=e.id AND e.project_id=$1 AND k.created_at<clock_timestamp()-interval '30 days'",[project]);
     await client.query("DELETE FROM health_episodes WHERE project_id=$1 AND coalesce(recovered_at,invalidated_at) < clock_timestamp()-interval '30 days'",[project]);
+    await client.query("DELETE FROM health_settings_history WHERE project_id=$1 AND occurred_at < clock_timestamp()-interval '30 days'",[project]);
     await client.query('COMMIT');
   } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
 }

@@ -22,7 +22,7 @@ test('health episodes, deduplication, retries and recovery', {timeout:30000}, as
   await once(server,'listening');
   const port=(smtp.server.address() as AddressInfo).port;
   try {
-    for (const f of ['003_projects','018_notification_budget','025_installation_signals','028_health_alerts']) await db.query(await readFile(`infra/${f}.sql`,'utf8'));
+    for (const f of ['003_projects','018_notification_budget','025_installation_signals','028_health_alerts','029_health_settings_history']) await db.query(await readFile(`infra/${f}.sql`,'utf8'));
     await db.query("INSERT INTO projects VALUES('one','One','http://owner.test'),('two','Two','http://two.test')");
     await enableInstallation(db,'one'); await enableInstallation(db,'two');
     await configureHealth(db,'one',true,60,true); await configureHealth(db,'two',false,60,false);
@@ -120,7 +120,7 @@ test('health episodes, deduplication, retries and recovery', {timeout:30000}, as
     assert.equal((await db.query('SELECT count(*)::int n FROM health_operational_keys WHERE observation_key=$1',[first])).rows[0].n,0);
     assert.equal((await db.query("SELECT count(*)::int n FROM health_episodes WHERE source='restart_claim'")).rows[0].n,before.rows[0].n+2);
     // Roll back the optional migration in dependency order; old claims still work.
-    await db.query('DROP TRIGGER remember_installation_signal ON installation_signals; DROP FUNCTION remember_installation_signal(); DROP TRIGGER invalidate_health_baseline ON installations; DROP FUNCTION invalidate_health_baseline(); DROP TABLE health_history,health_delivery,health_operational_keys,health_episodes,installation_last_signal,installation_health_settings');
+    await db.query('DROP TRIGGER remember_installation_signal ON installation_signals; DROP FUNCTION remember_installation_signal(); DROP TRIGGER invalidate_health_baseline ON installations; DROP FUNCTION invalidate_health_baseline(); DROP TABLE health_settings_history,health_history,health_delivery,health_operational_keys,health_episodes,installation_last_signal,installation_health_settings');
     await recordInstallationClaim(db,'one','http://owner.test','fallback');
     assert.equal((await db.query("SELECT count(*)::int n FROM installation_signals WHERE project_id='one' AND source='fallback'")).rows[0].n,1);
   } finally {

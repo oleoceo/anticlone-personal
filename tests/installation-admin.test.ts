@@ -28,7 +28,7 @@ test('installation admin: authentication, session separation, CSRF, expiry and o
   const ui=(action:string,headers:Record<string,string>={})=>fetch(base+'/admin/ui/installation'+action,{method:'POST',headers:{origin:base,'sec-fetch-site':'same-origin','content-type':'application/json',...headers},body:'{"project":"one"}'});
   const snapshot=async()=>({installations:(await db.query('SELECT * FROM installations ORDER BY project_id')).rows,signals:(await db.query('SELECT * FROM installation_signals ORDER BY project_id,source')).rows});
   try {
-    for (const file of ['003_projects','025_installation_signals','028_health_alerts']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
+    for (const file of ['003_projects','025_installation_signals','028_health_alerts','029_health_settings_history']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
     await db.query('CREATE TABLE admin_totp_replay (factor_id text PRIMARY KEY, last_counter bigint NOT NULL)');
     await db.query('CREATE TABLE admin_totp_codes (factor_id text NOT NULL, digest text NOT NULL, valid_until bigint NOT NULL, PRIMARY KEY (factor_id,digest))');
     await db.query("INSERT INTO projects VALUES('one','One','http://owner.test')");

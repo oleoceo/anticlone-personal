@@ -41,7 +41,7 @@ test('gateway reconciles health episodes after restart and a real maintenance fa
   };
   const stop=async()=>{if(child && child.exitCode===null){child.kill();await once(child,'exit');}};
   try {
-    for(const f of ['001_initial','002_alerts','003_projects','004_observation_sources','005_canaries','008_traffic_observations','009_risk_assessments','024_risk_evidence','018_notification_budget','019_alert_outbox_expiry','025_installation_signals','028_health_alerts']) await db.query(await readFile(`infra/${f}.sql`,'utf8'));
+    for(const f of ['001_initial','002_alerts','003_projects','004_observation_sources','005_canaries','008_traffic_observations','009_risk_assessments','024_risk_evidence','018_notification_budget','019_alert_outbox_expiry','025_installation_signals','028_health_alerts','029_health_settings_history']) await db.query(await readFile(`infra/${f}.sql`,'utf8'));
     await db.query("INSERT INTO projects VALUES('one','One',$1),('two','Two','http://other.test')",[origin]);
     await enableInstallation(db,'one'); await enableInstallation(db,'two');
     await configureHealth(db,'one',true,60,true); await configureHealth(db,'two',true,60,true);
