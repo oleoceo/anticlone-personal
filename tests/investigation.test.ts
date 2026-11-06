@@ -1,0 +1,83 @@
+﻿import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { Pool } from 'pg';
+import { createAdminServer } from '../apps/admin-auth.js';
+import { scryptSync } from 'node:crypto';
+import { TOTP, Secret } from 'otpauth';
+import { once } from 'node:events';
+import type { AddressInfo } from 'node:net';
+import { investigation } from '../apps/investigation.js';
+import { observe } from '../apps/detection.js';
+import { assessObservation, evaluateRisk, recordRisk } from '../apps/risk.js';
+
+test('investigation isolates projects, preserves first receipt and marks claims and daily aggregates', async () => {
+  assert.ok(process.env.TEST_DATABASE_URL);
+  const root = new Pool({connectionString:process.env.TEST_DATABASE_URL});
+  const schema = 'investigation_' + crypto.randomUUID().replaceAll('-','');
+  await root.query(`CREATE SCHEMA ${schema}`);
+  const db = new Pool({connectionString:process.env.TEST_DATABASE_URL, options:`-c search_path=${schema}`});
+  try {
+    for (const file of ['001_initial','002_alerts','004_observation_sources','005_canaries','008_traffic_observations','009_risk_assessments','024_risk_evidence','018_notification_budget','019_alert_outbox_expiry']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
+    await observe(db,'a','https://original.test','https://copy.test','core');
+    const first = (await investigation(db,'a'))[0];
+    await Promise.all([observe(db,'a','https://original.test','https://copy.test','fallback'), observe(db,'b','https://original.test','https://copy.test','core')]);
+    await recordRisk(db,'a','copy.test',evaluateRisk(false),{source:'browser',reliability:'uncorroborated',trafficClass:'DIRECT_UNKNOWN',kind:'none'});
+    const rows = await investigation(db,'a');
+    assert.equal(rows.length,1);
+    assert.deepEqual(rows[0].first_observed_at,first.first_observed_at);
+    assert.deepEqual(rows[0].observation_sources.map((s: {source:string})=>s.source),['core','fallback']);
+    assert.equal(rows[0].assessments[0].evidence_provenance,'browser');
+    assert.equal(rows[0].assessments[0].evidence_reliability,'uncorroborated');
+    const signal={source:'browser' as const,reliability:'uncorroborated' as const,trafficClass:'DIRECT_UNKNOWN',kind:'none' as const};
+    await recordRisk(db,'a','copy.test',assessObservation(signal,false),signal);
+    const v3=(await investigation(db,'a'))[0].assessments.find((item:{version:string})=>item.version==='conservative-risk-v3');
+    assert.equal(v3.reconstructed_at_decision.sources[0].type,'no_attribution');
+    assert.equal(v3.reconstructed_at_decision.sources[1].type,'gateway_receipt');
+    assert.equal((await investigation(db,'b'))[0].assessments.length,0);
+    assert.equal((await investigation(db,'missing')).length,0);
+    assert.equal(rows[0].degradation.available,false);
+    await db.query(await readFile('infra/026_degradation.sql','utf8'));
+    await db.query(await readFile('infra/027_canary_degradation.sql','utf8'));
+    await db.query(`INSERT INTO degradation_events(project_id,host,source,bucket) VALUES('a','copy.test','fallback',date_trunc('minute',now())),('a','other.test','core',date_trunc('minute',now()))`);
+    await db.query(`INSERT INTO degradation_audit(project_id,host,state,window_start) VALUES('a','copy.test','POSSIBLE_DEGRADATION',now()),('a','other.test','UNKNOWN',now())`);
+    await db.query(`INSERT INTO degradation_collection_gaps VALUES('a',now())`);
+    const extended=(await investigation(db,'a'))[0];
+    assert.equal(extended.degradation.inference.state,'POSSIBLE_DEGRADATION');
+    assert.equal(extended.degradation.received_claims.length,1);
+    assert.equal(extended.collection_gap.scope,'project'); assert.ok(extended.collection_gap.last_dropped_at);
+    await db.query(`INSERT INTO degradation_audit(project_id,host,state,window_start,observed_at) VALUES('a','copy.test','UNKNOWN',now(),clock_timestamp()+interval '1 second')`);
+    assert.equal((await investigation(db,'a'))[0].degradation.inference.state,'UNKNOWN');
+    assert.equal((await investigation(db,'b'))[0].collection_gap.last_dropped_at,null);
+    await db.query('CREATE TABLE admin_totp_replay (factor_id text PRIMARY KEY, last_counter bigint NOT NULL)');
+    await db.query('CREATE TABLE admin_totp_codes (factor_id text NOT NULL, digest text NOT NULL, valid_until bigint NOT NULL, PRIMARY KEY(factor_id,digest))');
+    const salt='0123456789abcdef0123456789abcdef', secret='GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ', clock=1000000;
+    const record=`scrypt$${salt}$${scryptSync('password',Buffer.from(salt,'hex'),64).toString('hex')}`;
+    const server=createAdminServer(record,secret,db,()=>clock).listen(0,'127.0.0.1'); await once(server,'listening');
+    try {
+      const base=`http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      const path='/admin/projects/a/investigation';
+      assert.equal((await fetch(base+path)).status,401);
+      const code=new TOTP({secret:Secret.fromBase32(secret)}).generate({timestamp:clock});
+      const login=await fetch(base+'/admin/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:'password',code})});
+      assert.equal(login.status,200); const {token}=await login.json() as {token:string};
+      const headers={authorization: `Bearer ${token}`};
+      const response=await fetch(base+path,{headers}); assert.equal(response.status,200);
+      assert.equal(((await response.json()) as {host:string}[])[0].host,'copy.test');
+      assert.equal(((await (await fetch(base+'/admin/projects/missing/investigation',{headers})).json()) as unknown[]).length,0);
+      assert.equal((await fetch(base+path,{headers:{...headers,origin:'https://evil.test'}})).status,403);
+      await db.query(`INSERT INTO incidents(project_id,host,first_seen,last_seen) VALUES('a','expired.test',now()-interval '40 days',now()-interval '31 days')`);
+      await db.query(`INSERT INTO incidents(project_id,host) SELECT 'a','copy-' || n || '.test' FROM generate_series(1,101) n`);
+      const bounded=await (await fetch(base+path,{headers})).json() as {host:string}[];
+      assert.equal(bounded.length,100); assert.equal(bounded.some(item=>item.host==='expired.test'),false);
+      await db.query('ALTER TABLE degradation_audit RENAME TO unavailable_audit');
+      // Missing optional schema must preserve the base investigation.
+      assert.equal((await fetch(base+path,{headers})).status,200);
+      await db.query('ALTER TABLE unavailable_audit RENAME TO degradation_audit');
+      await db.query('ALTER TABLE incidents RENAME TO unavailable_incidents');
+      assert.equal((await fetch(base+path,{headers})).status,503);
+      await db.query('ALTER TABLE unavailable_incidents RENAME TO incidents');
+    } finally { server.close(); await once(server,'close'); }
+    assert.ok(rows[0].limitations.some((s:string)=>s.includes('daily aggregates')));
+  } finally { await db.end(); await root.query(`DROP SCHEMA ${schema} CASCADE`); await root.end(); }
+});
