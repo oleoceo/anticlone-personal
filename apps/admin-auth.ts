@@ -9,6 +9,7 @@ import { importInventory, approveDestination, approveCommercial, mapPoint, revie
 import { publishCtaPolicy } from './cta-policy.js';
 import { Conflict, getNotificationSettings, saveNotificationSettings, setNotificationPreference } from './notification-settings.js';
 import { handleAdminUi } from './admin-ui.js';
+import { configureHealth } from './health-alerts.js';
 import { disableInstallation, enableInstallation, installationDiagnostic, InstallationOriginConflict } from './installation.js';
 
 // Laboratory-only: one process, one owner, ephemeral sessions and rate limit.
@@ -55,6 +56,25 @@ export function createAdminServer(passwordRecord: string, totpSecret: string, db
       }
       if (req.method === 'GET' && req.url === '/admin/projects') {
         void db.query('SELECT id, name, origin FROM projects ORDER BY name, id').then(result => res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(result.rows))).catch(() => res.writeHead(503).end()); return;
+      }
+      const healthPath = /^\/admin\/projects\/([a-zA-Z0-9_-]{1,64})\/health$/.exec(req.url ?? '');
+      if (healthPath && req.method === 'GET') {
+        void db.query(`SELECT s.enabled,s.operational_enabled,s.inactivity_seconds,l.last_observed_at FROM installation_health_settings s LEFT JOIN installation_last_signal l ON l.project_id=s.project_id WHERE s.project_id=$1`,[healthPath[1]]).then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result.rows[0] ?? null))).catch(()=>res.writeHead(503).end()); return;
+      }
+      if (healthPath && req.method === 'POST') {
+        if (req.headers['content-type'] !== 'application/json') { res.writeHead(415).end(); return; }
+        let size=0, rejected=false; const chunks: Buffer[]=[];
+        req.on('data',(chunk:Buffer)=>{ size+=chunk.length; if(size>4096) { if(!rejected) res.writeHead(413).end(); rejected=true; chunks.length=0; } else if(!rejected) chunks.push(chunk); });
+        req.on('end',()=>{
+          if (rejected) return;
+          let body: Record<string, unknown>; try { body=JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { res.writeHead(400).end(); return; }
+          if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).sort().join(',') !== 'enabled,inactivity_seconds,operational_enabled') { res.writeHead(400).end(); return; }
+          void configureHealth(db,healthPath[1],body.enabled as boolean,body.inactivity_seconds as number,body.operational_enabled as boolean).then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error:unknown)=>res.writeHead(error instanceof TypeError ? 400 : 503).end());
+        }); return;
+      }
+      const healthHistoryPath = /^\/admin\/projects\/([a-zA-Z0-9_-]{1,64})\/health\/history$/.exec(req.url ?? '');
+      if (healthHistoryPath && req.method === 'GET') {
+        void db.query(`SELECT e.id,e.kind,e.source,e.nature,e.safe_code,e.opened_at,e.recovered_at,e.invalidated_at,h.event,h.occurred_at FROM health_episodes e LEFT JOIN health_history h ON h.episode_id=e.id WHERE e.project_id=$1 ORDER BY e.id DESC,h.id DESC LIMIT 200`,[healthHistoryPath[1]]).then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result.rows))).catch(()=>res.writeHead(503).end()); return;
       }
       const installationPath = /^\/admin\/projects\/([a-zA-Z0-9_-]{1,64})\/installation(?:\/(disable))?$/.exec(req.url ?? '');
       if (installationPath && (req.method === 'GET' || req.method === 'POST')) {
