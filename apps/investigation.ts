@@ -47,13 +47,13 @@ export async function investigation(pool: Pool, project: string) {
       reliability:'resolver_response_not_identity'})), asn:'NOT_AVAILABLE', hosting:'NOT_AVAILABLE',
       limitations:['DNS describes infrastructure, not visitor or operator identity.', 'No authoritative ASN or hosting source configured.', 'Expired, failed and absent records do not establish current infrastructure.']},
     assessments: row.assessments.map((assessment: {version:string; level:string; source:string; confidence:string; evidence_provenance:string; evidence_reliability:string; evidence_kind:string}) => {
-      // v3 receives these exact two categories at request time. Older rows and
+      // v3 and v4 receive these exact two categories at request time. Other rows and
       // unknown writes cannot be reconstructed; daily upserts retain only the latest.
-      const known = assessment.version === 'conservative-risk-v3' && assessment.evidence_provenance === 'browser' && assessment.evidence_reliability === 'uncorroborated' && assessment.evidence_kind !== 'legacy_unavailable';
+      const known = ['conservative-risk-v3','conservative-risk-v4'].includes(assessment.version) && assessment.evidence_provenance === 'browser' && assessment.evidence_reliability === 'uncorroborated' && assessment.evidence_kind !== 'legacy_unavailable';
       const reconstruction = known ? assessEvidence([
         {type:assessment.evidence_kind === 'none' ? 'no_attribution' : 'traffic_claim',provenance:'browser',reliability:'uncorroborated',validity:'current'},
         {type:'gateway_receipt',provenance:'gateway',reliability:'observed',validity:'current'}], assessment.source === 'lab_configuration') : null;
-      return {...assessment, reconstructed_at_decision: reconstruction && {sources:reconstruction.sources, limitations:reconstruction.limitations},
+      return {...assessment, reconstructed_at_decision: reconstruction && {sources:reconstruction.sources, limitations:assessment.version === 'conservative-risk-v3' ? ['Browser claims are manipulable; endpoints do not establish independence.', 'Gateway receipt does not verify the claimed host or identify a visitor.', 'No independent session-bound operator evidence is available.'] : reconstruction.limitations},
         synthetic_high_fixture: assessment.level === 'HIGH' && assessment.source === 'lab_configuration' && assessment.confidence === 'test_only'};
     }),
     degradation: {available: available.degradation, inference: states.rows.find(state => state.host === row.host) ?? null, received_claims: events.rows.filter(event => event.host === row.host)},
