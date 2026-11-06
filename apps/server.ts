@@ -13,7 +13,7 @@ import { gatewayBoundary } from './gateway-boundary.js';
 import { recordInstallationClaim } from './installation.js';
 import { recordDegradationClaim, degradationState, maintainDegradation, markDegradationGap } from './degradation.js';
 import { optionalSchemas } from './optional-schema.js';
-import { evaluateInactivity, deliverHealth, reconcileOperationalEpisode, recoverOperationalSource, maintainHealthHistory, invalidateInactivity } from './health-alerts.js';
+import { evaluateInactivity, deliverHealth, reconcileOperationalEpisode, recoverOperationalSource, maintainHealthHistory, invalidateInactivity, recordInstallationActivity } from './health-alerts.js';
 import { OperationalObservations } from './operational-observations.js';
 const boundary = gatewayBoundary(process.env);
 const connectionString = process.env.DATABASE_URL, project = process.env.PROJECT_ID;
@@ -51,6 +51,7 @@ const fallback = readFileSync('runtime/fallback.js');
 let windowStart = Date.now(), count = 0;
 let decisionWindowStart = Date.now(), decisionCount = 0;
 let refreshWindowStart = Date.now(), refreshCount = 0;
+let activityPending = false, activityAfter = 0;
 const claimPending = new Set<string>();
 const claimAfter = new Map<string,number>();
 // Serialize F44 work so an observed collection failure is recorded before any
@@ -124,6 +125,10 @@ const server = http.createServer((req, res) => {
           claimedOrigin = configuredOrigin(new URL(req.headers.referer).origin);
         }
       } catch { /* Missing or ambiguous claims never contribute. */ }
+      if (claimedOrigin === normalizedOrigin && !activityPending && Date.now() >= activityAfter) {
+        activityPending=true; activityAfter=Date.now()+60_000;
+        void optional.health.run('activity', () => recordInstallationActivity(pool,activeProject,normalizedOrigin)).finally(()=>{activityPending=false;});
+      }
       if (!mode.pilot && controlledOrigin && controlledOrigin !== normalizedOrigin && claimedOrigin === controlledOrigin) {
         if (optional.canaryDegradation.state !== 'NOT_INSTALLED') void degradationTask('correlation', async () => {
           const host = new URL(controlledOrigin).hostname;
@@ -228,8 +233,15 @@ async function maintenance() {
   try {
     const temporalOrigin = !mode.pilot && optional.canaryDegradation.state !== 'NOT_INSTALLED' ? controlledOrigin : undefined;
     await degradationTask('maintenance', () => maintainDegradation(pool, activeProject, temporalOrigin, optional.canaryDegradation.state !== 'NOT_INSTALLED'));
-    await cleanup(pool, activeProject); await deliverOne(pool, activeProject, smtpPort);
-    observeFailure('maintenance',false);
+    try {
+      await cleanup(pool, activeProject); await deliverOne(pool, activeProject, smtpPort);
+      observeFailure('maintenance',false);
+    } catch (error) {
+      const code=(error as {code?:unknown} | null)?.code;
+      const safeCode=typeof code==='string' && /^[A-Z0-9_]{1,32}$/.test(code) ? code : 'UNKNOWN';
+      observeFailure('maintenance',true,safeCode);
+      process.stderr.write('maintenance MAINTENANCE_ERROR; persistence pending\n');
+    }
     await optional.health.run('maintenance', async () => {
       if (healthBaselineVersion !== healthBaselinePersisted) {
         const version=healthBaselineVersion;

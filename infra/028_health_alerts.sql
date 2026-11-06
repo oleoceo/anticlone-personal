@@ -8,7 +8,8 @@ CREATE TABLE installation_health_settings (
 CREATE TABLE installation_last_signal (
  project_id text PRIMARY KEY REFERENCES installations(project_id),
  first_observed_at timestamptz,
- last_observed_at timestamptz NOT NULL
+ last_observed_at timestamptz NOT NULL,
+ last_activity_at timestamptz
 );
 INSERT INTO installation_last_signal(project_id,first_observed_at,last_observed_at)
  SELECT project_id,min(last_observed_at),max(last_observed_at) FROM installation_signals GROUP BY project_id;

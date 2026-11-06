@@ -47,6 +47,10 @@ test('gateway reconciles health episodes after restart and a real maintenance fa
     // The HTTP response precedes the asynchronous installation claim.
     await wait(async()=>(await db.query("SELECT count(*)::int n FROM installation_last_signal WHERE project_id='one' AND first_observed_at IS NOT NULL")).rows[0].n===1);
     await db.query("UPDATE installation_last_signal SET first_observed_at=clock_timestamp()-interval '4 minutes',last_observed_at=clock_timestamp()-interval '2 minutes' WHERE project_id='one'");
+    // An independent canary claim from the controlled page is persisted before evaluation.
+    await page.evaluate(async base=>{ await new Promise<void>((resolve,reject)=>{const image=new Image();image.onload=()=>resolve();image.onerror=()=>reject(Error('canary failed'));image.src=base+'/canary/html.gif';}); },base);
+    await wait(async()=>(await db.query("SELECT last_activity_at IS NOT NULL AS persisted FROM installation_last_signal WHERE project_id='one'")).rows[0].persisted);
+
     await wait(async()=>(await db.query("SELECT count(*)::int n FROM health_episodes WHERE project_id='one' AND kind='INACTIVE'")).rows[0].n===1);
     await wait(async()=>(await db.query("SELECT attempts FROM health_delivery")).rows[0].attempts===1);
     await stop();
@@ -57,6 +61,8 @@ test('gateway reconciles health episodes after restart and a real maintenance fa
     assert.equal((await db.query("SELECT count(*)::int n FROM health_episodes WHERE project_id='two'")).rows[0].n,0);
     await db.query('ALTER TABLE observations RENAME TO observations_unavailable');
     await wait(async()=>logs.includes('maintenance MAINTENANCE_ERROR'));
+    await wait(async()=>(await db.query("SELECT count(*)::int n FROM health_episodes WHERE project_id='one' AND source='maintenance' AND recovered_at IS NULL")).rows[0].n===1);
+    await wait(async()=>(await db.query("SELECT count(*)::int n FROM health_history h JOIN health_episodes e ON e.id=h.episode_id WHERE e.source='maintenance' AND h.event='ATTEMPT'")).rows[0].n===1);
     await db.query('ALTER TABLE observations_unavailable RENAME TO observations');
     await wait(async()=>(await db.query("SELECT count(*)::int n FROM health_episodes WHERE project_id='one' AND kind='OPERATIONAL' AND recovered_at IS NOT NULL")).rows[0].n===1);
     // A real optional operation failure is persisted, survives restart, and is

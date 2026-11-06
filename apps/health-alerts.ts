@@ -36,6 +36,14 @@ async function transition(client: PoolClient, project: string, kind: 'INACTIVE'|
   }
 }
 
+// A canary request with a matching, unauthenticated Referer is an activity
+// claim only. It does not establish installation integrity or visitor identity.
+export async function recordInstallationActivity(db: Pool, project: string, origin: string) {
+  await db.query(`UPDATE installation_last_signal l SET last_activity_at=clock_timestamp()
+    FROM installations i JOIN projects p ON p.id=i.project_id
+    WHERE l.project_id=$1 AND i.project_id=l.project_id AND i.enabled AND i.origin=$2 AND p.origin=i.origin`,[project,origin]);
+}
+
 // A known collection gap invalidates any open inactivity diagnosis, not a recovery.
 export async function invalidateInactivity(db: Pool, project: string, invalidateEpisodes = true) {
   const client=await db.connect();
@@ -59,14 +67,14 @@ export async function evaluateInactivity(db: Pool, project: string, isCurrent: (
     await client.query('BEGIN');
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1), 45)',[project]);
     const result = await client.query(`SELECT i.enabled AND i.origin=p.origin AND coalesce(s.enabled,false) AS eligible,
-      l.last_observed_at, EXISTS (SELECT 1 FROM health_episodes e WHERE e.project_id=i.project_id AND e.kind='INACTIVE' AND e.source='installation' AND e.recovered_at IS NULL AND e.invalidated_at IS NULL AND l.last_observed_at > e.opened_at) AS resumed, l.first_observed_at <= l.last_observed_at-interval '1 minute' AS baseline, l.last_observed_at < clock_timestamp()-make_interval(secs=>s.inactivity_seconds) AS inactive
+      l.last_observed_at, l.last_activity_at >= clock_timestamp()-interval '5 minutes' AND l.last_activity_at > l.last_observed_at AS recent_activity, EXISTS (SELECT 1 FROM health_episodes e WHERE e.project_id=i.project_id AND e.kind='INACTIVE' AND e.source='installation' AND e.recovered_at IS NULL AND e.invalidated_at IS NULL AND l.last_observed_at > e.opened_at) AS resumed, l.first_observed_at <= l.last_observed_at-interval '1 minute' AS baseline, l.last_observed_at < clock_timestamp()-make_interval(secs=>s.inactivity_seconds) AS inactive
       FROM installations i JOIN projects p ON p.id=i.project_id
       LEFT JOIN installation_health_settings s ON s.project_id=i.project_id
       LEFT JOIN installation_last_signal l ON l.project_id=i.project_id WHERE i.project_id=$1 FOR UPDATE OF i`, [project]);
     const row = result.rows[0];
     // Invalid configuration or no evidence is unknown, never recovery or an incident.
     if (row?.eligible && row.resumed) await transition(client,project,'INACTIVE','installation','NO_RECENT_SIGNAL',false);
-    if (row?.eligible && row.last_observed_at && row.baseline && row.inactive) await transition(client,project,'INACTIVE','installation','NO_RECENT_SIGNAL',true);
+    if (row?.eligible && row.last_observed_at && row.baseline && row.inactive && row.recent_activity) await transition(client,project,'INACTIVE','installation','NO_RECENT_SIGNAL',true);
     if (!isCurrent()) { await client.query('ROLLBACK'); return; }
     await client.query('COMMIT');
   } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
@@ -140,7 +148,7 @@ export async function deliverHealth(db: Pool, project: string, port: number, isC
           ORDER BY d.episode_id LIMIT 1 FOR UPDATE OF d SKIP LOCKED`, [project]);
         item = result.rows[0];
         if (item) {
-          await client.query("UPDATE health_delivery SET attempts=attempts+1,next_attempt=clock_timestamp()+interval '1 minute' WHERE episode_id=$1", [item.episode_id]);
+          await client.query("UPDATE health_delivery SET attempts=attempts+1,next_attempt=clock_timestamp()+make_interval(secs=>60 * (1 << attempts)) WHERE episode_id=$1", [item.episode_id]);
           await client.query("INSERT INTO health_history(episode_id,event) VALUES($1,'ATTEMPT')", [item.episode_id]);
           await recordBudget(client);
         }

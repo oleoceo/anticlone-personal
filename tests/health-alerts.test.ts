@@ -6,7 +6,7 @@ import type { AddressInfo } from 'node:net';
 import { Pool } from 'pg';
 import { SMTPServer } from 'smtp-server';
 import { enableInstallation, disableInstallation, recordInstallationClaim } from '../apps/installation.js';
-import { configureHealth, evaluateInactivity, deliverHealth, recordOperationalState, reconcileOperationalEpisode, recoverOperationalSource, maintainHealthHistory } from '../apps/health-alerts.js';
+import { configureHealth, evaluateInactivity, deliverHealth, recordOperationalState, reconcileOperationalEpisode, recoverOperationalSource, maintainHealthHistory, recordInstallationActivity } from '../apps/health-alerts.js';
 
 test('health episodes, deduplication, retries and recovery', {timeout:30000}, async () => {
   assert.ok(process.env.TEST_DATABASE_URL);
@@ -39,6 +39,10 @@ test('health episodes, deduplication, retries and recovery', {timeout:30000}, as
     assert.equal((await db.query("SELECT first_observed_at FROM installation_last_signal WHERE project_id='one'")).rows[0].first_observed_at,null);
     await db.query("UPDATE installation_last_signal SET first_observed_at=clock_timestamp()-interval '9 days',last_observed_at=clock_timestamp()-interval '8 days' WHERE project_id='one'");
     await db.query("DELETE FROM installation_signals WHERE project_id='one'");
+    await evaluateInactivity(db,'one');
+    assert.equal((await db.query('SELECT count(*)::int n FROM health_episodes')).rows[0].n,0,'no alert from absence of traffic');
+    await recordInstallationActivity(db,'one','http://owner.test');
+
     const blocker=await db.connect();
     try {
       const pid=(await blocker.query('SELECT pg_backend_pid() AS pid')).rows[0].pid as number;
@@ -75,6 +79,12 @@ test('health episodes, deduplication, retries and recovery', {timeout:30000}, as
     assert.deepEqual((await db.query('SELECT event FROM health_history ORDER BY id')).rows.map(r=>r.event),['OPENED','ATTEMPT','FAILED_UNCERTAIN']);
     await deliverHealth(db,'one',port);
     assert.equal((await db.query('SELECT attempts FROM health_delivery')).rows[0].attempts,1);
+    let delay=(await db.query('SELECT extract(epoch FROM next_attempt-clock_timestamp()) AS seconds FROM health_delivery')).rows[0].seconds;
+    assert.ok(Number(delay)>50 && Number(delay)<=60);
+    await db.query("UPDATE health_delivery SET next_attempt=clock_timestamp()-interval '1 second'");
+    await deliverHealth(db,'one',port);
+    delay=(await db.query('SELECT extract(epoch FROM next_attempt-clock_timestamp()) AS seconds FROM health_delivery')).rows[0].seconds;
+    assert.ok(Number(delay)>110 && Number(delay)<=120);
     await db.query("UPDATE health_delivery SET next_attempt=clock_timestamp()-interval '1 second'");
     reject=false; await deliverHealth(db,'one',port); assert.equal(messages,1);
     await recordInstallationClaim(db,'one','http://owner.test','core');
