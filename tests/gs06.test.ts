@@ -172,17 +172,22 @@ test('GS06 integration: persisted policy, controlled LOW and original', {timeout
     }
     // Chromium delivers the real scripts and canary to the gateway in one browser context.
     const adversarial=await browser.newContext({userAgent:'adversarial-test-agent'});
-    const browserPage=await adversarial.newPage();
-    for (const scenario of [{query:'?utm_medium=cpc&gclid=fixture',referrer:''},{query:'',referrer:'https://google.com/'},{query:'',referrer:'https://referrer.test/'},{query:'',referrer:''}]) {
+    for (const scenario of [{query:'?utm_medium=cpc&gclid=fixture',referrer:'',signals:{clickId:'present',clickKey:'gclid',medium:'cpc'}},{query:'',referrer:'https://google.com/',signals:{referrerHost:'google.com'}},{query:'',referrer:'https://referrer.test/',signals:{referrerHost:'referrer.test'}},{query:'',referrer:'',signals:{}}]) {
+      const browserPage=await adversarial.newPage();
       const result=browserPage.waitForResponse(r=>r.url().endsWith('/entry-decision'));
       const fallback=browserPage.waitForResponse(r=>r.url().endsWith('/observe/fallback'));
       const canary=browserPage.waitForResponse(r=>r.url().endsWith('/canary/html.gif'));
       await browserPage.goto(clone+'/adversarial'+scenario.query,scenario.referrer ? {referer:scenario.referrer} : undefined);
-      assert.deepEqual(await (await result).json(),{action:'OBSERVE_ONLY'});
+      const entry=await result;
+      assert.deepEqual((entry.request().postDataJSON() as {signals:object}).signals,scenario.signals);
+      assert.deepEqual(await entry.json(),{action:'OBSERVE_ONLY'});
       assert.equal((await fallback).status(),204); assert.equal((await canary).status(),200);
       assert.equal(new URL(browserPage.url()).pathname,'/adversarial');
+      await browserPage.close();
     }
     assert.ok((await db.query("SELECT 1 FROM canary_observations WHERE project_id=$1 AND host='localhost' AND source='html_canary'",[project])).rowCount);
+    const browserPage=await adversarial.newPage();
+    await browserPage.goto(clone+'/adversarial');
     const core=browserPage.waitForResponse(r=>r.url().endsWith('/observe'));
     const coreDecision=browserPage.waitForResponse(r=>r.url().endsWith('/entry-decision'));
     await browserPage.reload(); assert.equal((await core).status(),204);
