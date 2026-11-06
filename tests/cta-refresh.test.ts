@@ -10,6 +10,7 @@ import { Pool } from 'pg';
 import { chromium } from 'playwright';
 import { Secret, TOTP } from 'otpauth';
 import { createAdminServer } from '../apps/admin-auth.js';
+import { saveDraft, activatePolicy } from '../apps/protection-policy.js';
 
 const allocation={PAID_ATTRIBUTED:100,ORGANIC:100,REFERRAL:100,DIRECT_UNKNOWN:100};
 test('CTA refresh preserves independent mapping and expires locally', {timeout:90000}, async t => {
@@ -83,6 +84,36 @@ test('CTA refresh preserves independent mapping and expires locally', {timeout:9
     };
     await click('basic001',original+'/official-basic');
     await click('premium1',original+'/official-premium');
+    // Regression: an eligible entry policy must not suppress the interaction phase.
+    await saveDraft(db,project,{enabled:true,approved_destination:original+'/entry',stealth:true,allocation});
+    await activatePolicy(db,project);
+    const phaseResponse=await fetch('http://127.0.0.1:3000/cta-refresh',{method:'POST',headers:{origin:clone,'content-type':'text/plain'},body:JSON.stringify({session:'0123456789abcdef0123456789abcdef',signals:{}})});
+    assert.equal((await phaseResponse.json() as {action:string}).action,'REPLACE_CONVERSION');
+    for (const cancel of ['interaction','expiry'] as const) {
+      const phased=await browser.newPage(); await phased.clock.install();
+      let releaseEntry!:()=>void, entryReady!:()=>void;
+      const heldEntry=new Promise<void>(resolve=>{releaseEntry=resolve;});
+      const readyEntry=new Promise<void>(resolve=>{entryReady=resolve;});
+      await phased.route('**/entry-decision',async route=>{
+        const response=await route.fetch();
+        assert.equal((await response.json() as {action:string}).action,'PAGE_REDIRECT');
+        entryReady(); await heldEntry; await route.fulfill({response});
+      });
+      await phased.goto(clone+'/clone'); await readyEntry;
+      if (cancel==='interaction') await phased.evaluate(()=>dispatchEvent(new PointerEvent('pointerdown')));
+      else await phased.clock.fastForward(151);
+      const interactionResponse=phased.waitForResponse(r=>r.url().endsWith('/cta-refresh'));
+      releaseEntry(); assert.equal((await (await interactionResponse).json()).action,'REPLACE_CONVERSION');
+      await phased.clock.runFor(1);
+      const target=await phased.evaluate(()=>{
+        const node=document.querySelector<HTMLAnchorElement>('[data-anticlone-point="premium1"]')!;
+        let href=''; window.addEventListener('click',event=>{href=node.href;event.preventDefault();},{once:true}); node.click(); return href;
+      });
+      assert.equal(target,original+'/official-premium',cancel);
+      assert.equal(phased.url(),clone+'/clone'); await phased.close();
+    }
+    await saveDraft(db,project,{enabled:false,approved_destination:original+'/entry',stealth:true,allocation});
+    await activatePolicy(db,project);
     await navigate('basic001',original+'/official-basic');
     await navigate('premium1',original+'/official-premium');
     const commercialApproval=async(marker:string,version:number)=>{
@@ -191,12 +222,22 @@ test('CTA refresh preserves independent mapping and expires locally', {timeout:9
     await click('premium1',clone+'/native-premium');
     assert.equal((await post('policy',{enabled:false,surface:'landing',pathname:'/clone',allocation})).status,200);
     const disabled=page.waitForResponse(r=>r.url().endsWith('/cta-refresh'));
-    await page.clock.fastForward(60000); await disabled;
+    await page.clock.fastForward(60000); assert.equal((await (await disabled).json()).ctaVersion,3);
     await click('premium1',clone+'/native-premium');
+    await page.route('**/cta-refresh',route=>route.fulfill({json:staleBody}));
+    const afterDisabled=page.waitForResponse(r=>r.url().endsWith('/cta-refresh'));
+    await page.clock.fastForward(60000); await afterDisabled; await page.clock.runFor(1);
+    await click('premium1',clone+'/native-premium');
+    await page.unroute('**/cta-refresh');
     assert.equal((await post('policy',{enabled:true,surface:'landing',pathname:'/clone',allocation})).status,200);
     const enabled=page.waitForResponse(r=>r.url().endsWith('/cta-refresh'));
     await page.clock.fastForward(60000); await enabled; await page.clock.runFor(1);
     await click('premium1',original+'/official-premium');
+    await page.route('**/cta-refresh',route=>route.fulfill({json:staleBody}));
+    const olderVersion=page.waitForResponse(r=>r.url().endsWith('/cta-refresh'));
+    await page.clock.fastForward(60000); await olderVersion; await page.clock.runFor(1);
+    await click('premium1',clone+'/native-premium');
+    await page.unroute('**/cta-refresh');
     const restart=async (risk:string)=>{
       app!.kill('SIGTERM'); await once(app!,'exit');
       app=spawn(process.execPath,['dist/apps/server.js'],{env:{...process.env,PGOPTIONS:options,DATABASE_URL:process.env.TEST_DATABASE_URL,PROJECT_ID:project,SMTP_PORT:'25252',PORT:'3000',LAB_CONTROLLED_ORIGIN:clone,LAB_CONTROLLED_RISK:risk},stdio:['ignore','ignore','inherit']});
@@ -210,6 +251,21 @@ test('CTA refresh preserves independent mapping and expires locally', {timeout:9
     const low=page.waitForResponse(r=>r.url().endsWith('/cta-refresh'));
     await page.clock.fastForward(60000); await low; await page.clock.runFor(1);
     await click('premium1',original+'/official-premium');
+    await saveDraft(db,project,{enabled:true,approved_destination:original+'/entry',stealth:true,allocation});
+    await activatePolicy(db,project);
+    for (const risk of ['HIGH','ERROR']) {
+      await restart(risk);
+      for (const phase of ['entry-decision','cta-refresh']) {
+        const response=await fetch('http://127.0.0.1:3000/'+phase,{method:'POST',headers:{origin:clone,'content-type':'text/plain'},body:JSON.stringify({session:'0123456789abcdef0123456789abcdef',signals:{medium:'cpc'}})});
+        assert.equal((await response.json() as {action:string}).action,'OBSERVE_ONLY',`${risk} ${phase} paid`);
+      }
+      const denied=page.waitForResponse(r=>r.url().endsWith('/cta-refresh'));
+      await page.clock.fastForward(60000); await denied; await page.clock.runFor(1);
+      await click('premium1',clone+'/native-premium');
+    }
+    await restart('LOW');
+    await saveDraft(db,project,{enabled:false,approved_destination:original+'/entry',stealth:true,allocation});
+    await activatePolicy(db,project);
     await page.route('**/cta-refresh',route=>route.fulfill({status:200,body:'invalid json'}));
     const invalid=page.waitForResponse(r=>r.url().endsWith('/cta-refresh'));
     await page.clock.fastForward(60000); await invalid; await page.clock.runFor(1);
@@ -267,6 +323,42 @@ test('CTA refresh preserves independent mapping and expires locally', {timeout:9
     });
     assert.equal(afterRoute,clone+'/native-premium');
     await delayed.close();
+    // The response was computed before revocation but is delivered afterwards.
+    const revoked=await browser.newPage();
+    let releaseRevoked!:()=>void, responseComputed!:()=>void;
+    const holdRevoked=new Promise<void>(resolve=>{releaseRevoked=resolve;});
+    const computed=new Promise<void>(resolve=>{responseComputed=resolve;});
+    await revoked.route('**/entry-decision',async route=>{
+      const response=await route.fetch();
+      assert.equal((await response.json() as {action:string}).action,'REPLACE_CONVERSION');
+      responseComputed(); await holdRevoked; await route.fulfill({response});
+    });
+    await revoked.goto(clone+'/clone'); await computed;
+    assert.equal((await post('policy',{enabled:false,surface:'landing',pathname:'/clone',allocation})).status,200);
+    const delivered=revoked.waitForResponse(r=>r.url().endsWith('/entry-decision'));
+    releaseRevoked(); await delivered;
+    await revoked.waitForTimeout(100);
+    const revokedTarget=await revoked.evaluate(()=>{
+      const node=document.querySelector<HTMLAnchorElement>('[data-anticlone-point="premium1"]')!;
+      let href=''; window.addEventListener('click',event=>{href=node.href;event.preventDefault();},{once:true}); node.click(); return href;
+    });
+    assert.equal(revokedTarget,original+'/official-premium','a recent response may be accepted before the client learns of revocation');
+    await revoked.close();
+    assert.equal((await post('policy',{enabled:true,surface:'landing',pathname:'/clone',allocation})).status,200);
+    const late=await browser.newPage(); await late.clock.install();
+    await late.route('**/entry-decision',async route=>{
+      const response=await route.fetch();
+      assert.equal((await response.json() as {action:string}).action,'REPLACE_CONVERSION');
+      await late.clock.fastForward(5001); await route.fulfill({response});
+    });
+    const lateResponse=late.waitForResponse(r=>r.url().endsWith('/entry-decision'));
+    await late.goto(clone+'/clone'); await lateResponse; await late.clock.runFor(1);
+    const lateTarget=await late.evaluate(()=>{
+      const node=document.querySelector<HTMLAnchorElement>('[data-anticlone-point="premium1"]')!;
+      let href=''; window.addEventListener('click',event=>{href=node.href;event.preventDefault();},{once:true}); node.click(); return href;
+    });
+    assert.equal(lateTarget,clone+'/native-premium','CTA response over five seconds old is rejected');
+    await late.close();
   } finally {
     if (browser) await browser.close();
     if (app && app.exitCode===null && app.signalCode===null) {app.kill('SIGTERM'); await once(app,'exit');}
