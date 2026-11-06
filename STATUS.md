@@ -55,6 +55,7 @@ Estados: IMPLEMENTADO E TESTADO — refresh laboratorial do PR #38; IMPLEMENTADO
 
 F44/GS20 — PR #45 (historico): Core/fallback reais no gateway; canarios ainda pendentes naquele recorte.
 F44/GS20 — canarios HTML/CSS temporais no diario existente, limitados ao laboratorio; GS20 integral PARCIAL pela perda invisivel antes do gateway. Referer nao autenticado; sem prova de instalacao ou adulteracao. F08 BLOCKED/NOT_VERIFIED/OBSERVE_ONLY; F45 nao iniciada.
+Validacao local: lint, typecheck, build e 64 testes passaram; HTTPS completo reservado a CI. Revisao independente detached /root/f44_review favoravel ao codigo 354d635 e matriz 284d518, sem P0/P1/P2 remanescentes; evidencia e CI do SHA final no PR.
 - Janela explicita: baseline Core 30–10 min (2 buckets), ausencia Core 10 min, 2 buckets fallback e ultimo <2 min; atual UNKNOWN fora dela, historico separado por 7 dias.
 - Sinais nao autenticados; nenhuma identidade/adulteracao confirmada; NOT_VERIFIED preservado. Eventos 24h, deduplicacao por minuto e teto 10 mil/projeto por tabela.
 - PostgreSQL/Chromium: ambos, interrupcao, expiracao, historico, retomada, negativos/spoofing e retencao periodica sem trafego/isolamento passaram; regressao 58/58 (HTTPS Linux na CI), lint/typecheck/build e 9 testes documentais passaram.
