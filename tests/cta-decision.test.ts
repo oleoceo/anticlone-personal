@@ -57,10 +57,13 @@ test('D07: stored forms do not consume the active anchor mapping limit', async (
         await new Promise(resolve=>setTimeout(resolve,20));
       }
       assert.ok(waiting,'decision must reach mapping read before publication');
+      await blocker.query("UPDATE cta_points SET review_required=true WHERE project_id=$1 AND marker='anchor0000'",[project]);
       await publishCtaPolicy(db,project,{enabled:false,surface:'landing',pathname:'/clone',allocation:{PAID_ATTRIBUTED:100,ORGANIC:100,REFERRAL:100,DIRECT_UNKNOWN:100}});
       await blocker.query('COMMIT');
       assert.deepEqual(await pending,baseline,'in-flight decision reads a single pre-publication snapshot');
       assert.deepEqual(await decision(),{action:'OBSERVE_ONLY',ctaVersion:2});
+      await publishCtaPolicy(db,project,{enabled:true,surface:'landing',pathname:'/clone',allocation:{PAID_ATTRIBUTED:100,ORGANIC:100,REFERRAL:100,DIRECT_UNKNOWN:100}});
+      assert.deepEqual((await decision()).mappings,[],'new snapshot observes the commercial review');
     } finally { await blocker.query('ROLLBACK'); blocker.release(); }
   } finally { await db.end(); }
 });
