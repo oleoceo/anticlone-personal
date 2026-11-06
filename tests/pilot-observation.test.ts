@@ -67,9 +67,9 @@ test('pilot browser: multiple exact origins, untrusted copy, uncertain decisions
     }
     const incidents = await db.query('SELECT host FROM incidents ORDER BY host');
     assert.deepEqual(incidents.rows,[{host:'copy.test'},{host:'owner.test.evil.test'}]);
-    const risks = await db.query('SELECT level,source,evidence_kind,evidence_provenance,evidence_reliability FROM risk_assessment_days');
+    const risks = await db.query('SELECT level,source,evaluator_version,evidence_kind,evidence_provenance,evidence_reliability FROM risk_assessment_days');
     assert.equal(risks.rowCount,4);
-    assert.ok(risks.rows.every(row => row.level==='UNCERTAIN' && row.source==='server_default'));
+    assert.ok(risks.rows.every(row => row.level==='UNCERTAIN' && row.source==='server_default' && row.evaluator_version==='conservative-risk-v3'));
     assert.ok(risks.rows.every(row => row.evidence_kind==='paid_utm' && row.evidence_provenance==='browser' && row.evidence_reliability==='uncorroborated'));
     const page = await browser.newPage();
     await page.route('https://gateway.test/**', route => route.abort());
