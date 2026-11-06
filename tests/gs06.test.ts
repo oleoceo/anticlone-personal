@@ -129,6 +129,15 @@ test('GS06 integration: persisted policy, controlled LOW and original', {timeout
     await page.goto(clone+'/paid?utm_medium=cpc&gclid=abc&risk=LOW'); await page.waitForTimeout(500);
     assert.equal(page.url(),clone+'/paid?utm_medium=cpc&gclid=abc&risk=LOW');
     assert.equal((await decision()).action,'OBSERVE_ONLY');
+    // Browser-controlled headers, sessions and forged risk fields cannot create LOW.
+    for (const phase of ['entry-decision','cta-refresh']) {
+      for (const injected of [{level:'LOW'},{confidence:'high'},{provenance:'independent'}]) {
+        for (const session of ['0123456789abcdef0123456789abcdef','fedcba9876543210fedcba9876543210']) {
+          const response=await fetch('http://127.0.0.1:3000/'+phase,{method:'POST',headers:{origin:clone,referer:'https://forged.example/', 'user-agent':'forged-agent','x-forwarded-for':'192.0.2.1','content-type':'text/plain'},body:JSON.stringify({session,signals:{},...injected})});
+          assert.equal((await response.json() as {action:string}).action,'OBSERVE_ONLY');
+        }
+      }
+    }
     const assessment=await db.query("SELECT level,source,confidence FROM risk_assessment_days WHERE project_id=$1 AND host='localhost' AND level='UNCERTAIN'",[project]);
     assert.deepEqual(assessment.rows,[{level:'UNCERTAIN',source:'server_default',confidence:'insufficient'}]);
     await saveDraft(db,project,{enabled:false,approved_destination:original+'/approved',stealth:true,allocation:{PAID_ATTRIBUTED:100,ORGANIC:100,REFERRAL:100,DIRECT_UNKNOWN:100}}); await activatePolicy(db,project);

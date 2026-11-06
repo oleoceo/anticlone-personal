@@ -31,7 +31,7 @@ test('investigation isolates projects, preserves first receipt and marks claims 
     assert.equal(rows[0].assessments[0].evidence_reliability,'uncorroborated');
     const signal={source:'browser' as const,reliability:'uncorroborated' as const,trafficClass:'DIRECT_UNKNOWN',kind:'none' as const};
     await recordRisk(db,'a','copy.test',assessObservation(signal,false),signal);
-    const v3=(await investigation(db,'a'))[0].assessments.find((item:{version:string})=>item.version==='conservative-risk-v3');
+    const v3=(await investigation(db,'a'))[0].assessments.find((item:{version:string})=>item.version==='conservative-risk-v4');
     assert.equal(v3.reconstructed_at_decision.sources[0].type,'no_attribution');
     assert.equal(v3.reconstructed_at_decision.sources[1].type,'gateway_receipt');
     assert.equal((await investigation(db,'b'))[0].assessments.length,0);

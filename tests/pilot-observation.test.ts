@@ -75,7 +75,7 @@ test('pilot browser: multiple exact origins, untrusted copy, uncertain decisions
     }
     const risks = await db.query('SELECT level,source,evaluator_version,evidence_kind,evidence_provenance,evidence_reliability FROM risk_assessment_days');
     assert.equal(risks.rowCount,4);
-    assert.ok(risks.rows.every(row => row.level==='UNCERTAIN' && row.source==='server_default' && row.evaluator_version==='conservative-risk-v3'));
+    assert.ok(risks.rows.every(row => row.level==='UNCERTAIN' && row.source==='server_default' && row.evaluator_version==='conservative-risk-v4'));
     assert.ok(risks.rows.every(row => row.evidence_kind==='paid_utm' && row.evidence_provenance==='browser' && row.evidence_reliability==='uncorroborated'));
     const page = await browser.newPage();
     await page.route('https://gateway.test/**', route => route.abort());

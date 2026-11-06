@@ -4,7 +4,7 @@ import type { Pool } from 'pg';
 // Operator likelihood is not identity; browser claims do not establish a class.
 export type RiskAssessment = {
   level: 'HIGH' | 'LOW' | 'UNCERTAIN';
-  version: 'conservative-risk-v2' | 'conservative-risk-v3';
+  version: 'conservative-risk-v2' | 'conservative-risk-v3' | 'conservative-risk-v4';
   source: 'server_default' | 'lab_configuration';
   reason: 'insufficient_evidence' | 'controlled_fixture';
   confidence: 'insufficient' | 'test_only';
@@ -16,7 +16,7 @@ export function evaluateRisk(controlledFixture: boolean): RiskAssessment {
 }
 // This gate grants eligibility only; each action still validates its own policy.
 export function stealthEligible(assessment: RiskAssessment | undefined, pilot: boolean): boolean {
-  return !pilot && assessment?.level === 'LOW' && (assessment.version === 'conservative-risk-v2' || assessment.version === 'conservative-risk-v3') && assessment.source === 'lab_configuration' && assessment.reason === 'controlled_fixture' && assessment.confidence === 'test_only';
+  return !pilot && assessment?.level === 'LOW' && (assessment.version === 'conservative-risk-v2' || assessment.version === 'conservative-risk-v3' || assessment.version === 'conservative-risk-v4') && assessment.source === 'lab_configuration' && assessment.reason === 'controlled_fixture' && assessment.confidence === 'test_only';
 }
 // Browser-supplied observations are uncorroborated. They are deliberately not
 // inputs to the classification; in particular paid attribution is not identity.
@@ -26,20 +26,21 @@ export type StructuredEvidence = {
   provenance: 'browser' | 'gateway'; reliability: 'uncorroborated' | 'observed' | 'unknown';
   validity: 'current' | 'stale' | 'unknown';
 };
-export type StructuredAssessment = RiskAssessment & { sources: StructuredEvidence[]; limitations: string[] };
+export type EvidenceLimitation = 'INDEPENDENT_EVIDENCE_NOT_AVAILABLE' | 'PROVENANCE_NOT_VERIFIABLE' | 'EVIDENCE_EXPIRED_OR_UNKNOWN' | 'COLLECTION_GAP' | 'CONTRADICTORY_EVIDENCE' | 'NO_EVIDENCE';
+export type StructuredAssessment = RiskAssessment & { sources: StructuredEvidence[]; limitations: EvidenceLimitation[] };
 // Receipt corroborates only that a request arrived, never the browser's claims.
 // No available source establishes independent session-bound operator evidence.
 export function assessEvidence(evidence: readonly StructuredEvidence[], controlledFixture: boolean): StructuredAssessment {
   const sources = evidence.map(item => ({...item}));
-  const limitations = ['Browser claims are manipulable; endpoints do not establish independence.',
-    'Gateway receipt does not verify the claimed host or identify a visitor.',
-    'No independent session-bound operator evidence is available.'];
-  if (sources.length === 0) limitations.push('No evidence was received.');
-  if (sources.some(item => item.validity !== 'current')) limitations.push('Some evidence is stale or has unknown validity.');
-  if (sources.some(item => item.type === 'collection_gap')) limitations.push('Collection may be incomplete.');
-  if (sources.some(item => item.type === 'contradiction')) limitations.push('Evidence is contradictory.');
+  // Evaluator inferences never assert independent verification.
+  const limitations: EvidenceLimitation[] = ['INDEPENDENT_EVIDENCE_NOT_AVAILABLE'];
+  if (sources.some(item => item.provenance === 'browser' || item.reliability !== 'observed')) limitations.push('PROVENANCE_NOT_VERIFIABLE');
+  if (sources.length === 0) limitations.push('NO_EVIDENCE');
+  if (sources.some(item => item.validity !== 'current')) limitations.push('EVIDENCE_EXPIRED_OR_UNKNOWN');
+  if (sources.some(item => item.type === 'collection_gap')) limitations.push('COLLECTION_GAP');
+  if (sources.some(item => item.type === 'contradiction')) limitations.push('CONTRADICTORY_EVIDENCE');
   const fixture = controlledFixture && sources.some(item => item.type === 'gateway_receipt' && item.provenance === 'gateway' && item.reliability === 'observed' && item.validity === 'current') && !sources.some(item => item.validity !== 'current' || item.type === 'collection_gap' || item.type === 'contradiction');
-  return {...evaluateRisk(fixture), version:'conservative-risk-v3', sources, limitations};
+  return {...evaluateRisk(fixture), version:'conservative-risk-v4', sources, limitations};
 }
 export function assessObservation(evidence: RiskEvidence, controlledFixture: boolean): StructuredAssessment {
   if (evidence.source !== 'browser' || evidence.reliability !== 'uncorroborated') throw Error('unsupported evidence');
