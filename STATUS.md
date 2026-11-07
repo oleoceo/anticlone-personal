@@ -1,4 +1,7 @@
 # STATUS — AntiClone Personal
+- **Frente A / F26:** SMTP autorizado por ambiente privado e TLS obrigatório, configuração exata no painel e histórico aditivo 033; consulta por incidente sem credenciais.
+- PostgreSQL/Chromium/SMTP TLS local: teste novo 2/2 passou, incluindo original, cópia, dedup, falha/retry/reinício, autenticação, isolamento, STARTTLS e prazo total de 10s; gates finais e revisão independente no PR.
+- Aceitação de transporte não comprova entrega externa; saúde/CTA continuam em SMTP laboratorial. Nenhum provedor real configurado; sem merge/deploy/ativação operacional.
 - **F13/GS05 PARCIAL:** avaliador v4 conserva motivo agregado e historico anterior; testes PostgreSQL/gateway/Chromium de triagem, DNS e sinais manipulaveis; gates finais no PR; fonte independente vinculada a visita ausente. F11/GS12 PARCIAL, F12/GS12 PARCIAL, F32/GS12 PARCIAL, F43/GS19 PARCIAL, F44 PARCIAL, F08 BLOCKED, NOT_VERIFIED e OBSERVE_ONLY preservados.
 - **F12/GS12 em andamento:** triagem manual auditada e consulta no painel; migration 032 depende de 031. Alertas preservados, observações não reabrem incidente. Testes, revisão e CI do SHA final devem constar no PR; GS12 permanece PARCIAL. F13, F32/GS12, F43/GS19 e F44 PARCIAIS; F08 BLOCKED, NOT_VERIFIED e OBSERVE_ONLY preservados.
 - **F11/GS12 em andamento:** timeline opcional 031 com eventos prospectivos, limite e retencao; revisao independente, testes de fronteira e CI HTTPS final pendentes. F13, F32/GS12, F43/GS19 e F44 PARCIAIS; F08 BLOCKED, NOT_VERIFIED e OBSERVE_ONLY preservados.
