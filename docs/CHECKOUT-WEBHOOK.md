@@ -37,6 +37,8 @@ existente. Agrupa vendas reportadas por moeda, sem somar moedas distintas. A
 assinatura autentica o remetente configurado; a atribuição à proteção permanece
 `UNVERIFIED`. Receita recuperada, estimativa, cliques e handoffs indisponíveis
 são `null`, nunca zeros fabricados. Nenhuma venda externa real foi validada.
+Trocar o projeto no painel invalida a consulta anterior e limpa seus resultados;
+respostas ou erros tardios não substituem o resultado do projeto selecionado.
 
 Teste focado: `npm run build` e `node --test dist/tests/checkout-webhook.test.js`
 com `TEST_DATABASE_URL` de laboratório. Cobre PostgreSQL real, concorrência,

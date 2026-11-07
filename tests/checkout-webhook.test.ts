@@ -88,7 +88,38 @@ test('GS14 authenticated generic checkout persists exactly one sale across retri
     await page.locator('#checkout-sales').getByText('BRL: 1 venda(s) reportada(s), 1999 unidades menores da moeda. Não é receita recuperada.',{exact:true}).waitFor();
     await page.getByLabel('Projeto do checkout').fill('missing');
     await page.getByRole('button',{name:'Consultar vendas reportadas',exact:true}).click();
-    await page.getByText('Nenhuma venda reportada neste projeto.',{exact:true}).waitFor();
+    await page.getByText('Nenhuma venda reportada no projeto missing.',{exact:true}).waitFor();
+    assert.equal(await page.locator('#checkout-sales').textContent(),'');
+    // Preserve the real authenticated HTTP response, delaying only its Promise
+    // resolution so a completed request for another project can overtake it.
+    await page.evaluate(()=>{
+      const state=window as typeof window & {checkoutRaceStarted?:boolean;checkoutRaceCompleted?:boolean;checkoutRaceRelease?:()=>void};
+      const originalFetch=window.fetch.bind(window);
+      let release:()=>void=()=>{};
+      const held=new Promise<void>(resolve=>{release=resolve;});
+      state.checkoutRaceRelease=release;
+      window.fetch=async(input,init)=>{
+        const response=await originalFetch(input,init);
+        if(typeof input==='string' && input.endsWith('/checkout-metrics') && JSON.parse(String(init?.body??'{}')).project==='one') {
+          if(response.status!==200) throw Error('expected real authenticated checkout response');
+          state.checkoutRaceStarted=true;
+          await held;
+          const json=response.json.bind(response);
+          response.json=async()=>{const result=await json();setTimeout(()=>{state.checkoutRaceCompleted=true;window.fetch=originalFetch;},0);return result;};
+        }
+        return response;
+      };
+    });
+    await page.getByLabel('Projeto do checkout').fill('one');
+    await page.getByRole('button',{name:'Consultar vendas reportadas',exact:true}).click();
+    await page.waitForFunction(()=>!!(window as typeof window & {checkoutRaceStarted?:boolean}).checkoutRaceStarted);
+    await page.getByLabel('Projeto do checkout').fill('missing');
+    assert.equal(await page.locator('#checkout-sales').textContent(),'');
+    await page.getByRole('button',{name:'Consultar vendas reportadas',exact:true}).click();
+    await page.getByText('Nenhuma venda reportada no projeto missing.',{exact:true}).waitFor();
+    await page.evaluate(()=>(window as typeof window & {checkoutRaceRelease:()=>void}).checkoutRaceRelease());
+    await page.waitForFunction(()=>!!(window as typeof window & {checkoutRaceCompleted?:boolean}).checkoutRaceCompleted);
+    assert.equal(await page.locator('#checkout-status').textContent(),'Nenhuma venda reportada no projeto missing.');
     assert.equal(await page.locator('#checkout-sales').textContent(),'');
     const csrfDenied=await page.evaluate(async()=>{const result=await fetch('/admin/ui/checkout-metrics',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({project:'one'})});return result.status;});
     assert.equal(csrfDenied,403);
