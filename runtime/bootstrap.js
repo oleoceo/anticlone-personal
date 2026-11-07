@@ -38,10 +38,12 @@
         const original = new URL(decision.original);
         if (!['http:', 'https:'].includes(original.protocol) || original.origin !== decision.original || original.origin === location.origin || !['localhost','127.0.0.1'].includes(original.hostname) || !['localhost','127.0.0.1'].includes(location.hostname)) return;
         const mappings = new Map();
+        const external = decision.externalDestinations ?? [];
+        if (!Array.isArray(external) || external.length > 100 || external.some(url => typeof url !== 'string' || url.length > 2048)) return;
         for (const row of decision.mappings) {
           if (!row || typeof row.marker !== 'string' || !/^[a-zA-Z0-9_-]{8,64}$/.test(row.marker) || mappings.has(row.marker) || !['a','form'].includes(row.kind) || typeof row.destination !== 'string') return;
           const target = new URL(row.destination);
-          if (target.origin !== original.origin || target.username || target.password || target.hash || !['http:', 'https:'].includes(target.protocol)) return;
+          if ((target.origin !== original.origin && (target.protocol !== 'https:' || !external.includes(target.href))) || target.username || target.password || target.hash || !['http:', 'https:'].includes(target.protocol)) return;
           mappings.set(row.marker, {kind:row.kind, destination:target.href});
         }
         if (!validContext() || Date.now() < startedWall || Date.now() - startedWall > 5000 || performance.now() - startedMono > 5000) return;

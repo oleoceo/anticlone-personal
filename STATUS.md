@@ -1,4 +1,7 @@
 # STATUS — AntiClone Personal
+- **Frente B / F17/F20/F21/F23/F24/F43 PARCIAIS:** painel existente publica políticas independentes por ação/classe, destinos aprovados por oferta e mapeamento/revisão de CTA; página publica snapshot exato atomicamente. Destinos externos exigem HTTPS e allowlist privada de URLs exatas; LOW continua apenas em laboratório.
+- **Prova Frente B:** `tests/protection-admin-ui.test.ts` passou com PostgreSQL 001–032, Chromium, original preservado, 4 classes e 0/50/100 nas duas ações, ambas seleções em 50%, duas ofertas, checkout TLS local, drift isolado/reaprovação auditada, CSRF e isolamento. Lint/typecheck/build passaram; regressão completa, revisão independente e CI do SHA final devem ser conferidas no PR encadeado antes de pronto. Seletor legado de inventário agora usa seu formulário explícito, sem ambiguidade com o painel de proteção. Sem acesso a checkout real, merge ou deploy.
+
 - **Frente A / F26:** SMTP autorizado por ambiente privado e TLS obrigatório, configuração exata no painel e histórico aditivo 033; consulta por incidente sem credenciais.
 - PostgreSQL/Chromium/SMTP TLS local: teste novo 2/2 passou, incluindo original, cópia, dedup, falha/retry/reinício, autenticação, isolamento, STARTTLS e prazo total de 10s; gates finais e revisão independente no PR.
 - Aceitação de transporte não comprova entrega externa; saúde/CTA continuam em SMTP laboratorial. Nenhum provedor real configurado; sem merge/deploy/ativação operacional.
