@@ -2,7 +2,9 @@
 
 O comando inclui todo o banco (tabelas, funções, triggers, índices, constraints,
 sequências e estado TOTP persistido), sem lista fixa de migrations. O ensaio usa
-001–032 e dados sintéticos em dois projetos. Não aplica migrations durante restore.
+001–032, 033 e 035 e dados sintéticos em dois projetos, incluindo tentativas de
+notificação e recibos/vendas reportadas sem atribuição verificada. Não aplica
+migrations durante restore.
 
 Requisitos: Node, dependências instaladas, build atual, `pg_dump` e `pg_restore`
 no PATH; cliente PostgreSQL compatível com a versão do servidor. A conta de backup

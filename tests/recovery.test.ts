@@ -15,6 +15,7 @@ import { backup, restore, postgresTool, type Tool } from '../apps/recovery.js';
 import { createAdminServer } from '../apps/admin-auth.js';
 import { classifyIncident } from '../apps/incident-triage.js';
 import { observe } from '../apps/detection.js';
+import { recordCheckout } from '../apps/checkout-webhook.js';
 
 // Optional local Windows adapter: executes the same PostgreSQL binaries in the
 // existing isolated lab container. CI exercises the default native tool runner.
@@ -68,6 +69,8 @@ test('GS16: real backup, isolated restore, complete data integrity and restarted
     await source.query("UPDATE notification_settings SET version=1,provider='smtp',host='smtp.test',port=587,tls_mode='starttls',sender='owner@example.test',recipient='owner@example.test'");
     await source.query("INSERT INTO notification_settings_audit(version,action,changed_fields) VALUES(1,'save',ARRAY['provider'])");
     await source.query('UPDATE alert_outbox SET attempts=1,next_attempt=now()+interval \'1 hour\'');
+    await source.query("INSERT INTO clone_delivery_attempts(outbox_id,attempt,transport,outcome,finished_at) SELECT id,1,'SMTP_LOCAL','FAILED',clock_timestamp() FROM alert_outbox");
+    await recordCheckout(source,'recovery',Buffer.from(JSON.stringify({event_id:'recovery_event',sale_id:'recovery_sale',amount_minor:1999,currency:'BRL',occurred_at:'2026-11-06T00:00:00.000Z'})));
     admin=await startAdmin(source);
     assert.equal((await login(address(admin))).status,200);
     admin.close();await once(admin,'close');admin=undefined;
@@ -75,6 +78,7 @@ test('GS16: real backup, isolated restore, complete data integrity and restarted
     const manifest=await backup(sourceUrl,directory,tool);
     assert.ok(manifest.tables.some(table=>table.name==='incident_status_audit'&&table.rows===1));
     assert.ok(manifest.tables.some(table=>table.name==='admin_totp_replay'&&table.rows===1));
+    for(const name of ['clone_delivery_attempts','checkout_sales','checkout_receipts']) assert.ok(manifest.tables.some(table=>table.name===name&&table.rows===1));
     await assert.rejects(backup(sourceUrl,directory,tool));
     await assert.rejects(restore(sourceUrl,directory,sourceName,tool),/isolated/);
     await assert.rejects(restore(targetUrl,directory,'wrong-confirmation',tool),/isolated/);
@@ -92,6 +96,10 @@ test('GS16: real backup, isolated restore, complete data integrity and restarted
       assert.equal((await restored.query('SELECT count(*)::int n FROM projects')).rows[0].n,2);
       assert.equal((await restored.query('SELECT status FROM incidents')).rows[0].status,'investigating');
       assert.equal((await restored.query('SELECT attempts FROM alert_outbox')).rows[0].attempts,1);
+      assert.deepEqual((await restored.query('SELECT attempt,transport,outcome FROM clone_delivery_attempts')).rows,[{attempt:1,transport:'SMTP_LOCAL',outcome:'FAILED'}]);
+      assert.deepEqual((await restored.query('SELECT project_id,sale_id,amount_minor,currency,attribution FROM checkout_sales')).rows,[{project_id:'recovery',sale_id:'recovery_sale',amount_minor:'1999',currency:'BRL',attribution:'UNVERIFIED'}]);
+      assert.equal((await restored.query('SELECT event_id FROM checkout_receipts')).rows[0].event_id,'recovery_event');
+      assert.equal((await recordCheckout(restored,'recovery',Buffer.from(JSON.stringify({event_id:'recovery_event',sale_id:'recovery_sale',amount_minor:1999,currency:'BRL',occurred_at:'2026-11-06T00:00:00.000Z'})))).duplicate,true);
       // Identity sequence must advance beyond the restored incident ID.
       const next=await restored.query("INSERT INTO incidents(project_id,host) VALUES('second','copy.test') RETURNING id");
       assert.ok(BigInt(next.rows[0].id)>BigInt(incident));
