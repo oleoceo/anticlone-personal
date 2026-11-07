@@ -40,7 +40,7 @@ test('CTA selection is authenticated, capture-scoped and never activates mitigat
     await page.getByLabel('Senha administrativa').fill('password');
     await page.getByLabel('Código TOTP').fill(new TOTP({secret:Secret.fromBase32(secret)}).generate({timestamp:clock}));
     await page.getByRole('button',{name:'Entrar'}).click(); await page.getByText('Configuração incompleta').waitFor();
-    await page.getByLabel('Projeto').fill('p'); await page.getByLabel('Superfície').fill('landing');
+    await page.locator('#cta-query [name=project]').fill('p'); await page.locator('#cta-query [name=surface]').fill('landing');
     await page.getByRole('button',{name:'Consultar CTAs'}).click();
     await page.getByText('CTA observado, mas ainda sem identidade suficiente para substituição.',{exact:false}).waitFor();
     assert.equal(await page.locator('#cta-list input').count(),4);
@@ -101,7 +101,7 @@ test('CTA selection is authenticated, capture-scoped and never activates mitigat
       await blocker.query('COMMIT'); await importing; await selecting;
     } finally {blocker.release();}
     await assert.rejects(selectObservation(db,race),SelectionConflict);
-    await page.goto(base+'/admin/ui/'); await page.getByLabel('Projeto').fill('p'); await page.getByLabel('Superfície').fill('landing'); await page.getByRole('button',{name:'Consultar CTAs'}).click();
+    await page.goto(base+'/admin/ui/'); await page.locator('#cta-query [name=project]').fill('p'); await page.locator('#cta-query [name=surface]').fill('landing'); await page.getByRole('button',{name:'Consultar CTAs'}).click();
     await page.getByText('Seleções pendentes de capturas anteriores, desatualizadas e sem ativação: 1',{exact:false}).waitFor();
     assert.match(await page.locator('#cta-list').innerText(),/known002.*não protegida contra drift de preço/);
     const cookie=(await page.context().cookies(base+'/admin/ui/')).find(c=>c.name==='admin_session'); assert.ok(cookie);
