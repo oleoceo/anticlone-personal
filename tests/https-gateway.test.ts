@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHmac } from 'node:crypto';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -47,8 +48,10 @@ test('HTTPS Nginx + PostgreSQL + Chromium: install, spoofing, limits, outage and
   const db = new Pool({connectionString:process.env.TEST_DATABASE_URL,options});
   for (const file of ['001_initial','002_alerts','003_projects','004_observation_sources','005_canaries','008_traffic_observations','009_risk_assessments','024_risk_evidence','018_notification_budget','019_alert_outbox_expiry','025_installation_signals']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
   await db.query("INSERT INTO projects VALUES('https','HTTPS','https://owner.test')");
+  await db.query(await readFile('infra/035_checkout_receipts.sql','utf8'));
+  const checkoutSecret='cd'.repeat(32);
   await db.query("INSERT INTO installations(project_id,id,origin) VALUES('https',$1,'https://owner.test')",[crypto.randomUUID()]);
-  await writeFile(gatewayEnv,Object.entries({PGOPTIONS:options,DATABASE_URL:process.env.TEST_DATABASE_URL,PROJECT_ID:'https',SMTP_PORT:'1',PORT:'3000',GATEWAY_MODE:'PILOT_OBSERVE',GATEWAY_TRANSPORT:'HTTPS_PROXY',PUBLIC_GATEWAY_HOST:'gateway.test',PILOT_ORIGINS:'["https://owner.test"]'}).map(([key,value])=>`${key}=${value}`).join('\n'),{mode:0o600});
+  await writeFile(gatewayEnv,Object.entries({PGOPTIONS:options,DATABASE_URL:process.env.TEST_DATABASE_URL,PROJECT_ID:'https',SMTP_PORT:'1',PORT:'3000',GATEWAY_MODE:'PILOT_OBSERVE',GATEWAY_TRANSPORT:'HTTPS_PROXY',PUBLIC_GATEWAY_HOST:'gateway.test',PILOT_ORIGINS:'["https://owner.test"]',CHECKOUT_WEBHOOK_SECRET:checkoutSecret}).map(([key,value])=>`${key}=${value}`).join('\n'),{mode:0o600});
   execFileSync('openssl',['req','-x509','-newkey','rsa:2048','-nodes','-keyout',join(dir,'privkey.pem'),'-out',join(dir,'fullchain.pem'),'-days','1','-subj','/CN=gateway.test','-addext','subjectAltName=DNS:gateway.test'],{stdio:'ignore'});
   execFileSync(process.execPath,['dist/apps/https-config.js',join(dir,'nginx.conf')],{env:{...process.env,PUBLIC_GATEWAY_HOST:'gateway.test'},stdio:'pipe'});
   assert.equal(await readFile(join(dir,'nginx.conf'),'utf8'),(await readFile('infra/https/nginx.conf','utf8')).replaceAll('PUBLIC_GATEWAY_HOST','gateway.test'));
@@ -82,6 +85,12 @@ test('HTTPS Nginx + PostgreSQL + Chromium: install, spoofing, limits, outage and
     assert.equal((await api.get('https://gateway.test/healthz',{headers:{'X-Forwarded-For':'garbage','X-Forwarded-Proto':'http','Forwarded':'for=evil','X-Forwarded-Host':'evil'}})).status(),200);
     assert.equal((await api.get('https://gateway.test/runtime.js',{headers:{Host:'evil.test'}})).status(),421);
     assert.equal((await api.get('https://gateway.test/admin')).status(),404);
+    const checkoutBody=JSON.stringify({event_id:'https_event',sale_id:'https_sale',amount_minor:100,currency:'BRL',occurred_at:'2026-11-06T00:00:00.000Z'});
+    const checkoutTimestamp=String(Math.floor(Date.now()/1000));
+    const checkoutHeaders={'content-type':'application/json','x-checkout-timestamp':checkoutTimestamp,'x-checkout-signature':createHmac('sha256',Buffer.from(checkoutSecret,'hex')).update(checkoutTimestamp+'.'+checkoutBody).digest('hex')};
+    assert.equal((await api.post('https://gateway.test/checkout-webhook',{headers:{...checkoutHeaders,'x-checkout-signature':'00'.repeat(32)},data:checkoutBody})).status(),401);
+    for(let attempt=0;attempt<2;attempt++) assert.equal((await api.post('https://gateway.test/checkout-webhook',{headers:checkoutHeaders,data:checkoutBody})).status(),200);
+    assert.equal((await db.query("SELECT count(*)::int n FROM checkout_sales WHERE project_id='https'")).rows[0].n,1);
     const oversized = await api.post('https://gateway.test/observe',{headers:{origin:'https://copy.test','content-type':'text/plain'},data:'x'.repeat(2049)});
     assert.equal(oversized.status(),413);
     const page = await context.newPage();

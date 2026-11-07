@@ -35,6 +35,10 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
+      - name: Verify real PostgreSQL recovery tools
+        run: |
+          pg_dump --version
+          pg_restore --version
       - run: npx playwright install --with-deps chromium
       - run: docker pull nginx:1.28-alpine
       - run: echo '127.0.0.1 gateway.test' | sudo tee -a /etc/hosts

@@ -26,11 +26,18 @@ Todos usam **ambientes, cópias simuladas e domínios autorizados** sob controle
 | GS20 | Em cópia autorizada, Core interrompido enquanto fallback ou canário ainda envia sinal produz registro de possível degradação com fonte e horário; ausência de todos os sinais permanece desconhecida. |
 | GS21 | Com alerta de inatividade habilitado, ausência de sinais além do prazo configurado e falha operacional geram alertas rastreáveis, com deduplicação, retry e histórico; retomada e nova falha são registradas. |
 
+GS16, recorte PostgreSQL: `tests/recovery.test.ts` usa migrations 001–032 (e futuras presentes), dados sintéticos de dois projetos, snapshot pg_dump e restore transacional em banco isolado vazio. Confere SHA-256 do archive, conteúdo de todas as tabelas, auditoria, políticas, configuração/outbox, sequência, replay TOTP após reinício, consulta admin autenticada, Chromium e dois reinícios de cada processo gateway PILOT_OBSERVE/admin. Recusa origem, confirmação incorreta, destino com objetos/conexões e corrupção. Offsite, arquivos operacionais e rollback VPS continuam pendentes; operação em `POSTGRES-RECOVERY.md`; CI e revisão do SHA final no PR. Não conclui GS16 integral.
+
 É proibido substituir teste real por mock no lugar de teste de integração/E2E exigido. Mocks são permitidos somente em camadas unitárias apropriadas.
 
 GS01/GS03/GS04/GS06/GS08/GS11/GS16/GS19, recorte laboratorial da Frente B: `tests/protection-admin-ui.test.ts` integra painel autenticado, PostgreSQL 001–032 e Chromium; 0/50/100 e quatro classes declaradas para cada ação, percentuais independentes, duas ofertas, checkout HTTPS sintético local com hostname separado, clique sem rede de decisão, drift isolado/reaprovação auditada, projeto separado e rejeição CSRF. As visitas PAGE_REDIRECT usam relógio Chromium controlado para selecionar o bucket; o prazo/fail-open real e D08/D09 continuam exercitados em GS06/refresh existentes. Destinos externos exigem aprovação exata por ambiente. Não comprova operação em domínios reais, venda ou classificação operacional.
 
 GS01/GS02/GS13/GS16, transporte configurável F26: `tests/smtp-provider.test.ts` usa PostgreSQL, Chromium e SMTP local com TLS implícito e STARTTLS. Demonstra original preservado, cópia observada, incidente/mensagem únicos no cenário, falha de autenticação persistida, retry após reinício, consulta autenticada e isolamento de projetos. Rejeita certificado não confiável, destinatário ambíguo e configuração divergente; SMTP lento termina no prazo total de 10s. Sem conta externa ou comprovação de entrega na caixa postal. Configuração e limites em `CLONE-SMTP.md`; revisão e CI no SHA final do PR.
+GS14 parcial: `tests/checkout-webhook.test.ts` usa PostgreSQL real, HTTP e Chromium
+para autenticação HMAC, reenvios concorrentes/reinício, conflito de evento/venda,
+isolamento de projetos e consulta administrativa com CSRF. Eventos são sintéticos;
+receita atribuída, estimativa e ações ausentes não são inventadas. A CI HTTPS
+também exercita o contrato genérico através do Nginx. Adaptador externo pendente.
 
 GS01/GS11/GS16, recorte de preparacao HTTPS: `tests/https-gateway.test.ts` testa fronteira de headers e orcamento limitado; com HTTPS_GATE_TEST=1 na CI Linux, usa Nginx TLS real, PostgreSQL e Chromium para carregar runtime, persistir incidente de copia controlada, preservar OBSERVE_ONLY/clique nativo, rejeitar spoofing de autoridade, corpo excessivo e flood, e manter navegacao durante falha upstream. Certificado sintetico local nao comprova TLS/DNS da VPS. Imagem Docker e construida na CI; sem deploy. Runbook em `HTTPS-OBSERVE-RUNBOOK.md`. Recorte parcial: nao conclui replay, SSRF, diagnostico universal, backup/restore ou GS01/GS11/GS16 integrais. Gates do SHA final no PR.
 
