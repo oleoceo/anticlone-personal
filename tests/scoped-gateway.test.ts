@@ -118,6 +118,22 @@ test('scoped browser observations isolate projects on one origin and preserve co
     }
     const ineligible=await fetch(`http://127.0.0.1:3000/i/${entryOne}/entry-decision`,{method:'POST',headers:{origin,'content-type':'text/plain'},body:JSON.stringify({pathname:'/entry-one',session:'a'.repeat(32),signals:{}})});
     assert.deepEqual(await ineligible.json(),{action:'OBSERVE_ONLY'});
+    const trafficCases=[{}, {medium:'cpc'}, {referrerHost:'google.com'}, {referrerHost:'publisher.test'}];
+    const entryRequest=async(id:string,signals:object,session:string)=>await(await fetch(`http://127.0.0.1:3000/i/${id}/entry-decision`,{method:'POST',headers:{origin:`http://localhost:${address.port}`,'content-type':'text/plain'},body:JSON.stringify({pathname:id===entryOne?'/entry-one':'/entry-two',signals,session})})).json() as {action:string;version?:number;observationReceipt?:string};
+    for(const signals of trafficCases)assert.equal((await entryRequest(entryTwo,signals,'b'.repeat(32))).action,'PAGE_REDIRECT');
+    for(const [version,percentage] of [[2,0],[3,50]]){
+      const configured={PAID_ATTRIBUTED:percentage,ORGANIC:percentage,REFERRAL:percentage,DIRECT_UNKNOWN:percentage};
+      await db.query("INSERT INTO protection_policy_versions(project_id,version,enabled,approved_destination,stealth,allocation) VALUES('health',$1,true,$2,true,$3)",[version,shared,configured]);
+      const generation=(await db.query('SELECT url_generation,config_generation FROM protected_pages WHERE id=$1',[pageOne])).rows[0];
+      await managePages(db,{action:'approve',project:'health',page:pageOne,generation:generation.url_generation,configGeneration:generation.config_generation,entryVersion:version,ctaVersions:[]});
+      for(const signals of trafficCases){let selected=0;for(let index=0;index<20;index++){
+        const session=index.toString(16).padStart(32,'0'),first=await entryRequest(entryOne,signals,session),second=await entryRequest(entryOne,signals,session);assert.equal(second.action,first.action);
+        if(first.action==='PAGE_REDIRECT'){selected++;assert.equal(first.version,version);}else{assert.equal(first.action,'OBSERVE_ONLY');assert.equal(first.observationReceipt,undefined);}
+      }if(percentage===0)assert.equal(selected,0);else assert.ok(selected>0&&selected<20);}
+      assert.equal((await entryRequest(entryTwo,{},'b'.repeat(32))).version,1);
+    }
+    assert.deepEqual((await db.query("SELECT allocation FROM protection_policy_versions WHERE project_id='health' AND version=1")).rows[0].allocation,allocation);
+
 
     const response=page.waitForResponse(r=>r.url().includes('/observe/fallback'));
     const browserDecision=page.waitForResponse(r=>r.url().endsWith('/entry-decision'));
