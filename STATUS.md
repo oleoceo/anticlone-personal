@@ -101,3 +101,12 @@ PR #52 - correcao P2 de isolamento da timeline (F11 permanece PARCIAL):
 - tests/timeline-failure.test.ts forca AFTER INSERT e falhas principais: incidente, observacoes, alerta, auditoria e DNS preservados; recuperacao e rollback integral verificados.
 - Testes focados PostgreSQL: 2/2; limites, retencao e isolamento cobertos pela suite investigation-timeline existente.
 - Regressao completa, revisao detached e CI HTTPS do SHA corrigido: evidencias finais no PR; sem merge, auto-merge ou deploy.
+
+PR #59 - contrato multiprojeto (laboratorio):
+- Manutencao/retencao/saude/alertas/DNS por projeto, falhas e backoff isolados; gateway legado e scoped coexistem.
+- Checkout roteado por configuracao privada e HMAC distinto (inclusive chaves efetivamente equivalentes recusadas), idempotencia preservada.
+- PAGE_REDIRECT ativo pelo vinculo Page ID; duas LPs independentes, versoes historicas e aprovacao por geracao preservadas.
+- Local: regressao 88 PASS/0 FAIL/1 HTTPS reservado a CI; 6/6 focados PostgreSQL/Chromium, incluindo GS16 com paginas/aprovacoes/sinais e regressao PR58.
+- Revisao independente /root/final_review e CI HTTPS do SHA final: parecer/resultados vinculados ao SHA na descricao do PR #59.
+- URLs duplas OBSERVE_ONLY; sinais agregados nao verificam nova URL: conferir script/requisicoes no navegador, remover antiga e reaprovar pelo painel.
+- Sem merge/deploy, mitigacao operacional ou ciclo pausa/arquivo/exclusao; transicao e limites em docs/MULTIPROJECT-TRANSITION.md.

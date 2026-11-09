@@ -78,11 +78,14 @@ export function projectCheckoutWebhooks(db: Pool, env: NodeJS.ProcessEnv) {
   const raw: unknown=JSON.parse(env.CHECKOUT_WEBHOOK_ROUTES ?? '[]');
   if (!Array.isArray(raw) || raw.length>100) throw Error('invalid checkout routes');
   const routes=new Set<string>(), secrets=new Set<string>();
+  // HMAC pads keys up to its 64-byte block size. Trailing zero bytes can make
+  // different hex strings authenticate identically; compare effective keys.
+  const effectiveKey=(secret:string)=>Buffer.from(secret,'hex').toString('hex').padEnd(128,'0');
   const handlers=raw.map((value:unknown)=>{
     if (!value || typeof value!=='object' || Array.isArray(value)) throw Error('invalid checkout route');
     const v=value as Record<string,unknown>;
-    if (Object.keys(v).sort().join(',')!=='project,route,secret' || typeof v.project!=='string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(v.project) || typeof v.route!=='string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(v.route) || typeof v.secret!=='string' || !/^[a-f0-9]{64,128}$/.test(v.secret) || routes.has(v.route) || secrets.has(v.secret) || v.secret===env.CHECKOUT_WEBHOOK_SECRET) throw Error('invalid checkout route');
-    routes.add(v.route); secrets.add(v.secret);
+    if (Object.keys(v).sort().join(',')!=='project,route,secret' || typeof v.project!=='string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(v.project) || typeof v.route!=='string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(v.route) || typeof v.secret!=='string' || !/^[a-f0-9]{64,128}$/.test(v.secret) || v.secret.length%2!==0 || routes.has(v.route) || secrets.has(effectiveKey(v.secret)) || (env.CHECKOUT_WEBHOOK_SECRET!==undefined && effectiveKey(v.secret)===effectiveKey(env.CHECKOUT_WEBHOOK_SECRET))) throw Error('invalid checkout route');
+    routes.add(v.route); secrets.add(effectiveKey(v.secret));
     return checkoutWebhook(db,v.project,{CHECKOUT_WEBHOOK_SECRET:v.secret},Date.now,'/checkout-webhook/'+v.route);
   });
   return (req:IncomingMessage,res:ServerResponse)=>handlers.some(handle=>handle(req,res));

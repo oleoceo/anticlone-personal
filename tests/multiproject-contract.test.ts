@@ -62,6 +62,9 @@ test('multiproject contract: independent entry pages, authenticated checkout and
     const secretA='ab'.repeat(32),secretB='cd'.repeat(32);
     const checkout=projectCheckoutWebhooks(db,{CHECKOUT_WEBHOOK_ROUTES:JSON.stringify([{project:'health',route:'sender-a',secret:secretA},{project:'finance',route:'sender-b',secret:secretB}])});
     assert.throws(()=>projectCheckoutWebhooks(db,{CHECKOUT_WEBHOOK_ROUTES:JSON.stringify([{project:'health',route:'a',secret:secretA},{project:'finance',route:'b',secret:secretA}])}));
+    assert.throws(()=>projectCheckoutWebhooks(db,{CHECKOUT_WEBHOOK_ROUTES:JSON.stringify([{project:'health',route:'a',secret:secretA},{project:'finance',route:'b',secret:secretA+'00'}])}),'zero-padded HMAC keys cannot cross projects');
+    assert.throws(()=>projectCheckoutWebhooks(db,{CHECKOUT_WEBHOOK_SECRET:secretA,CHECKOUT_WEBHOOK_ROUTES:JSON.stringify([{project:'finance',route:'b',secret:secretA+'00'}])}));
+    assert.throws(()=>projectCheckoutWebhooks(db,{CHECKOUT_WEBHOOK_ROUTES:JSON.stringify([{project:'health',route:'a',secret:secretA+'f'}])}));
     server=createServer((req,res)=>{if(!checkout(req,res)&&!gateway(req,res))res.writeHead(404).end();}).listen(0,'127.0.0.1');
     await once(server,'listening');
     const base='http://127.0.0.1:'+(server.address() as AddressInfo).port;
