@@ -1,3 +1,4 @@
+import { DeletedProjectConflict } from './admin-project-write.js';
 import { investigation } from './investigation.js';
 import { checkoutMetrics } from './checkout-webhook.js';
 import { classifyIncident, IncidentConflict } from './incident-triage.js';
@@ -51,7 +52,7 @@ export function createAdminServer(passwordRecord: string, totpSecret: string, db
           if(rejected) return;
           let body:unknown; try { body=JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { res.writeHead(400).end(); return; }
           const operation=req.url === '/admin/notification-settings' ? saveNotificationSettings(db,body) : setNotificationPreference(db,body);
-          void operation.then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error:unknown)=>res.writeHead(error instanceof Conflict ? 409 : error instanceof TypeError ? 400 : 503).end());
+          void operation.then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error:unknown)=>res.writeHead(error instanceof Conflict ? 409 : error instanceof DeletedProjectConflict ? 409 : error instanceof TypeError ? 400 : 503).end());
         }); return;
       }
       if (req.method === 'GET' && req.url === '/admin/session') {
@@ -76,7 +77,7 @@ export function createAdminServer(passwordRecord: string, totpSecret: string, db
           if (rejected) return;
           let body: Record<string, unknown>; try { body=JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { res.writeHead(400).end(); return; }
           if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).sort().join(',') !== 'enabled,inactivity_seconds,operational_enabled') { res.writeHead(400).end(); return; }
-          void configureHealth(db,healthPath[1],body.enabled as boolean,body.inactivity_seconds as number,body.operational_enabled as boolean).then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error:unknown)=>res.writeHead(error instanceof TypeError ? 400 : 503).end());
+          void configureHealth(db,healthPath[1],body.enabled as boolean,body.inactivity_seconds as number,body.operational_enabled as boolean).then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error:unknown)=>res.writeHead(error instanceof DeletedProjectConflict ? 409 : error instanceof TypeError ? 400 : 503).end());
         }); return;
       }
       const healthHistoryPath = /^\/admin\/projects\/([a-zA-Z0-9_-]{1,64})\/health\/history$/.exec(req.url ?? '');
@@ -86,7 +87,7 @@ export function createAdminServer(passwordRecord: string, totpSecret: string, db
       const installationPath = /^\/admin\/projects\/([a-zA-Z0-9_-]{1,64})\/installation(?:\/(disable))?$/.exec(req.url ?? '');
       if (installationPath && (req.method === 'GET' || req.method === 'POST')) {
         const operation = req.method === 'GET' ? installationDiagnostic(db,installationPath[1]) : installationPath[2] ? disableInstallation(db,installationPath[1]) : enableInstallation(db,installationPath[1]);
-        void operation.then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error:unknown)=>res.writeHead(error instanceof InstallationOriginConflict ? 409 : error instanceof TypeError ? 404 : 503).end()); return;
+        void operation.then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error:unknown)=>res.writeHead(error instanceof InstallationOriginConflict || error instanceof DeletedProjectConflict ? 409 : error instanceof TypeError ? 404 : 503).end()); return;
       }
       const investigationPath = /^\/admin\/projects\/([a-zA-Z0-9_-]{1,64})\/investigation$/.exec(req.url ?? '');
       if (req.method === 'GET' && investigationPath) {
@@ -101,7 +102,7 @@ export function createAdminServer(passwordRecord: string, totpSecret: string, db
           if(rejected) return;
           let body: unknown; try { body=JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { res.writeHead(400).end(); return; }
           if (!body || typeof body !== 'object' || Array.isArray(body) || 'project' in body) { res.writeHead(400).end(); return; }
-          void classifyIncident(db,{...body,project:triagePath[1]}).then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error:unknown)=>res.writeHead(error instanceof IncidentConflict ? 409 : error instanceof TypeError ? 400 : 503).end());
+          void classifyIncident(db,{...body,project:triagePath[1]}).then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error:unknown)=>res.writeHead(error instanceof IncidentConflict || error instanceof DeletedProjectConflict ? 409 : error instanceof TypeError ? 400 : 503).end());
         }); return;
       }
       const riskPath = /^\/admin\/projects\/([a-zA-Z0-9_-]{1,64})\/risk-assessments$/.exec(req.url ?? '');
@@ -145,7 +146,7 @@ export function createAdminServer(passwordRecord: string, totpSecret: string, db
           if (rejected) return;
           let body: unknown; try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { res.writeHead(400).end(); return; }
           const operation = ctaPath[2] === 'policy' ? publishCtaPolicy(db,ctaPath[1],body).then(version => ({version})) : ctaPath[2] === 'inventory' ? importInventory(db,ctaPath[1],body).then(() => ({})) : ctaPath[2] === 'destinations' ? approveDestination(db,ctaPath[1],body) : ctaPath[2] === 'review' ? reviewPoint(db,ctaPath[1],body).then(() => ({})) : ctaPath[2] === 'commercial' ? (!body || typeof body !== 'object' || Array.isArray(body) || 'project' in body ? Promise.reject(new TypeError('project is specified by path')) : approveCommercial(db,{...body,project:ctaPath[1]}).then(()=>({}))) : mapPoint(db,ctaPath[1],body).then(() => ({}));
-          void operation.then(result => res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error: Error & {code?: string}) => res.writeHead(error instanceof TypeError || !error.code ? 400 : 503).end());
+          void operation.then(result => res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error: Error & {code?: string}) => res.writeHead(error instanceof DeletedProjectConflict ? 409 : error instanceof TypeError || !error.code ? 400 : 503).end());
         }); return;
       }
       const policyPath = /^\/admin\/projects\/([a-zA-Z0-9_-]{1,64})\/policy\/(draft|publish|activate)$/.exec(req.url ?? '');
@@ -161,7 +162,7 @@ export function createAdminServer(passwordRecord: string, totpSecret: string, db
           const fields = body as Record<string, unknown>;
           if (policyPath[2] === 'publish' && Object.keys(fields).length || policyPath[2] === 'activate' && (Object.keys(fields).join(',') !== 'version' || typeof fields.version !== 'number')) { res.writeHead(400).end(); return; }
           const operation = policyPath[2] === 'draft' ? saveDraft(db,policyPath[1],body).then(() => ({})) : activatePolicy(db,policyPath[1],policyPath[2] === 'activate' ? fields.version as number : undefined).then(version => ({version}));
-          void operation.then(result => res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error: Error & {code?: string}) => res.writeHead(error.code ? 503 : 400).end());
+          void operation.then(result => res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error: Error & {code?: string}) => res.writeHead(error instanceof DeletedProjectConflict ? 409 : error.code ? 503 : 400).end());
         }); return;
       }
       if (req.method === 'POST' && req.url === '/admin/projects') {

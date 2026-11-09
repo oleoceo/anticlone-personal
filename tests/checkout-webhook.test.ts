@@ -34,6 +34,7 @@ test('GS14 authenticated generic checkout persists exactly one sale across retri
   };
   try {
     await db.query(await readFile('infra/003_projects.sql','utf8'));
+    await db.query("ALTER TABLE projects ADD COLUMN lifecycle_state text NOT NULL DEFAULT 'ACTIVE'");
     await db.query(await readFile('infra/035_checkout_receipts.sql','utf8'));
     await db.query("INSERT INTO projects VALUES('one','One','https://one.test'),('two','Two','https://two.test')");
     base=await start();
@@ -45,6 +46,10 @@ test('GS14 authenticated generic checkout persists exactly one sale across retri
     assert.equal((await send({...sale,occurred_at:'2026-02-30T00:00:00.000Z'})).status,400);
     assert.equal((await send({...sale,sale_id:'x'.repeat(3000)})).status,413);
     assert.equal((await db.query('SELECT count(*)::int n FROM checkout_sales')).rows[0].n,0);
+    await db.query("UPDATE projects SET lifecycle_state='PAUSED' WHERE id='one'");
+    assert.equal((await send()).status,503);
+    assert.equal((await db.query('SELECT count(*)::int n FROM checkout_receipts')).rows[0].n,0);
+    await db.query("UPDATE projects SET lifecycle_state='ACTIVE' WHERE id='one'");
     const responses=await Promise.all([send(),send(),send()]);
     assert.deepEqual(responses.map(r=>r.status),[200,200,200]);
     const results=await Promise.all(responses.map(r=>r.json()));

@@ -1,3 +1,4 @@
+import { assertProjectAdministrativeWrite } from './admin-project-write.js';
 import type { Pool } from 'pg';
 
 import { tryRecordTimeline } from './investigation-timeline.js';
@@ -18,6 +19,7 @@ export async function classifyIncident(db: Pool, body: unknown) {
   const client = await db.connect();
   try {
     await client.query('BEGIN');
+    await assertProjectAdministrativeWrite(client,data.project as string);
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [data.project]);
     const incident = await client.query('SELECT id,status,triage_version FROM incidents WHERE project_id=$1 AND host=$2 FOR UPDATE',[data.project,data.host]);
     if (!incident.rowCount || incident.rows[0].id !== data.incident_id || incident.rows[0].status !== data.expected || incident.rows[0].triage_version !== data.version) throw new IncidentConflict('incident changed or unavailable');

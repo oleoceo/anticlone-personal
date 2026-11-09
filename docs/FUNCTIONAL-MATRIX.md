@@ -1,5 +1,7 @@
 # Matriz de Cobertura Funcional — AntiClone Personal
 
+Recorte F01/F26/F36/F45: pausa integrada a manutencao multiprojeto/legada e despachos reais; fila SUSPENDED/REVIEW_REQUIRED, sem replay automatico. Prova PostgreSQL/SMTP A-J em tests/project-pause-delivery.test.ts, politica e limites em PROJECT-PAUSE-NOTIFICATIONS.md. Isto nao conclui as capacidades integrais da matriz.
+
 Frente B, recorte laboratorial F17/F20/F21/F23/F24/F43: `tests/protection-admin-ui.test.ts` acrescenta configuração no painel, quatro classes declaradas e 0/50/100 por ação, destinos HTTPS externos autorizados por URL exata, múltiplas ofertas e revisão isolada de drift. Capacidade integral continua PARCIAL: LOW operacional, formulários (D07), destinos comerciais reais e cenários adversariais integrais permanecem pendentes. Detalhes em `PROTECTION-ADMIN.md`; gates finais no PR.
 
 Frente A / F26: `tests/smtp-provider.test.ts` demonstra transporte SMTP configurável por ambiente privado, TLS implícito/STARTTLS, retry com histórico 033 e consulta no painel, em PostgreSQL/Chromium/SMTP local. Configuração pública deve coincidir com ambiente privado; credenciais não chegam ao browser. Capacidade permanece PARCIAL: aceitação local não prova entrega externa, nem provedor real autorizado configurado. Limites em `CLONE-SMTP.md`; gates e revisão do SHA final no PR.
@@ -45,7 +47,7 @@ Legenda: **P** = planejada no Personal; **PARCIAL** = parte comprovada, capacida
 | F33 | Segurança do gateway: body, spoofing, rate, replay, validação | 16-SECURITY-PRINCIPLES, 02- Observacoes Tecnicas | tests/https-gateway.test.ts: headers, limites, corpo e falha upstream; GS11 integral (replay/queue/SSRF) pendente; gates no PR | PARCIAL |
 | F34 | Admin único, login seguro, MFA, sessão e trilha de alterações | 18-AUTHENTICATION-AUTHORIZATION (simplificado) | GS16; senha, sessão e TOTP com prevenção de replay implementados e testados em laboratório: tests/admin-auth.test.ts e tests/admin-totp.test.ts; faltam trilha de auditoria e requisitos de produção | PARCIAL |
 | F35 | Persistência PostgreSQL, fila/outbox e dedup a reinício | 12-MVP-SCOPE, 29-DATABASE-PERSISTENCE | GS02, GS13 | PARCIAL |
-| F36 | Histórico preservado com projeto pausado/arquivado | 12-MVP-SCOPE, 34-PRIVACY-DATA-RETENTION | GS15 | P |
+| F36 | Historico preservado com projeto pausado/arquivado | 12-MVP-SCOPE, 34-PRIVACY-DATA-RETENTION | GS15 laboratorio: lifecycle e safe-deletion PostgreSQL/Chromium; LP individual encerra URLs preservando ancora/evidencias; purga fisica BLOCKED (SAFE-DELETION.md) | PARCIAL |
 | F37 | Proteção de privacidade, minimização e retenção | 34-PRIVACY-DATA-RETENTION | GS15 | PARCIAL |
 | F38 | Backups, recuperação e deploy/rollback verificados | 36-BACKUP-DISASTER-RECOVERY, 38-CI-CD-MIGRATIONS-RELEASE | Backup/restore PostgreSQL sintético e smoke PILOT_OBSERVE em tests/recovery.test.ts; imagem/Compose e smoke HTTPS em tests/https-gateway.test.ts. Offsite, arquivos operacionais e rollback VPS pendentes; sem deploy | PARCIAL |
 | F39 | Testes navegador e performance reais, sem números inventados | 27-COMPATIBILITY-MATRIX, 28-PERFORMANCE-BUDGETS-BENCHMARKS | GS10, GS16 | PARCIAL |

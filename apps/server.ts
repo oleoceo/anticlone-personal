@@ -1,6 +1,7 @@
 import { authorizedHosts, collectInfrastructure, realResolver } from './infrastructure-dns.js';
 import http from 'node:http';
 import { randomUUID } from 'node:crypto';
+import { operationallyEligible } from './operational-eligibility.js';
 import { projectMaintenance } from './project-maintenance.js';
 import { checkoutWebhook, projectCheckoutWebhooks } from './checkout-webhook.js';
 import { readFileSync } from 'node:fs';
@@ -21,6 +22,7 @@ import { optionalSchemas } from './optional-schema.js';
 import { evaluateInactivity, deliverHealth, reconcileOperationalEpisode, recoverOperationalSource, maintainHealthHistory, invalidateInactivity, recordInstallationActivity } from './health-alerts.js';
 import { OperationalObservations } from './operational-observations.js';
 import { scopedGateway } from './scoped-gateway.js';
+import { legacyOperationallyEligible } from './operational-eligibility.js';
 const boundary = gatewayBoundary(process.env);
 const connectionString = process.env.DATABASE_URL, project = process.env.PROJECT_ID;
 const smtpPort = Number(process.env.SMTP_PORT), port = Number(process.env.PORT ?? 3000);
@@ -102,24 +104,44 @@ function degradationTask(operation: string, action: () => Promise<unknown>, forc
   degradationQueue = task.catch(() => { degradationGapVersion++; });
   return task.then(() => completed);
 }
-function lostDegradationClaim(): void {
+async function lostDegradationClaim(): Promise<void> {
   healthBaselineVersion++;
   degradationGapVersion++;
-  if (gapBarrier) return;
+  if (gapBarrier) { await gapBarrier; return; }
   // One bounded reconciliation, independent of the normal queue limit. The
   // gateway never holds rejected requests open waiting for database work.
   gapBarrier = degradationTask('gap', async () => {
     if (controlledOrigin && optional.canaryDegradation.state !== 'NOT_INSTALLED')
       await degradationState(pool,activeProject,new URL(controlledOrigin).hostname,controlledOrigin);
   }, true).finally(() => { gapBarrier = undefined; });
-  void gapBarrier.catch(() => {});
+  await gapBarrier;
 }
 function recordClaim(origin: string, source: 'core' | 'fallback') {
-  if (origin !== normalizedOrigin || claimPending.has(source) || Date.now() < (claimAfter.get(source) ?? 0)) return;
+  if (origin !== normalizedOrigin || claimPending.has(source) || Date.now() < (claimAfter.get(source) ?? 0)) return Promise.resolve();
   claimPending.add(source);
   // Bound writes for installed, explicitly enabled projects. Missing schemas are skipped by the gate.
   claimAfter.set(source,Date.now()+60_000);
-  void optional.installation.run('claim', () => recordInstallationClaim(pool,activeProject,origin,source)).finally(()=>claimPending.delete(source));
+  return optional.installation.run('claim', () => recordInstallationClaim(pool,activeProject,origin,source)).then(()=>{}).finally(()=>claimPending.delete(source));
+}
+// HTTP admission must leave pool capacity for the operations under its lock.
+// Queued correlation is serialized separately and uses the reserved headroom.
+let legacyAdmissions=0;
+const legacyWaiters:(()=>void)[]=[];
+async function withLegacyEligibility<T>(action: () => Promise<T>, reserve=true): Promise<T | undefined> {
+  if (reserve) {
+    if (legacyAdmissions>=2) await new Promise<void>(resolve=>legacyWaiters.push(resolve));
+    else legacyAdmissions++;
+  }
+  try {
+  const client=await pool.connect();
+  try {
+    await client.query('BEGIN');
+    if (!await legacyOperationallyEligible(client,activeProject)) return undefined;
+    return await action();
+  } finally { try { await client.query('ROLLBACK'); client.release(); } catch { client.release(true); } }
+  } finally {
+    if (reserve) { const next=legacyWaiters.shift(); if(next) next(); else legacyAdmissions--; }
+  }
 }
 const handleCheckout = checkoutWebhook(pool,activeProject,project ? process.env : {...process.env,CHECKOUT_WEBHOOK_SECRET:undefined});
 const handleProjectCheckout = projectCheckoutWebhooks(pool,process.env);
@@ -140,10 +162,10 @@ const server = http.createServer((req, res) => {
   }
   if (req.method === 'GET' && (req.url === '/canary/html.gif' || req.url === '/canary/css.gif')) {
     if (Date.now() - windowStart >= 60_000) { windowStart = Date.now(); count = 0; }
-    if (++count > 60 && process.env.GATEWAY_TRANSPORT !== 'HTTPS_PROXY') { lostDegradationClaim(); res.writeHead(429).end(); return; }
+    if (++count > 60 && process.env.GATEWAY_TRANSPORT !== 'HTTPS_PROXY') { void withLegacyEligibility(lostDegradationClaim).catch(()=>{}); res.writeHead(429).end(); return; }
     const source = req.url === '/canary/html.gif' ? 'html_canary' : 'css_canary';
-    void observeCanary(pool, activeProject, req.headers.referer, source).then(() => {
-      res.writeHead(200, { 'Content-Type': 'image/gif' }).end(Buffer.from('R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==', 'base64'));
+    void withLegacyEligibility(async () => {
+      await observeCanary(pool, activeProject, req.headers.referer, source);
       // Referer is an unauthenticated claim. Only the explicitly configured
       // laboratory origin can contribute to the existing F44 journal.
       let claimedOrigin: string | undefined;
@@ -155,16 +177,16 @@ const server = http.createServer((req, res) => {
       } catch { /* Missing or ambiguous claims never contribute. */ }
       if (claimedOrigin === normalizedOrigin && !activityPending && Date.now() >= activityAfter) {
         activityPending=true; activityAfter=Date.now()+60_000;
-        void optional.health.run('activity', () => recordInstallationActivity(pool,activeProject,normalizedOrigin)).finally(()=>{activityPending=false;});
+        await optional.health.run('activity', () => recordInstallationActivity(pool,activeProject,normalizedOrigin)).finally(()=>{activityPending=false;});
       }
       if (!mode.pilot && controlledOrigin && controlledOrigin !== normalizedOrigin && claimedOrigin === controlledOrigin) {
-        if (optional.canaryDegradation.state !== 'NOT_INSTALLED') void degradationTask('correlation', async () => {
+        if (optional.canaryDegradation.state !== 'NOT_INSTALLED') await degradationTask('correlation', async () => {
           const host = new URL(controlledOrigin).hostname;
           await recordDegradationClaim(pool,activeProject,host,source,controlledOrigin);
           await degradationState(pool,activeProject,host,controlledOrigin);
         });
       }
-    }).catch(() => { lostDegradationClaim(); res.writeHead(503).end(); }); return;
+    }).then(() => res.writeHead(200, { 'Content-Type': 'image/gif' }).end(Buffer.from('R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==', 'base64'))).catch(() => res.writeHead(503).end()); return;
   }
   if (req.method === 'POST' && (req.url === '/entry-decision' || req.url === '/cta-refresh')) {
     const refresh = req.url === '/cta-refresh';
@@ -184,7 +206,7 @@ const server = http.createServer((req, res) => {
     if (rejected) return;
     let session: unknown; let trafficClass: string; let evidence: RiskEvidence; let pathname: string|undefined;
     try { const input: unknown = JSON.parse(body); if (!input || typeof input !== 'object' || Array.isArray(input) || !['session,signals','pathname,session,signals'].includes(Object.keys(input).sort().join(','))) throw Error('invalid'); const fields = input as Record<string, unknown>; if (fields.pathname !== undefined && (typeof fields.pathname !== 'string' || !/^\/[a-zA-Z0-9/_-]{0,200}$/.test(fields.pathname))) throw Error('invalid pathname'); pathname=fields.pathname as string|undefined; session = fields.session; const traffic = classifyTraffic(fields.signals, origin); trafficClass = traffic.trafficClass; evidence = {source:'browser',reliability:'uncorroborated',trafficClass,kind:traffic.evidence}; } catch { res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify({action:'OBSERVE_ONLY'})); return; }
-    void (async () => {
+    void withLegacyEligibility(async () => {
       const controlled = controlledOrigin === origin && origin !== normalizedOrigin;
       const assessment = safeEvaluateRisk(controlled && process.env.LAB_CONTROLLED_RISK === 'LOW', fixture => {
         // Test-only negative fixtures can only suppress mitigation.
@@ -196,7 +218,7 @@ const server = http.createServer((req, res) => {
       await recordRisk(pool, activeProject, new URL(origin).hostname, assessment, evidence);
       if (!stealthEligible(assessment, mode.pilot)) return {action:'OBSERVE_ONLY'};
       // Entry selection has no authority over a later interaction.
-      if (refresh) return ctaDecision(pool, activeProject, normalizedOrigin, origin, controlledOrigin, assessment.level, session, trafficClass, pathname);
+      if (refresh) return await ctaDecision(pool, activeProject, normalizedOrigin, origin, controlledOrigin, assessment.level, session, trafficClass, pathname);
       const result = await pool.query('SELECT v.version,v.enabled,v.approved_destination,v.allocation FROM active_protection_policies a JOIN protection_policy_versions v ON v.project_id=a.project_id AND v.version=a.version WHERE a.project_id=$1 AND v.stealth=true', [activeProject]);
       const entryPolicy = result.rows[0];
       // Invalid enabled entry policy is an evaluation failure, not permission to continue.
@@ -207,13 +229,13 @@ const server = http.createServer((req, res) => {
       }
       const entry = entryDecision(entryPolicy, normalizedOrigin, origin, controlledOrigin, assessment.level, session, trafficClass);
       if (entry.action === 'PAGE_REDIRECT') return entry;
-      return ctaDecision(pool, activeProject, normalizedOrigin, origin, controlledOrigin, assessment.level, session, trafficClass, pathname);
-    })().then(decision => res.writeHead(200, {'Content-Type': 'application/json'}).end(JSON.stringify(decision)))
+      return await ctaDecision(pool, activeProject, normalizedOrigin, origin, controlledOrigin, assessment.level, session, trafficClass, pathname);
+    }).then(decision => res.writeHead(200, {'Content-Type': 'application/json'}).end(JSON.stringify(decision ?? {action:'OBSERVE_ONLY'})))
       .catch(() => res.writeHead(200, {'Content-Type': 'application/json'}).end(JSON.stringify({action:'OBSERVE_ONLY'}))); }); return;
   }
   if (req.method !== 'POST' || req.url !== '/observe' && req.url !== '/observe/fallback') { res.writeHead(404).end(); return; }
   if (Date.now() - windowStart >= 60_000) { windowStart = Date.now(); count = 0; }
-  if (++count > 60 && process.env.GATEWAY_TRANSPORT !== 'HTTPS_PROXY') { lostDegradationClaim(); res.writeHead(429).end(); return; }
+  if (++count > 60 && process.env.GATEWAY_TRANSPORT !== 'HTTPS_PROXY') { void withLegacyEligibility(lostDegradationClaim).catch(()=>{}); res.writeHead(429).end(); return; }
   if (!/^text\/plain(?:\s*;|$)/i.test(req.headers['content-type'] ?? '')) { res.writeHead(415).end(); return; }
   let length = 0; const chunks: Buffer[] = []; let rejected = false;
   req.on('data', (chunk: Buffer) => {
@@ -237,17 +259,28 @@ const server = http.createServer((req, res) => {
     }
     catch { res.writeHead(400).end(); return; }
     const source = req.url === '/observe/fallback' ? 'fallback' : 'core';
-    void observe(pool, activeProject, mode.origins, origin, source, evidence).then(result => {
-      if (result === 'authorized') recordClaim(origin,source);
+    void withLegacyEligibility(async () => {
+      const result=await observe(pool, activeProject, mode.origins, origin, source, evidence);
+      if (result === 'authorized') await recordClaim(origin,source);
       if (!mode.pilot && controlledOrigin && origin === controlledOrigin && origin !== normalizedOrigin) {
-        void degradationTask('correlation', async () => {
+        const correlate=async()=>{
           const temporalOrigin = optional.canaryDegradation.state === 'NOT_INSTALLED' ? undefined : origin;
           await recordDegradationClaim(pool,activeProject,new URL(origin).hostname,source,temporalOrigin);
           await degradationState(pool,activeProject,new URL(origin).hostname,temporalOrigin);
-        });
+        };
+        if (optional.canaryDegradation.state==='NOT_INSTALLED') {
+          // Preserve the synchronous pre-F44 receipt contract under this lock.
+          await degradationTask('correlation',correlate);
+        } else {
+          // The F44 queue owns fresh eligibility while writing after passive 204.
+          void degradationTask('correlation',()=>withLegacyEligibility(correlate,false)).catch(()=>{});
+        }
       }
-      res.writeHead(result === 'capacity' ? 429 : 204).end();
-    }).catch(() => { lostDegradationClaim(); res.writeHead(503).end(); });
+      return result;
+    }).then(result => res.writeHead(result === 'capacity' ? 429 : 204).end()).catch(() => {
+      void withLegacyEligibility(lostDegradationClaim).catch(()=>{});
+      res.writeHead(503).end();
+    });
   });
 });
 server.requestTimeout = 5000; server.headersTimeout = 6000;
@@ -267,10 +300,12 @@ async function maintenance() {
   if (busy) return;
   busy = true;
   try {
+    const active=await operationallyEligible(pool,activeProject);
     const temporalOrigin = !mode.pilot && optional.canaryDegradation.state !== 'NOT_INSTALLED' ? controlledOrigin : undefined;
     await degradationTask('maintenance', () => maintainDegradation(pool, activeProject, temporalOrigin, optional.canaryDegradation.state !== 'NOT_INSTALLED'));
     try {
-      await cleanup(pool, activeProject); await deliverOne(pool, activeProject, cloneSmtp ?? smtpPort);
+      await cleanup(pool,activeProject);
+      if (active) await deliverOne(pool, activeProject, cloneSmtp ?? smtpPort);
       observeFailure('maintenance',false);
     } catch (error) {
       const code=(error as {code?:unknown} | null)?.code;
@@ -278,6 +313,7 @@ async function maintenance() {
       observeFailure('maintenance',true,safeCode);
       process.stderr.write('maintenance MAINTENANCE_ERROR; persistence pending\n');
     }
+    if (active) {
     await optional.health.run('maintenance', async () => {
       if (healthBaselineVersion !== healthBaselinePersisted) {
         const version=healthBaselineVersion;
@@ -289,6 +325,9 @@ async function maintenance() {
       if (version === healthBaselinePersisted && claimPending.size === 0)
         await evaluateInactivity(pool, activeProject, () => version===healthBaselineVersion && claimPending.size===0);
       if (!cloneSmtp && version === healthBaselineVersion && version === healthBaselinePersisted) await deliverHealth(pool, activeProject, smtpPort, () => version===healthBaselineVersion);
+    });
+    }
+    await optional.health.run('retention',async()=>{
       if (Date.now() >= healthCleanupAfter) {
         await maintainHealthHistory(pool, activeProject);
         healthCleanupAfter = Date.now() + 60 * 60_000;
@@ -317,7 +356,7 @@ async function infrastructureMaintenance() {
       await pool.query("DELETE FROM infrastructure_dns_observations WHERE project_id=$1 AND observed_at<now()-interval '30 days'",[activeProject]);
       dnsRetentionAfter=Date.now()+3600_000;
     }
-    if (dnsResolver) {
+    if (dnsResolver && await operationallyEligible(pool,activeProject)) {
       const host = dnsHosts[dnsIndex++ % dnsHosts.length];
       await collectInfrastructure(pool,activeProject,host,dnsHosts,dnsResolver,`configured-dns:${process.env.INFRASTRUCTURE_DNS_SERVER}`);
     }

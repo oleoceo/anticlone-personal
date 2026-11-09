@@ -1,3 +1,4 @@
+import { assertProjectAdministrativeWrite, DeletedProjectConflict } from './admin-project-write.js';
 import type { Pool } from 'pg';
 import { validateDraft, activatePolicy } from './protection-policy.js';
 import { publishCtaPolicy } from './cta-policy.js';
@@ -9,6 +10,7 @@ export async function publishPagePolicy(db: Pool, project: string, body: unknown
   const client = await db.connect();
   try {
     await client.query('BEGIN');
+    await assertProjectAdministrativeWrite(client,project);
     const row = await client.query('SELECT origin FROM projects WHERE id=$1 FOR UPDATE', [project]);
     if (!row.rowCount) throw new TypeError('invalid project');
     const draft = validateDraft(body, row.rows[0].origin);
@@ -50,6 +52,7 @@ export async function protectionAdmin(db: Pool, body: unknown) {
     }
     throw new TypeError('invalid protection action');
   } catch (error) {
+    if (error instanceof DeletedProjectConflict) throw error;
     if (error && typeof error === 'object' && 'code' in error) throw error;
     throw new TypeError('invalid protection configuration');
   }

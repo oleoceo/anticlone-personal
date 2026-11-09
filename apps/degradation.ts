@@ -1,10 +1,17 @@
 import { tryRecordTimeline } from './investigation-timeline.js';
+import { operationallyEligible } from './operational-eligibility.js';
 import type { Pool } from 'pg';
 
 export async function markDegradationGap(pool: Pool, project: string): Promise<void> {
-  await pool.query(`INSERT INTO degradation_collection_gaps(project_id,last_dropped_at)
+  const client=await pool.connect();
+  try {
+  await client.query('BEGIN');
+  if (!await operationallyEligible(client,project,undefined,true)) { await client.query('ROLLBACK'); return; }
+  await client.query(`INSERT INTO degradation_collection_gaps(project_id,last_dropped_at)
     VALUES($1,clock_timestamp()) ON CONFLICT(project_id)
     DO UPDATE SET last_dropped_at=EXCLUDED.last_dropped_at`, [project]);
+  await client.query('COMMIT');
+  } catch(error) {await client.query('ROLLBACK');throw error;} finally {client.release();}
 }
 
 // Current diagnosis is always evaluated from live evidence; audit rows are history only.
@@ -12,6 +19,7 @@ export async function maintainDegradation(pool: Pool, project: string, canaryOri
   await pool.query("DELETE FROM degradation_events WHERE project_id=$1 AND observed_at < clock_timestamp()-interval '24 hours'", [project]);
   await pool.query("DELETE FROM degradation_audit WHERE project_id=$1 AND observed_at < clock_timestamp()-interval '7 days'", [project]);
   if (hasCanarySchema) await pool.query("DELETE FROM degradation_collection_gaps WHERE project_id=$1 AND last_dropped_at < clock_timestamp()-interval '30 minutes'", [project]);
+  if (!await operationallyEligible(pool,project)) return;
   // Only open historical transitions need an expiration transition. UNKNOWN hosts need no polling.
   const hosts = await pool.query(`SELECT host FROM (
     SELECT DISTINCT ON (host) host,state FROM degradation_audit
@@ -44,6 +52,7 @@ export async function degradationState(pool: Pool, project: string, host: string
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    if (!await operationallyEligible(client,project,undefined,true)) { await client.query('ROLLBACK'); return 'UNKNOWN'; }
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [project]);
     const result = await client.query(`WITH t AS (SELECT clock_timestamp() AS now), evidence AS (
       SELECT count(*) FILTER (WHERE source='core' AND observed_at BETWEEN t.now-interval '30 minutes' AND t.now-interval '10 minutes') AS baseline,

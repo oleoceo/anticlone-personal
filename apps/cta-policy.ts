@@ -1,3 +1,4 @@
+import { assertProjectAdministrativeWrite } from './admin-project-write.js';
 import type { Pool, PoolClient } from 'pg';
 import { validateAllocation, selected } from './allocation.js';
 import { approvedDestination, configurationOrigin } from './page-redirect.js';
@@ -13,6 +14,7 @@ export async function publishCtaPolicy(db:Pool, project:string, body:unknown) {
   const p=validate(body), client=await db.connect();
   try {
     await client.query('BEGIN');
+    await assertProjectAdministrativeWrite(client,project);
     const projectRow=await client.query('SELECT origin FROM projects WHERE id=$1 FOR UPDATE',[project]);
     if (!projectRow.rowCount) throw Error('invalid project');
     configurationOrigin(projectRow.rows[0].origin);

@@ -9,6 +9,7 @@ import { validateAllocation } from './allocation.js';
 import { assessObservation, recordRisk, safeEvaluateRisk, stealthEligible } from './risk.js';
 import { currentApproval } from './page-policy-approval.js';
 import { projectMaintenance } from './project-maintenance.js';
+import { operationallyEligible } from './operational-eligibility.js';
 
 // Identifiers in these routes are correlation handles, never credentials.
 export function scopedGateway(db: Pool, scripts: Record<string, Buffer>, collect=projectMaintenance(db,{SMTP_PORT:'1'}).collect) {
@@ -48,9 +49,9 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>, collect
           const client=await db.connect();
           let released=false;
           try {
-          await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+          await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
           const context=await resolvePageContext(client,match[1]);
-          if (!context || context.urls.length!==1) { fallback(); return; }
+          if (!context || context.urls.length!==1 || !await operationallyEligible(client,context.project,context.page,true)) { fallback(); return; }
           const approval=await currentApproval(client,context.project,context.page);
           if (!approval) { fallback(); return; }
           const original=context.urls[0];
@@ -59,9 +60,9 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>, collect
           const assessment=safeEvaluateRisk(controlled,fixture=>assessObservation(evidence,fixture));
           if (!assessment) { fallback(); return; }
           const finish=async (result:unknown) => {
-            await client.query('ROLLBACK'); client.release(); released=true;
             await recordRisk(db,context.project,new URL(origin).hostname,assessment,evidence);
             res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result));
+            await client.query('COMMIT'); client.release(); released=true;
           };
           if (!stealthEligible(assessment,false)) { await finish({action:'OBSERVE_ONLY'}); return; }
           if (endpoint==='entry-decision' && approval.entryVersion!==null) {
@@ -82,12 +83,17 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>, collect
         const url=new URL(origin+fields.pathname);
         if (url.origin!==origin || url.pathname!==fields.pathname || url.search || url.hash || !fields.pathname.startsWith('/')) throw new TypeError('invalid');
         if (core) classifyTraffic(fields.signals,origin);
-        const context=await resolvePageContext(db,match[1]);
-        if (!context) { res.writeHead(404).end(); return; }
-        const authorized=context.urls.some(value => value.origin===origin && value.pathname===url.pathname);
-        const result=await observe(db,context.project,authorized ? [origin] : [],origin,core ? 'core' : 'fallback',core ? fields.signals : undefined);
-        if (authorized) await collect(context.project,context.page,origin,core ? 'core':'fallback');
-        res.writeHead(result==='capacity' ? 429 : 204).end();
+        const client=await db.connect();
+        try {
+          await client.query('BEGIN');
+          const context=await resolvePageContext(client,match[1]);
+          if (!context) { res.writeHead(404).end(); return; }
+          if (!await operationallyEligible(client,context.project,context.page,true)) { res.writeHead(204).end(); return; }
+          const authorized=context.urls.some(value => value.origin===origin && value.pathname===url.pathname);
+          const result=await observe(db,context.project,authorized ? [origin] : [],origin,core ? 'core' : 'fallback',core ? fields.signals : undefined);
+          if (authorized) await collect(context.project,context.page,origin,core ? 'core':'fallback');
+          res.writeHead(result==='capacity' ? 429 : 204).end();
+        } finally { try { await client.query('ROLLBACK'); client.release(); } catch { client.release(true); } }
       })().catch((error:unknown) => decision ? res.writeHead(200,{'Content-Type':'application/json'}).end('{"action":"OBSERVE_ONLY"}') : res.writeHead(error instanceof TypeError || error instanceof SyntaxError ? 400 : 503).end());
     });
     return true;

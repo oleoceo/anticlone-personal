@@ -37,7 +37,7 @@ test('expiry preserves events, respects active delivery and survives workers and
     await Promise.all([deliverOne(db,'p',1),deliverOne(other,'p',1),deliverCtaAlert(db,async()=>{sends++;}),deliverCtaAlert(other,async()=>{sends++;})]);
     const outbox=await db.query('SELECT i.host,a.expired_at IS NOT NULL AS expired,a.attempts FROM alert_outbox a JOIN incidents i ON i.id=a.incident_id ORDER BY i.host');
     assert.deepEqual(outbox.rows,[{host:'old.test',expired:true,attempts:0},{host:'recent.test',expired:false,attempts:0}]);
-    assert.deepEqual((await db.query('SELECT state FROM cta_alert_deliveries ORDER BY alert_id')).rows.map(r=>r.state),['EXPIRED','PENDING','EXPIRED','PROCESSING','FAILED','DELIVERED']);
+    assert.deepEqual((await db.query('SELECT state FROM cta_alert_deliveries ORDER BY alert_id')).rows.map(r=>r.state),['EXPIRED','PENDING','PROCESSING','PROCESSING','FAILED','DELIVERED']);
     assert.equal(sends,0);
     assert.equal((await db.query('SELECT count(*)::int AS n FROM notification_attempt_budget')).rows[0].n,10);
     assert.equal((await db.query('SELECT count(*)::int AS n FROM cta_drift_alerts')).rows[0].n,6);
@@ -47,7 +47,7 @@ test('expiry preserves events, respects active delivery and survives workers and
     // A new pool represents a restarted worker and has no maintenance/backoff cache.
     const restarted=new Pool({connectionString:process.env.TEST_DATABASE_URL,options});
     try { await deliverCtaAlert(restarted,async()=>{sends++;}); await deliverOne(restarted,'p',1); } finally { await restarted.end(); }
-    assert.equal((await db.query('SELECT state FROM cta_alert_deliveries WHERE alert_id=$1',[ids[3]])).rows[0].state,'EXPIRED');
+    assert.equal((await db.query('SELECT state FROM cta_alert_deliveries WHERE alert_id=$1',[ids[3]])).rows[0].state,'PROCESSING');
     await db.query('DELETE FROM notification_attempt_budget');
     // Hold the budget lock while both reservation paths wait; make the events old
     // before releasing it. Neither worker may reserve or invoke its sender.

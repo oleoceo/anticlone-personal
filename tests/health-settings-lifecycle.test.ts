@@ -29,6 +29,8 @@ test('health configuration lifecycle suppresses obsolete pending mail without lo
   };
   try {
     for(const f of ['003_projects','018_notification_budget','025_installation_signals','028_health_alerts']) await db.query(await readFile(`infra/${f}.sql`,'utf8'));
+    await db.query("ALTER TABLE projects ADD COLUMN lifecycle_state text NOT NULL DEFAULT 'ACTIVE'");
+    await db.query(await readFile('infra/044_notification_lifecycle.sql','utf8'));
     assert.equal((await optionalSchemas(db)).health.state,'NOT_INSTALLED');
     await db.query(await readFile('infra/029_health_settings_history.sql','utf8'));
     assert.equal((await optionalSchemas(db)).health.state,'AVAILABLE');
@@ -133,6 +135,8 @@ test('health audit upgrade snapshots existing settings and retains history by pr
   const db=new Pool({connectionString:process.env.TEST_DATABASE_URL,options:`-c search_path=${schema}`});
   try {
     for(const f of ['003_projects','025_installation_signals','028_health_alerts']) await db.query(await readFile(`infra/${f}.sql`,'utf8'));
+    await db.query("ALTER TABLE projects ADD COLUMN lifecycle_state text NOT NULL DEFAULT 'ACTIVE'");
+    await db.query(await readFile('infra/044_notification_lifecycle.sql','utf8'));
     await db.query("INSERT INTO projects VALUES('one','One','http://one.test'),('two','Two','http://two.test')");
     for(const project of ['one','two']) await enableInstallation(db,project);
     await db.query("INSERT INTO installation_health_settings(project_id,enabled,inactivity_seconds,operational_enabled) VALUES('one',true,60,true),('two',false,86400,false)");

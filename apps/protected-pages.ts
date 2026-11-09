@@ -1,8 +1,17 @@
+import { assertPageAdministrativeWrite } from './admin-project-write.js';
+import { deletePage } from './page-deletion.js';
+import { isLifecycleAction, projectLifecycle } from './project-lifecycle.js';
 import { randomUUID } from 'node:crypto';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import { approvalConfiguration } from './page-policy-approval.js';
 
 export class PageConflict extends Error {}
+
+async function assertMutableProject(client:PoolClient, project:string) {
+  const row=(await client.query("SELECT to_jsonb(p)->>'deleted_at' AS deleted_at FROM projects p WHERE id=$1 FOR UPDATE",[project])).rows[0];
+  if (!row) throw new TypeError('unknown project');
+  if (row.deleted_at) throw new PageConflict('logically deleted project');
+}
 
 function address(value: unknown) {
   if (typeof value !== 'string' || value.length>2048 || /[\u0000-\u0020\\]/.test(value)) throw new TypeError('invalid URL');
@@ -17,13 +26,45 @@ export async function managePages(db: Pool, body: unknown) {
   const data=body as Record<string,unknown>;
   if (typeof data.project!=='string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(data.project) || typeof data.action!=='string') throw new TypeError('invalid request');
   const project=data.project, action=data.action;
+  if (action==='preview-delete-page' || action==='delete-page') return deletePage(db,data);
+  if (isLifecycleAction(action)) return projectLifecycle(db,data);
+  if (['project-state','pause-project','resume-project','pause-page','resume-page'].includes(action)) {
+    const pageAction=action.endsWith('-page');
+    if (Object.keys(data).sort().join(',') !== (pageAction ? 'action,page,project' : 'action,project') || (pageAction && (typeof data.page!=='string' || !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(data.page)))) throw new TypeError('invalid request');
+    const client=await db.connect();
+    try {
+      await client.query('BEGIN');
+      const p=await client.query("SELECT lifecycle_state,to_jsonb(p)->>'deleted_at' AS deleted_at FROM projects p WHERE id=$1 FOR UPDATE",[project]);
+      if (!p.rowCount) throw new TypeError('unknown project');
+      if (action==='project-state') {
+        const pages=await client.query('SELECT id,installation_id,name,enabled,lifecycle_state FROM protected_pages WHERE project_id=$1 ORDER BY name,id',[project]);
+        await client.query('COMMIT'); return {project,state:p.rows[0].lifecycle_state,pages:pages.rows};
+      }
+      if (pageAction) {
+        if (p.rows[0].deleted_at) throw new PageConflict('logically deleted project');
+        await assertPageAdministrativeWrite(client,project,data.page as string);
+        const page=await client.query('SELECT lifecycle_state,enabled FROM protected_pages WHERE project_id=$1 AND id=$2 FOR UPDATE',[project,data.page]);
+        if (!page.rowCount) throw new TypeError('unknown page');
+        const next=action==='pause-page' ? 'PAUSED' : 'ACTIVE';
+        if (page.rows[0].lifecycle_state===next || (next==='ACTIVE' && !page.rows[0].enabled) || p.rows[0].lifecycle_state==='ARCHIVED') throw new PageConflict();
+        await client.query('UPDATE protected_pages SET lifecycle_state=$3 WHERE project_id=$1 AND id=$2',[project,data.page,next]);
+        await client.query('COMMIT'); return {project,page:data.page,state:next,installationStatus:'NOT_VERIFIED'};
+      }
+      const next=action==='pause-project' ? 'PAUSED' : 'ACTIVE';
+      if (p.rows[0].lifecycle_state!==(next==='ACTIVE' ? 'PAUSED' : 'ACTIVE')) throw new PageConflict();
+      await client.query('UPDATE projects SET lifecycle_state=$2 WHERE id=$1',[project,next]);
+      await client.query('COMMIT'); return {project,state:next,installationStatus:'NOT_VERIFIED'};
+    } catch(error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+  }
   if (action==='approve' && Object.keys(data).sort().join(',')==='action,configGeneration,ctaVersions,entryVersion,generation,page,project' && typeof data.page==='string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(data.page) && typeof data.generation==='string' && /^(0|[1-9][0-9]{0,18})$/.test(data.generation) && BigInt(data.generation)<=9223372036854775807n && typeof data.configGeneration==='string' && /^(0|[1-9][0-9]{0,18})$/.test(data.configGeneration) && BigInt(data.configGeneration)<=9223372036854775807n && (data.entryVersion===null || (Number.isSafeInteger(data.entryVersion) && (data.entryVersion as number)>0)) && Array.isArray(data.ctaVersions) && data.ctaVersions.length<=100 && data.ctaVersions.every(v=>Number.isSafeInteger(v) && v>0) && new Set(data.ctaVersions).size===data.ctaVersions.length && (data.entryVersion!==null || data.ctaVersions.length>0)) {
     const client=await db.connect();
     try {
       await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
+      await assertMutableProject(client,project);
       await client.query('LOCK TABLE projects, protected_pages, protected_page_urls, active_protection_policies, active_cta_surface_policies, page_entry_policy_bindings, page_cta_policy_bindings, cta_points, cta_mappings, cta_destinations, cta_commercial_references IN SHARE ROW EXCLUSIVE MODE');
       const page=await client.query('SELECT url_generation,config_generation,enabled FROM protected_pages WHERE id=$1 AND project_id=$2',[data.page,project]);
       if (!page.rowCount || !page.rows[0].enabled || page.rows[0].url_generation!==data.generation || page.rows[0].config_generation!==data.configGeneration) throw new PageConflict();
+      await assertPageAdministrativeWrite(client,project,data.page as string);
       let configuration;
       try { configuration=await approvalConfiguration(client,project,data.page,data.entryVersion as number|null,data.ctaVersions as number[]); } catch { throw new PageConflict(); }
       await client.query('DELETE FROM page_entry_policy_bindings WHERE project_id=$1 AND page_id=$2',[project,data.page]);
@@ -77,8 +118,7 @@ export async function managePages(db: Pool, body: unknown) {
     const url=address(data.url), page=randomUUID(), installation=randomUUID(), client=await db.connect();
     try {
       await client.query('BEGIN');
-      const p=await client.query('SELECT id FROM projects WHERE id=$1 FOR UPDATE',[project]);
-      if (!p.rowCount) throw new TypeError('unknown project');
+      await assertMutableProject(client,project);
       await client.query('INSERT INTO protected_pages(id,project_id,installation_id,name,url_review_required) VALUES($1,$2,$3,$4,true)',[page,project,installation,data.name.trim()]);
       await client.query('INSERT INTO protected_page_urls(page_id,origin,pathname) VALUES($1,$2,$3)',[page,url.origin,url.pathname]);
       await client.query('COMMIT'); return {page,installation};
@@ -88,6 +128,8 @@ export async function managePages(db: Pool, body: unknown) {
     const url=address(data.url), client=await db.connect();
     try {
       await client.query('BEGIN');
+      await assertMutableProject(client,project);
+      await assertPageAdministrativeWrite(client,project,data.page as string);
       const page=await client.query('SELECT id FROM protected_pages WHERE id=$1 AND project_id=$2 FOR UPDATE',[data.page,project]);
       if (!page.rowCount) throw new TypeError('unknown page');
       if (action==='add-url') await client.query('INSERT INTO protected_page_urls(page_id,origin,pathname) VALUES($1,$2,$3)',[data.page,url.origin,url.pathname]);

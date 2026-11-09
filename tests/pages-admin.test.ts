@@ -16,7 +16,7 @@ test('authenticated page administration preserves identities across URL transiti
   let browser:Awaited<ReturnType<typeof chromium.launch>>|undefined;
   let server:ReturnType<typeof createAdminServer>|undefined;
   try {
-    for(const file of ['001_initial','002_alerts','003_projects','006_page_redirect','007_protection_policy','010_policy_allocation','011_cta_inventory','022_cta_capture_selection','012_cta_policy','013_cta_review','014_cta_drift_alerts','023_cta_commercial','025_installation_signals','036_cta_surface_policies','037_protected_pages','038_page_url_review','039_page_policy_bindings','040_page_policy_approvals','041_page_entry_activation','042_page_installation_signals']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
+    for(const file of ['001_initial','002_alerts','003_projects','006_page_redirect','007_protection_policy','010_policy_allocation','011_cta_inventory','022_cta_capture_selection','012_cta_policy','013_cta_review','014_cta_drift_alerts','023_cta_commercial','025_installation_signals','036_cta_surface_policies','037_protected_pages','038_page_url_review','039_page_policy_bindings','040_page_policy_approvals','041_page_entry_activation','042_page_installation_signals','043_lifecycle']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
     await db.query('CREATE TABLE admin_totp_replay(factor_id text PRIMARY KEY,last_counter bigint NOT NULL)');
     await db.query('CREATE TABLE admin_totp_codes(factor_id text NOT NULL,digest text NOT NULL,valid_until bigint NOT NULL,PRIMARY KEY(factor_id,digest))');
     await db.query("INSERT INTO projects VALUES('health','Health','https://solucao.digital'),('finance','Finance','https://solucao.digital')");
@@ -29,6 +29,12 @@ test('authenticated page administration preserves identities across URL transiti
     await page.locator('#pages-form').waitFor({state:'visible'});
     const form=page.locator('#pages-form');
     await form.locator('[name=project]').fill('health'); await form.locator('[name=name]').fill('Saúde'); await form.locator('[name=url]').fill('https://solucao.digital/saude');
+    await form.getByRole('button',{name:'Pausar projeto'}).click();
+    await page.waitForFunction(()=>document.querySelector('#pages-result')?.textContent?.includes('PAUSED'));
+    assert.equal((await db.query("SELECT lifecycle_state FROM projects WHERE id='finance'")).rows[0].lifecycle_state,'ACTIVE');
+    await form.getByRole('button',{name:'Reativar projeto'}).click();
+    await page.waitForFunction(()=>document.querySelector('#pages-result')?.textContent?.includes('ACTIVE'));
+    await page.locator('#pages-result').evaluate(el=>{el.textContent='';});
     await form.getByRole('button',{name:'Cadastrar'}).click();
     await page.waitForFunction(()=>document.querySelector('#pages-result')?.textContent?.includes('installation'));
     const created=JSON.parse((await page.locator('#pages-result').textContent())!) as {page:string;installation:string};
