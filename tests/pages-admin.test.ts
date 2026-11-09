@@ -16,7 +16,7 @@ test('authenticated page administration preserves identities across URL transiti
   let browser:Awaited<ReturnType<typeof chromium.launch>>|undefined;
   let server:ReturnType<typeof createAdminServer>|undefined;
   try {
-    for(const file of ['003_projects','025_installation_signals','037_protected_pages','038_page_url_review']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
+    for(const file of ['001_initial','002_alerts','003_projects','006_page_redirect','007_protection_policy','010_policy_allocation','011_cta_inventory','022_cta_capture_selection','012_cta_policy','013_cta_review','014_cta_drift_alerts','023_cta_commercial','025_installation_signals','036_cta_surface_policies','037_protected_pages','038_page_url_review','039_page_policy_bindings']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
     await db.query('CREATE TABLE admin_totp_replay(factor_id text PRIMARY KEY,last_counter bigint NOT NULL)');
     await db.query('CREATE TABLE admin_totp_codes(factor_id text NOT NULL,digest text NOT NULL,valid_until bigint NOT NULL,PRIMARY KEY(factor_id,digest))');
     await db.query("INSERT INTO projects VALUES('health','Health','https://solucao.digital'),('finance','Finance','https://solucao.digital')");
@@ -32,6 +32,10 @@ test('authenticated page administration preserves identities across URL transiti
     await form.getByRole('button',{name:'Cadastrar'}).click();
     await page.waitForFunction(()=>document.querySelector('#pages-result')?.textContent?.includes('installation'));
     const created=JSON.parse((await page.locator('#pages-result').textContent())!) as {page:string;installation:string};
+    await form.locator('[name=page]').fill(created.page);
+    const inspection=page.waitForResponse(r=>r.url().endsWith('/admin/ui/pages')); await form.getByRole('button',{name:'Consultar políticas da página'}).click();
+    const result=await (await inspection).json() as {page:{id:string;installation_id:string;url_generation:string};installationStatus:string;reviewAvailable:boolean};
+    assert.equal(result.page.id,created.page); assert.equal(result.page.installation_id,created.installation); assert.equal(result.page.url_generation,'1'); assert.equal(result.installationStatus,'NOT_VERIFIED'); assert.equal(result.reviewAvailable,false);
     await form.locator('[name=page]').fill(created.page); await form.locator('[name=url]').fill('https://saudeoficial.com/oferta');
     await form.getByRole('button',{name:'Autorizar URL'}).click(); await page.waitForFunction(()=>document.querySelector('#pages-result')?.textContent?.includes('reviewRequired'));
     const rows=await db.query('SELECT p.id,p.installation_id,p.url_review_required,count(u.*)::int n FROM protected_pages p JOIN protected_page_urls u ON u.page_id=p.id WHERE p.id=$1 GROUP BY p.id',[created.page]);
