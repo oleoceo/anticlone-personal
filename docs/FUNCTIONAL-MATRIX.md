@@ -53,10 +53,10 @@ Legenda: **P** = planejada no Personal; **PARCIAL** = parte comprovada, capacida
 | F39 | Testes navegador e performance reais, sem números inventados | 27-COMPATIBILITY-MATRIX, 28-PERFORMANCE-BUDGETS-BENCHMARKS | GS10, GS16 | PARCIAL |
 | F40 | Um painel responsivo de projetos, proteção, conversões e incidentes | 12-MVP-SCOPE, 39-INFORMATION-ARCHITECTURE | GS16 | PARCIAL |
 | F41 | Identidade de CTA por marcador estável ou correspondência estrutural com confiança; candidato novo ou incerto exige revisão antes de substituir | 26-CONVERSION-SURFACES-DRIFT §§3, 12, 23 | Laboratorio: marcador por superficie e sugestoes estruturais sem associacao automatica, tests/cta-inventory.test.ts, CI 41726344521; GS17 integral pendente | PARCIAL |
-| F42 | Propagação configurável de atribuição por allowlist nos destinos de página e CTA, sem repasse arbitrário de parâmetros | 20-POLICY-ENGINE §13, 26-CONVERSION-SURFACES-DRIFT §17 | GS18 | P |
+| F42 | Propagação configurável de atribuição por allowlist nos destinos de página e CTA, sem repasse arbitrário de parâmetros | 20-POLICY-ENGINE §13, 26-CONVERSION-SURFACES-DRIFT §17 | GS18 laboratorial: attribution.test.ts, f21.test.ts, gs06.test.ts e scoped-gateway.test.ts; allowlist por projeto/pagina/destino, parametros existentes preservados. Configuracao publica, sem garantia automatica de deteccao de dados sensiveis | PARCIAL |
 | F43 | Política publicada versionada e determinística: precedência de stealth/segurança, fases de entrada e interação e rejeição de conflitos ambíguos | 20-POLICY-ENGINE §§4, 8–9, 14, 18 | Laboratório: publicação autenticada, versões imutáveis e ativação transacional comprovadas em tests/policy-admin.test.ts, tests/protection-policy.test.ts e tests/gs06.test.ts; CI 41697907777. F43 e GS19 completos ainda dependem do motor geral de precedência, fases de interação e demais cenários; políticas legadas exigem republicação.; fases de entrada e interacao separadas e prazo CTA limitado conforme D09 em tests/cta-refresh.test.ts; validacao integral e classificador operacional pendentes. | PARCIAL |
-| F44 | Correlacionar ausência do Core com sinais independentes ainda observados, registrando possível degradação ou adulteração sem tratá-la como certeza | 23-RUNTIME-PROTOCOL §14, 25-INCIDENT-EVIDENCE-MODEL §§2, 11.5 | GS20 | P |
-| F45 | Alertas de instalação inativa quando habilitados e de falha operacional, com deduplicação, retry e histórico | Blueprint §2; 31-NOTIFICATIONS-EMAIL-TEMPLATES | GS21 | P |
+| F44 | Correlacionar ausência do Core com sinais de outros canais ainda observados, registrando possível degradação ou adulteração sem tratá-la como certeza | 23-RUNTIME-PROTOCOL §14, 25-INCIDENT-EVIDENCE-MODEL §§2, 11.5 | GS20 parcial: tests/canary-degradation.test.ts e tests/degradation.test.ts; sinais nao autenticados e perdas anteriores ao gateway permanecem desconhecidas | PARCIAL |
+| F45 | Alertas de instalação inativa quando habilitados e de falha operacional, com deduplicação, retry e histórico | Blueprint §2; 31-NOTIFICATIONS-EMAIL-TEMPLATES | GS21 parcial: tests/health-alerts.test.ts, tests/health-gateway.test.ts e tests/health-settings-lifecycle.test.ts; entrega externa e cobertura operacional integral pendentes | PARCIAL |
 
 ### Rastreio da auditoria documental
 
@@ -101,21 +101,21 @@ Este quadro complementa as provas acima, sem mudar criterios. `Parcial` signific
 | F28 · A | Integracao: admin-ui.ts e consultas locais | Evidencias, filtros, lifecycle e auditoria completos (GS12). |
 | F29 · C | Ausente: agregados parciais nao sao metricas completas | Fatos de sessao/acao/handoff e GS14. |
 | F30 · C | Ausente: sem receita operacional | Preco confirmado/snapshot, estimativa rotulada e GS14. |
-| F31 · C | Ausente: webhook de vendas | Integracao escolhida, assinatura/idempotencia e GS14. |
+| F31 · C | Parcial: contrato generico HMAC e idempotencia em tests/checkout-webhook.test.ts. | Adaptador externo e atribuicao de receita; GS14 integral. |
 | F32 · A | Parcial: DNS autorizado e historico em tests/infrastructure-dns.test.ts; ASN/hosting NOT_AVAILABLE | Fonte confiavel de ASN/hosting, TTL verificavel e GS12 integral pendentes. |
 | F33 · C | Parcial: https-gateway.test.ts + limites existentes | Proxy/TLS integrado neste PR; replay/queue/SSRF e GS11 integral pendentes. |
 | F34 · C | Parcial: admin-auth.test.ts/admin-totp.test.ts | Administracao de producao, auditoria e GS16. |
 | F35 · C | Parcial: detection.test.ts/notification-intents.test.ts | Worker/Redis conforme D03 ainda proposto; reinicios operacionais GS02/GS13. |
-| F36 · C | Ausente: ciclo completo pausa/arquivo | Preservar historico/agregados e GS15. |
+| F36 · C | Parcial: lifecycle, pausa e restauracao em tests/project-lifecycle-admin.test.ts e tests/project-pause-delivery.test.ts. | GS15 integral; purga fisica permanece BLOCKED conforme SAFE-DELETION.md. |
 | F37 · C | Parcial: cleanup/expiracao e notification-expiry.test.ts | Politica integral de dados e GS15, incluindo logs/backup. |
 | F38 · C | Integracao: Compose/imagem/smoke deste PR | Restore ensaiado, upgrade versionado e rollback real na VPS (GS16). |
 | F39 · C | Parcial: suites Chromium e mobile laboratoriais | Navegadores/medidas reais p95/p99 e GS10/GS16. |
 | F40 · C | Parcial: admin-ui.ts e testes de UI locais | Painel React/Vite responsivo completo e GS16. |
 | F41 · B | Parcial: cta-inventory.test.ts | Identidade estrutural segura, multiplas ofertas, GS17 integral. |
-| F42 · B | Ausente: propagacao configuravel | Allowlist por destino, parametros adversariais e GS18. |
+| F42 · B | Parcial: propagacao local configuravel e isolamento por pagina em tests/scoped-gateway.test.ts. | Configuracao publica por ambiente; limites em ATTRIBUTION-LAB.md. |
 | F43 · B | Parcial: policy-admin.test.ts | Precedencia geral/entrada/interacao e conflitos, GS19 integral. |
 | F44 · A | Parcial: correlacao laboratorial de Core com fallback e canarios HTML/CSS; sinais sao alegacoes nao autenticadas. | GS20 integral pendente: perdas antes do gateway, inclusive no proxy, nao sao observaveis. |
-| F45 · A | Ausente: inatividade/falha rastreavel | Instalacoes persistidas, dedup/retry/historico e GS21. |
+| F45 · A | Parcial: inatividade, falha operacional, deduplicacao e historico em tests/health-alerts.test.ts, tests/health-gateway.test.ts e tests/health-settings-lifecycle.test.ts. | Entrega externa e GS21 integral pendentes; sinais nao comprovam saude universal. |
 
 Caminho critico: publicacao HTTPS observavel -> risco/Stealth -> destinos externos de pagina/CTA -> identidade e superficies -> confirmacao manual de preco por CTA/Offer Snapshot versionado -> associacao contextual segura -> drift/revisao -> atribuicao/metricas/vendas -> seguranca/painel/retencao/restore e aceitacao final. SMTP externo, diagnostico de instalacao e enriquecimento de A devem acompanhar suas dependencias sem considerar a primeira instalacao como encerramento. Preparacao de publicacao nao autoriza DNS/deploy nem conclui A/B/C.
 

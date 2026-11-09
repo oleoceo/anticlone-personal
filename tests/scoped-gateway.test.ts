@@ -6,7 +6,7 @@ import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { spawn } from 'node:child_process';
 import { Pool } from 'pg';
-import { chromium } from 'playwright';
+import { chromium, type Page, type Response } from 'playwright';
 import { managePages, PageConflict } from '../apps/protected-pages.js';
 import { createAdminServer } from '../apps/admin-auth.js';
 import { publishCtaPolicy } from '../apps/cta-policy.js';
@@ -19,9 +19,12 @@ test('scoped browser observations isolate projects on one origin and preserve co
   await root.query(`CREATE SCHEMA ${schema}`);
   const options=`-c search_path=${schema}`;
   const db=new Pool({connectionString:process.env.TEST_DATABASE_URL,options});
-  const health=randomUUID(), finance=randomUUID();
+  const health=randomUUID(), finance=randomUUID(), entryOne=randomUUID(), entryTwo=randomUUID();
+  const pageOne=randomUUID(), pageTwo=randomUUID();
   const fixture=createServer((req,res) => {
-    const id=req.url==='/financas' ? finance : health;
+    const path=req.url?.split('?')[0];
+    if(path==='/shared-checkout'){res.writeHead(200,{'content-type':'text/html'}).end('<h1>Checkout destination</h1>');return;}
+    const id=path==='/entry-one' ? entryOne : path==='/entry-two' ? entryTwo : path==='/financas' ? finance : health;
     res.writeHead(200,{'content-type':'text/html'}).end(`<div data-anticlone-surface="main"><a data-anticlone-point="shared01" href="/checkout">Checkout</a></div><script src="http://127.0.0.1:3000/i/${id}/runtime.js"></script><script src="http://127.0.0.1:3000/i/${id}/fallback.js"></script>`);
   }).listen(0,'127.0.0.1');
   await once(fixture,'listening');
@@ -54,6 +57,14 @@ test('scoped browser observations isolate projects on one origin and preserve co
       await db.query("INSERT INTO cta_destinations(project_id,offer,id,url) VALUES($1,'offer',$2,$3)",[project,destination,origin+'/'+project+'-checkout'+(project==='health'?'?utm_source=offer':'')]);
       await db.query("INSERT INTO cta_mappings VALUES($1,$2,'offer',$3)",[project,point,destination]);
     }
+    const shared=origin+'/shared-checkout?utm_source=offer';
+    await db.query("INSERT INTO protection_policy_versions(project_id,version,enabled,approved_destination,stealth,allocation) VALUES('health',1,true,$1,true,$2)",[shared,allocation]);
+    for (const [pageId,installation,path] of [[pageOne,entryOne,'/entry-one'],[pageTwo,entryTwo,'/entry-two']]) {
+      await db.query("INSERT INTO protected_pages(id,project_id,installation_id,name) VALUES($1,'health',$2,$3)",[pageId,installation,path]);
+      await db.query('INSERT INTO protected_page_urls(page_id,origin,pathname) VALUES($1,$2,$3)',[pageId,origin,path]);
+      const generation=await db.query('SELECT url_generation,config_generation FROM protected_pages WHERE id=$1',[pageId]);
+      await managePages(db,{action:'approve',project:'health',page:pageId,generation:generation.rows[0].url_generation,configGeneration:generation.rows[0].config_generation,entryVersion:1,ctaVersions:[]});
+    }
     const state=await db.query('SELECT config_generation FROM protected_pages WHERE id=$1',[hp]);
     const request={action:'approve',project:'health',page:hp,generation:'1',configGeneration:state.rows[0].config_generation,entryVersion:null,ctaVersions:[1]};
     await assert.rejects(managePages(db,{...request,project:'finance'}),PageConflict);
@@ -63,7 +74,7 @@ test('scoped browser observations isolate projects on one origin and preserve co
     const financeState=await db.query('SELECT config_generation FROM protected_pages WHERE id=$1',[fp]);
     await managePages(db,{action:'approve',project:'finance',page:fp,generation:'1',configGeneration:financeState.rows[0].config_generation,entryVersion:null,ctaVersions:[1]});
     const financeSnapshot=await db.query(`SELECT p.url_generation,p.config_generation,p.url_review_required,b.surface,b.version,a.id AS approval FROM protected_pages p JOIN page_cta_policy_bindings b ON b.page_id=p.id AND b.project_id=p.project_id JOIN page_policy_approvals a ON a.page_id=p.id AND a.project_id=p.project_id WHERE p.id=$1`,[fp]);
-    const env: NodeJS.ProcessEnv={...process.env,PGOPTIONS:options,DATABASE_URL:process.env.TEST_DATABASE_URL,SMTP_PORT:'1',PORT:'3000',SCOPED_LAB_INSTALLATION:health,ATTRIBUTION_ALLOWLIST:JSON.stringify({health:{[hp]:{[origin+'/health-checkout?utm_source=offer']:{utm_source:['ads'],utm_campaign:['spring']}}},finance:{[fp]:{[origin+'/finance-checkout']:{utm_campaign:['finance']}}}}),SCOPED_LAB_ORIGIN:`http://localhost:${address.port}`};
+    const env: NodeJS.ProcessEnv={...process.env,PGOPTIONS:options,DATABASE_URL:process.env.TEST_DATABASE_URL,SMTP_PORT:'1',PORT:'3000',SCOPED_LAB_INSTALLATIONS:[health,entryOne,entryTwo].join(','),ATTRIBUTION_ALLOWLIST:JSON.stringify({health:{[pageOne]:{[shared]:{utm_source:['ads'],utm_campaign:['one']}},[pageTwo]:{[shared]:{utm_source:['ads'],utm_campaign:['two']}},[hp]:{[origin+'/health-checkout?utm_source=offer']:{utm_source:['ads'],utm_campaign:['spring']}}},finance:{[fp]:{[origin+'/finance-checkout']:{utm_campaign:['finance']}}}}),SCOPED_LAB_ORIGIN:`http://localhost:${address.port}`};
     delete env.PROJECT_ID; delete env.ALLOWED_ORIGIN;
     child=spawn(process.execPath,['dist/apps/server.js'],{env,stdio:'ignore'});
     for (let i=0;i<100;i++) { try { if ((await fetch('http://127.0.0.1:3000/healthz')).ok) break; } catch { /* starting */ } await new Promise(r=>setTimeout(r,50)); }
@@ -75,6 +86,23 @@ test('scoped browser observations isolate projects on one origin and preserve co
       await page.goto(origin+path); assert.equal((await response).status(),204);
     }
     assert.equal((await db.query('SELECT count(*)::int n FROM incidents')).rows[0].n,0);
+    // Real scoped decisions and PostgreSQL approvals; virtual time only holds the entry deadline.
+    for (const [path,label] of [['/entry-one','one'],['/entry-two','two']]) {
+      const controlled:Page=await browser.newPage();
+      await controlled.clock.install({time:0}); await controlled.clock.pauseAt(1000);
+      let response:Promise<Response>=controlled.waitForResponse(r=>r.url().endsWith('/entry-decision'));
+      await controlled.goto(`http://localhost:${address.port}${path}?utm_source=ads&utm_campaign=${label}&token=private`);
+      assert.equal((await response).status(),200);
+      await controlled.waitForURL(shared+'&utm_campaign='+label);
+      response=controlled.waitForResponse(r=>r.url().endsWith('/entry-decision'));
+      const other=label==='one'?'two':'one';
+      await controlled.goto(`http://localhost:${address.port}${path}?utm_campaign=${other}`); await response;
+      await controlled.waitForURL(shared);
+      await controlled.close();
+    }
+    const ineligible=await fetch(`http://127.0.0.1:3000/i/${entryOne}/entry-decision`,{method:'POST',headers:{origin,'content-type':'text/plain'},body:JSON.stringify({pathname:'/entry-one',session:'a'.repeat(32),signals:{}})});
+    assert.deepEqual(await ineligible.json(),{action:'OBSERVE_ONLY'});
+
     const response=page.waitForResponse(r=>r.url().includes('/observe/fallback'));
     const browserDecision=page.waitForResponse(r=>r.url().endsWith('/entry-decision'));
     await page.goto(`http://localhost:${address.port}/outro-slug`); assert.equal((await response).status(),204); await browserDecision;
