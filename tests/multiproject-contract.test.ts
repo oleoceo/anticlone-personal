@@ -147,15 +147,19 @@ test('multiproject contract: independent entry pages, authenticated checkout and
     assert.equal((await db.query("SELECT recovered_at IS NOT NULL AS recovered FROM health_episodes WHERE project_id='finance' AND source='maintenance'")).rows[0].recovered,true);
     assert.equal((await db.query("SELECT count(*)::int n FROM health_episodes WHERE project_id='health' AND source='maintenance'")).rows[0].n,0);
     // Same gateway process accepts old scripts/webhooks and scoped installations.
-    const env={...process.env,DATABASE_URL:process.env.TEST_DATABASE_URL,PGOPTIONS:`-c search_path=${schema}`,PROJECT_ID:'health',SMTP_PORT:'1',PORT:'3000',CHECKOUT_WEBHOOK_SECRET:secretA};
+    const probe=createServer().listen(0,'127.0.0.1'); await once(probe,'listening');
+    const gatewayPort=(probe.address() as AddressInfo).port;
+    await new Promise<void>(resolve=>probe.close(()=>resolve()));
+    const gatewayBase=`http://127.0.0.1:${gatewayPort}`;
+    const env={...process.env,DATABASE_URL:process.env.TEST_DATABASE_URL,PGOPTIONS:`-c search_path=${schema}`,PROJECT_ID:'health',SMTP_PORT:'1',PORT:String(gatewayPort),CHECKOUT_WEBHOOK_SECRET:secretA};
     child=spawn(process.execPath,['dist/apps/server.js'],{env,stdio:'ignore'});
     let ready=false;
-    for(let i=0;i<100;i++) { try { if((await fetch('http://127.0.0.1:3000/healthz')).ok) {ready=true;break;} } catch { /* startup */ } await new Promise(r=>setTimeout(r,50)); }
+    for(let i=0;i<100;i++) { try { if((await fetch(gatewayBase+'/healthz')).ok) {ready=true;break;} } catch { /* startup */ } await new Promise(r=>setTimeout(r,50)); }
     assert.equal(ready,true);
-    assert.equal((await fetch('http://127.0.0.1:3000/runtime.js')).status,200);
-    assert.equal((await (await send('',secretA,100,'http://127.0.0.1:3000/checkout-webhook')).json()).duplicate,true,'legacy endpoint retains the same event identity');
-    assert.equal((await fetch('http://127.0.0.1:3000/observe',{method:'POST',headers:{origin:original,'content-type':'text/plain'},body:original})).status,204);
-    assert.equal((await fetch('http://127.0.0.1:3000/i/'+ids[2]+'/observe',{method:'POST',headers:{origin:original,'content-type':'text/plain'},body:JSON.stringify({origin:original,pathname:'/lp2',signals:{}})})).status,204);
+    assert.equal((await fetch(gatewayBase+'/runtime.js')).status,200);
+    assert.equal((await (await send('',secretA,100,gatewayBase+'/checkout-webhook')).json()).duplicate,true,'legacy endpoint retains the same event identity');
+    assert.equal((await fetch(gatewayBase+'/observe',{method:'POST',headers:{origin:original,'content-type':'text/plain'},body:original})).status,204);
+    assert.equal((await fetch(gatewayBase+'/i/'+ids[2]+'/observe',{method:'POST',headers:{origin:original,'content-type':'text/plain'},body:JSON.stringify({origin:original,pathname:'/lp2',signals:{}})})).status,204);
     const signal=await managePages(db,{action:'inspect',project:'finance',page:pages[2]}) as {signals:{source:string}[]};
     assert.equal(signal.signals[0].source,'core');
     for(const project of ['health','finance']) await db.query("INSERT INTO canary_observations(project_id,host,day,source,observed_at) VALUES($1,'coexist',current_date-8,'html_canary',now()-interval '8 days')",[project]);
@@ -166,10 +170,10 @@ test('multiproject contract: independent entry pages, authenticated checkout and
     const scopedEnv:{[key:string]:string|undefined}={...env}; delete scopedEnv.PROJECT_ID;
     child=spawn(process.execPath,['dist/apps/server.js'],{env:scopedEnv,stdio:'ignore'});
     ready=false;
-    for(let i=0;i<100;i++) { try { if((await fetch('http://127.0.0.1:3000/healthz')).ok) {ready=true;break;} } catch { /* startup */ } await new Promise(r=>setTimeout(r,50)); }
+    for(let i=0;i<100;i++) { try { if((await fetch(gatewayBase+'/healthz')).ok) {ready=true;break;} } catch { /* startup */ } await new Promise(r=>setTimeout(r,50)); }
     assert.equal(ready,true);
-    assert.equal((await fetch('http://127.0.0.1:3000/observe',{method:'POST',headers:{origin:original,'content-type':'text/plain'},body:original})).status,404);
-    assert.equal((await fetch('http://127.0.0.1:3000/i/'+ids[2]+'/observe',{method:'POST',headers:{origin:original,'content-type':'text/plain'},body:JSON.stringify({origin:original,pathname:'/lp2',signals:{}})})).status,204);
+    assert.equal((await fetch(gatewayBase+'/observe',{method:'POST',headers:{origin:original,'content-type':'text/plain'},body:original})).status,404);
+    assert.equal((await fetch(gatewayBase+'/i/'+ids[2]+'/observe',{method:'POST',headers:{origin:original,'content-type':'text/plain'},body:JSON.stringify({origin:original,pathname:'/lp2',signals:{}})})).status,204);
     assert.equal((await db.query('SELECT installation_id FROM protected_pages WHERE id=$1',[pages[2]])).rows[0].installation_id,ids[2]);
     assert.equal((await checkoutMetrics(db,'health')).currencies[0].reported_amount_minor,'100');
     assert.equal((await checkoutMetrics(db,'finance')).currencies[0].reported_amount_minor,'200');

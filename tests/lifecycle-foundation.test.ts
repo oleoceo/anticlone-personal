@@ -41,6 +41,23 @@ test('lifecycle backfill and gates preserve project and page isolation', async (
       await assert.rejects(writer.query("UPDATE projects SET lifecycle_state='PAUSED' WHERE id='health'"), {code:'55P03'});
       await writer.query('ROLLBACK');
       await reader.query('COMMIT');
+      await db.query('CREATE TABLE work_log(project_id text NOT NULL)');
+      await reader.query('BEGIN');
+      assert.equal(await operationallyEligible(reader,'health',a,true),true);
+      await reader.query("INSERT INTO work_log VALUES('health')");
+      const writerPid=(await writer.query('SELECT pg_backend_pid() AS pid')).rows[0].pid;
+      const blocked=writer.query("UPDATE projects SET lifecycle_state='PAUSED' WHERE id='health'");
+      let waiting=false;
+      for (let n=0;n<1000 && !waiting;n++) {
+        const state=await db.query('SELECT cardinality(pg_blocking_pids($1))>0 AS blocked',[writerPid]);
+        waiting=state.rows[0].blocked;
+      }
+      assert.equal(waiting,true,'pause waits for the operational transaction');
+      assert.equal(await operationallyEligible(db,'finance',c),true);
+      await reader.query('COMMIT');
+      await blocked;
+      assert.equal(await operationallyEligible(db,'health',a),false);
+      assert.equal((await db.query("SELECT count(*)::int n FROM work_log WHERE project_id='health'")).rows[0].n,1);
     } finally { reader.release(); writer.release(); }
     await db.query("UPDATE projects SET lifecycle_state='PAUSED' WHERE id='health'");
     assert.equal(await operationallyEligible(db,'health',a),false);
