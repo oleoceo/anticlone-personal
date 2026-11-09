@@ -27,6 +27,9 @@ test('GS06 integration: persisted policy, controlled LOW and original', {timeout
   fixture.listen(0,'127.0.0.1'); await once(fixture,'listening'); const address=fixture.address(); if (!address || typeof address==='string') throw Error('address');
   const original=`http://127.0.0.1:${address.port}`, clone=`http://localhost:${address.port}`;
   await db.query('INSERT INTO projects(id,name,origin) VALUES($1,$1,$2)',[project,original]);
+  await db.query("ALTER TABLE projects ADD COLUMN lifecycle_state text NOT NULL DEFAULT 'ACTIVE'");
+  await db.query("CREATE TABLE protected_pages(id uuid PRIMARY KEY,project_id text NOT NULL,enabled boolean NOT NULL,lifecycle_state text NOT NULL)");
+  await db.query("INSERT INTO protected_pages VALUES(gen_random_uuid(),$1,true,'ACTIVE')",[project]);
   await db.query('INSERT INTO page_redirect_policies VALUES($1,1,true,$2)',[project,original+'/approved']);
   const start = (risk = 'LOW') => spawn(process.execPath,['dist/apps/server.js'],{env:{...process.env,DATABASE_URL:process.env.TEST_DATABASE_URL,PGOPTIONS:options,PROJECT_ID:project,SMTP_PORT:'25252',PORT:'3000',LAB_CONTROLLED_ORIGIN:clone,LAB_CONTROLLED_RISK:risk},stdio:['ignore','ignore','inherit']});
   let app=start();
@@ -39,6 +42,13 @@ test('GS06 integration: persisted policy, controlled LOW and original', {timeout
     app.kill('SIGTERM'); await once(app,'exit'); app=start();
     let restarted=false; for(let n=0;n<100;n++){try { if((await fetch('http://127.0.0.1:3000/runtime.js')).ok){restarted=true;break;} }catch {} await new Promise(r=>setTimeout(r,100));} assert.ok(restarted);
     assert.equal((await decision()).action,'PAGE_REDIRECT');
+    await db.query("UPDATE projects SET lifecycle_state='PAUSED' WHERE id=$1",[project]);
+    assert.equal((await decision()).action,'OBSERVE_ONLY');
+    await db.query("UPDATE projects SET lifecycle_state='ACTIVE' WHERE id=$1",[project]);
+    assert.equal((await decision()).action,'PAGE_REDIRECT');
+    await db.query("UPDATE protected_pages SET lifecycle_state='PAUSED' WHERE project_id=$1",[project]);
+    assert.equal((await decision()).action,'OBSERVE_ONLY');
+    await db.query("UPDATE protected_pages SET lifecycle_state='ACTIVE' WHERE project_id=$1",[project]);
     await db.query("CREATE FUNCTION fail_timeline_gs06() RETURNS trigger LANGUAGE plpgsql AS $failure$ BEGIN IF NEW.event_type='risk_assessment' THEN RAISE EXCEPTION 'test'; END IF; RETURN NEW; END; $failure$");
     await db.query('CREATE TRIGGER fail_timeline_gs06 BEFORE INSERT ON investigation_timeline FOR EACH ROW EXECUTE FUNCTION fail_timeline_gs06()');
     await db.query("DELETE FROM investigation_timeline WHERE project_id=$1 AND event_type='risk_assessment'",[project]);

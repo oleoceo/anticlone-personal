@@ -21,6 +21,7 @@ import { optionalSchemas } from './optional-schema.js';
 import { evaluateInactivity, deliverHealth, reconcileOperationalEpisode, recoverOperationalSource, maintainHealthHistory, invalidateInactivity, recordInstallationActivity } from './health-alerts.js';
 import { OperationalObservations } from './operational-observations.js';
 import { scopedGateway } from './scoped-gateway.js';
+import { legacyOperationallyEligible } from './operational-eligibility.js';
 const boundary = gatewayBoundary(process.env);
 const connectionString = process.env.DATABASE_URL, project = process.env.PROJECT_ID;
 const smtpPort = Number(process.env.SMTP_PORT), port = Number(process.env.PORT ?? 3000);
@@ -185,6 +186,10 @@ const server = http.createServer((req, res) => {
     let session: unknown; let trafficClass: string; let evidence: RiskEvidence; let pathname: string|undefined;
     try { const input: unknown = JSON.parse(body); if (!input || typeof input !== 'object' || Array.isArray(input) || !['session,signals','pathname,session,signals'].includes(Object.keys(input).sort().join(','))) throw Error('invalid'); const fields = input as Record<string, unknown>; if (fields.pathname !== undefined && (typeof fields.pathname !== 'string' || !/^\/[a-zA-Z0-9/_-]{0,200}$/.test(fields.pathname))) throw Error('invalid pathname'); pathname=fields.pathname as string|undefined; session = fields.session; const traffic = classifyTraffic(fields.signals, origin); trafficClass = traffic.trafficClass; evidence = {source:'browser',reliability:'uncorroborated',trafficClass,kind:traffic.evidence}; } catch { res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify({action:'OBSERVE_ONLY'})); return; }
     void (async () => {
+      const gate=await pool.connect();
+      try {
+      await gate.query('BEGIN');
+      if (!await legacyOperationallyEligible(gate,activeProject)) return {action:'OBSERVE_ONLY'};
       const controlled = controlledOrigin === origin && origin !== normalizedOrigin;
       const assessment = safeEvaluateRisk(controlled && process.env.LAB_CONTROLLED_RISK === 'LOW', fixture => {
         // Test-only negative fixtures can only suppress mitigation.
@@ -196,7 +201,7 @@ const server = http.createServer((req, res) => {
       await recordRisk(pool, activeProject, new URL(origin).hostname, assessment, evidence);
       if (!stealthEligible(assessment, mode.pilot)) return {action:'OBSERVE_ONLY'};
       // Entry selection has no authority over a later interaction.
-      if (refresh) return ctaDecision(pool, activeProject, normalizedOrigin, origin, controlledOrigin, assessment.level, session, trafficClass, pathname);
+      if (refresh) return await ctaDecision(pool, activeProject, normalizedOrigin, origin, controlledOrigin, assessment.level, session, trafficClass, pathname);
       const result = await pool.query('SELECT v.version,v.enabled,v.approved_destination,v.allocation FROM active_protection_policies a JOIN protection_policy_versions v ON v.project_id=a.project_id AND v.version=a.version WHERE a.project_id=$1 AND v.stealth=true', [activeProject]);
       const entryPolicy = result.rows[0];
       // Invalid enabled entry policy is an evaluation failure, not permission to continue.
@@ -207,7 +212,8 @@ const server = http.createServer((req, res) => {
       }
       const entry = entryDecision(entryPolicy, normalizedOrigin, origin, controlledOrigin, assessment.level, session, trafficClass);
       if (entry.action === 'PAGE_REDIRECT') return entry;
-      return ctaDecision(pool, activeProject, normalizedOrigin, origin, controlledOrigin, assessment.level, session, trafficClass, pathname);
+      return await ctaDecision(pool, activeProject, normalizedOrigin, origin, controlledOrigin, assessment.level, session, trafficClass, pathname);
+      } finally { try { await gate.query('ROLLBACK'); gate.release(); } catch { gate.release(true); } }
     })().then(decision => res.writeHead(200, {'Content-Type': 'application/json'}).end(JSON.stringify(decision)))
       .catch(() => res.writeHead(200, {'Content-Type': 'application/json'}).end(JSON.stringify({action:'OBSERVE_ONLY'}))); }); return;
   }

@@ -9,3 +9,11 @@ export async function operationallyEligible(db: Pool | PoolClient, project: stri
   const pageRow = await db.query(`SELECT lifecycle_state,enabled FROM protected_pages WHERE project_id=$1 AND id=$2${lock ? ' FOR SHARE' : ''}`, [project, page]);
   return pageRow.rows[0]?.lifecycle_state === 'ACTIVE' && pageRow.rows[0]?.enabled === true;
 }
+
+// Legacy requests carry no page identity. Admit them only when exactly one
+// page exists, and lock it so a page pause serializes with the write.
+export async function legacyOperationallyEligible(db: PoolClient, project: string): Promise<boolean> {
+  if (!await operationallyEligible(db,project,undefined,true)) return false;
+  const pages=await db.query('SELECT id,lifecycle_state,enabled FROM protected_pages WHERE project_id=$1 FOR SHARE',[project]);
+  return pages.rowCount===1 && pages.rows[0].enabled && pages.rows[0].lifecycle_state==='ACTIVE';
+}

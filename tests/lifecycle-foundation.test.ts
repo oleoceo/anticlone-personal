@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
-import { operationallyEligible } from '../apps/operational-eligibility.js';
+import { legacyOperationallyEligible, operationallyEligible } from '../apps/operational-eligibility.js';
 
 test('lifecycle backfill and gates preserve project and page isolation', async () => {
   assert.ok(process.env.TEST_DATABASE_URL);
@@ -20,6 +20,17 @@ test('lifecycle backfill and gates preserve project and page isolation', async (
     await db.query(await readFile('infra/043_lifecycle.sql','utf8'));
     assert.equal(await operationallyEligible(db,'health',a),true);
     assert.equal(await operationallyEligible(db,'health',b),false);
+    const legacy=await db.connect();
+    try {
+      await legacy.query('BEGIN');
+      assert.equal(await legacyOperationallyEligible(legacy,'health'),false);
+      await legacy.query('ROLLBACK');
+      await db.query('DELETE FROM protected_pages WHERE id=$1',[b]);
+      await legacy.query('BEGIN');
+      assert.equal(await legacyOperationallyEligible(legacy,'health'),true);
+      await legacy.query('ROLLBACK');
+      await db.query("INSERT INTO protected_pages(id,project_id,enabled,lifecycle_state) VALUES($1,'health',false,'PAUSED')",[b]);
+    } finally { legacy.release(); }
     assert.equal((await db.query('SELECT lifecycle_state FROM protected_pages WHERE id=$1',[b])).rows[0].lifecycle_state,'PAUSED');
     const reader=await db.connect(), writer=await db.connect();
     try {
