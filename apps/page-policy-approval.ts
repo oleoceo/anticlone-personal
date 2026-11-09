@@ -25,5 +25,22 @@ export async function approvalConfiguration(client: PoolClient, project: string,
     for (const row of selected) approvedDestination(row.url,original.origin);
   }
   // Binding is recorded independently; do not let creating it change the snapshot.
-  return {urls:urls.rows,entry:entries.rows,ctas:policies.rows.map(({bound_page: _bound, ...row})=>row),points:points.rows};
+  return {urls:urls.rows,entry:entries.rows,ctas:policies.rows.map(row=>({version:row.version,enabled:row.enabled,surface:row.surface,pathname:row.pathname,allocation:row.allocation})),points:points.rows};
+}
+
+export async function currentApproval(client: PoolClient, project: string, page: string) {
+  const result=await client.query(`SELECT a.id,a.configuration FROM page_policy_approvals a JOIN protected_pages p ON p.id=a.page_id AND p.project_id=a.project_id AND p.url_generation=a.url_generation AND p.config_generation=a.config_generation WHERE a.project_id=$1 AND a.page_id=$2 AND p.enabled AND NOT p.url_review_required ORDER BY a.id DESC LIMIT 1`,[project,page]);
+  if (!result.rowCount) return null;
+  const approval=result.rows[0];
+  const entry=await client.query('SELECT version FROM page_policy_approval_entries WHERE approval_id=$1 AND project_id=$2',[approval.id,project]);
+  const ctas=await client.query('SELECT surface,version FROM page_policy_approval_ctas WHERE approval_id=$1 AND project_id=$2 ORDER BY surface',[approval.id,project]);
+  const entryVersion=entry.rows[0]?.version ?? null;
+  const bindings=await client.query('SELECT version FROM page_entry_policy_bindings WHERE project_id=$1 AND page_id=$2',[project,page]);
+  const ctaBindings=await client.query('SELECT surface,version FROM page_cta_policy_bindings WHERE project_id=$1 AND page_id=$2 ORDER BY surface',[project,page]);
+  if ((bindings.rows[0]?.version ?? null)!==entryVersion || JSON.stringify(ctaBindings.rows)!==JSON.stringify(ctas.rows)) return null;
+  try {
+    const configuration=await approvalConfiguration(client,project,page,entryVersion,ctas.rows.map(row=>row.version));
+    const equal=await client.query('SELECT $1::jsonb = $2::jsonb AS equal',[JSON.stringify(approval.configuration),JSON.stringify(configuration)]);
+    return equal.rows[0].equal ? {entryVersion} : null;
+  } catch { return null; }
 }

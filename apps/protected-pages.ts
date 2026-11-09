@@ -17,25 +17,27 @@ export async function managePages(db: Pool, body: unknown) {
   const data=body as Record<string,unknown>;
   if (typeof data.project!=='string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(data.project) || typeof data.action!=='string') throw new TypeError('invalid request');
   const project=data.project, action=data.action;
-  if (action==='approve' && Object.keys(data).sort().join(',')==='action,ctaVersions,entryVersion,generation,page,project' && typeof data.page==='string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(data.page) && typeof data.generation==='string' && /^(0|[1-9][0-9]{0,18})$/.test(data.generation) && BigInt(data.generation)<=9223372036854775807n && (data.entryVersion===null || (Number.isSafeInteger(data.entryVersion) && (data.entryVersion as number)>0)) && Array.isArray(data.ctaVersions) && data.ctaVersions.length<=100 && data.ctaVersions.every(v=>Number.isSafeInteger(v) && v>0) && new Set(data.ctaVersions).size===data.ctaVersions.length && (data.entryVersion!==null || data.ctaVersions.length>0)) {
+  if (action==='approve' && Object.keys(data).sort().join(',')==='action,configGeneration,ctaVersions,entryVersion,generation,page,project' && typeof data.page==='string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(data.page) && typeof data.generation==='string' && /^(0|[1-9][0-9]{0,18})$/.test(data.generation) && BigInt(data.generation)<=9223372036854775807n && typeof data.configGeneration==='string' && /^(0|[1-9][0-9]{0,18})$/.test(data.configGeneration) && BigInt(data.configGeneration)<=9223372036854775807n && (data.entryVersion===null || (Number.isSafeInteger(data.entryVersion) && (data.entryVersion as number)>0)) && Array.isArray(data.ctaVersions) && data.ctaVersions.length<=100 && data.ctaVersions.every(v=>Number.isSafeInteger(v) && v>0) && new Set(data.ctaVersions).size===data.ctaVersions.length && (data.entryVersion!==null || data.ctaVersions.length>0)) {
     const client=await db.connect();
     try {
       await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
       await client.query('LOCK TABLE projects, protected_pages, protected_page_urls, active_protection_policies, active_cta_surface_policies, page_entry_policy_bindings, page_cta_policy_bindings, cta_points, cta_mappings, cta_destinations, cta_commercial_references IN SHARE ROW EXCLUSIVE MODE');
-      const page=await client.query('SELECT url_generation,enabled FROM protected_pages WHERE id=$1 AND project_id=$2',[data.page,project]);
-      if (!page.rowCount || !page.rows[0].enabled || page.rows[0].url_generation!==data.generation) throw new PageConflict();
+      const page=await client.query('SELECT url_generation,config_generation,enabled FROM protected_pages WHERE id=$1 AND project_id=$2',[data.page,project]);
+      if (!page.rowCount || !page.rows[0].enabled || page.rows[0].url_generation!==data.generation || page.rows[0].config_generation!==data.configGeneration) throw new PageConflict();
       let configuration;
       try { configuration=await approvalConfiguration(client,project,data.page,data.entryVersion as number|null,data.ctaVersions as number[]); } catch { throw new PageConflict(); }
       await client.query('DELETE FROM page_entry_policy_bindings WHERE project_id=$1 AND page_id=$2',[project,data.page]);
       await client.query('DELETE FROM page_cta_policy_bindings WHERE project_id=$1 AND page_id=$2',[project,data.page]);
-      const approval=await client.query('INSERT INTO page_policy_approvals(project_id,page_id,url_generation,configuration) VALUES($1,$2,$3,$4) RETURNING id',[project,data.page,data.generation,JSON.stringify(configuration)]);
-      const id=approval.rows[0].id;
       if (data.entryVersion!==null) {
         await client.query('INSERT INTO page_entry_policy_bindings(project_id,page_id,version) VALUES($1,$2,$3)',[project,data.page,data.entryVersion]);
-        await client.query('INSERT INTO page_policy_approval_entries(approval_id,project_id,version) VALUES($1,$2,$3)',[id,project,data.entryVersion]);
       }
       for (const policy of configuration.ctas) {
         await client.query('INSERT INTO page_cta_policy_bindings(project_id,page_id,surface,version) VALUES($1,$2,$3,$4)',[project,data.page,policy.surface,policy.version]);
+      }
+      const approval=await client.query('INSERT INTO page_policy_approvals(project_id,page_id,url_generation,config_generation,configuration) SELECT project_id,id,url_generation,config_generation,$3 FROM protected_pages WHERE id=$1 AND project_id=$2 RETURNING id',[data.page,project,JSON.stringify(configuration)]);
+      const id=approval.rows[0].id;
+      if (data.entryVersion!==null) await client.query('INSERT INTO page_policy_approval_entries(approval_id,project_id,version) VALUES($1,$2,$3)',[id,project,data.entryVersion]);
+      for (const policy of configuration.ctas) {
         await client.query('INSERT INTO page_policy_approval_ctas(approval_id,project_id,surface,version) VALUES($1,$2,$3,$4)',[id,project,policy.surface,policy.version]);
       }
       await client.query('UPDATE protected_pages SET url_review_required=false WHERE id=$1 AND project_id=$2',[data.page,project]);
@@ -46,7 +48,7 @@ export async function managePages(db: Pool, body: unknown) {
     const client=await db.connect();
     try {
       await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
-      const page=await client.query('SELECT id,project_id,installation_id,name,enabled,url_generation,url_review_required FROM protected_pages WHERE id=$1 AND project_id=$2',[data.page,project]);
+      const page=await client.query('SELECT id,project_id,installation_id,name,enabled,url_generation,config_generation,url_review_required FROM protected_pages WHERE id=$1 AND project_id=$2',[data.page,project]);
       if (!page.rowCount) throw new TypeError('unknown page');
       const urls=await client.query('SELECT origin,pathname FROM protected_page_urls WHERE page_id=$1 ORDER BY origin,pathname',[data.page]);
       const entries=await client.query(`SELECT v.version,v.enabled,v.approved_destination,v.stealth,v.allocation,(a.version=v.version) AS active,(b.version=v.version) AS bound

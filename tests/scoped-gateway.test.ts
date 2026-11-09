@@ -7,6 +7,7 @@ import { once } from 'node:events';
 import { spawn } from 'node:child_process';
 import { Pool } from 'pg';
 import { chromium } from 'playwright';
+import { managePages, PageConflict } from '../apps/protected-pages.js';
 
 test('scoped browser observations isolate projects on one origin and preserve copied installation', {timeout:60000}, async () => {
   assert.ok(process.env.TEST_DATABASE_URL);
@@ -30,6 +31,7 @@ test('scoped browser observations isolate projects on one origin and preserve co
     await db.query(await readFile('infra/037_protected_pages.sql','utf8'));
     await db.query(await readFile('infra/038_page_url_review.sql','utf8'));
     await db.query(await readFile('infra/039_page_policy_bindings.sql','utf8'));
+    await db.query(await readFile('infra/040_page_policy_approvals.sql','utf8'));
     await db.query("INSERT INTO projects VALUES ('health','Health',$1),('finance','Finance',$1)",[origin]);
     const hp=randomUUID(), fp=randomUUID();
     await db.query("INSERT INTO protected_pages(id,project_id,installation_id,name) VALUES ($1,'health',$2,'Health'),($3,'finance',$4,'Finance')",[hp,health,fp,finance]);
@@ -44,8 +46,7 @@ test('scoped browser observations isolate projects on one origin and preserve co
       await db.query("INSERT INTO cta_destinations(project_id,offer,id,url) VALUES($1,'offer',$2,$3)",[project,destination,origin+'/'+project+'-checkout']);
       await db.query("INSERT INTO cta_mappings VALUES($1,$2,'offer',$3)",[project,point,destination]);
     }
-    // Synthetic fixture only; administrative review is implemented separately.
-    await db.query('UPDATE protected_pages SET url_review_required=false WHERE id=ANY($1::uuid[])',[[hp,fp]]);
+    for (const [project,page] of [['health',hp],['finance',fp]]) { const state=await db.query('SELECT config_generation FROM protected_pages WHERE id=$1',[page]); await managePages(db,{action:'approve',project,page,generation:'1',configGeneration:state.rows[0].config_generation,entryVersion:null,ctaVersions:[1]}); }
     const env: NodeJS.ProcessEnv={...process.env,PGOPTIONS:options,DATABASE_URL:process.env.TEST_DATABASE_URL,SMTP_PORT:'1',PORT:'3000',SCOPED_LAB_INSTALLATION:health,SCOPED_LAB_ORIGIN:`http://localhost:${address.port}`};
     delete env.PROJECT_ID; delete env.ALLOWED_ORIGIN;
     child=spawn(process.execPath,['dist/apps/server.js'],{env,stdio:'ignore'});
@@ -76,11 +77,13 @@ test('scoped browser observations isolate projects on one origin and preserve co
     await db.query("DELETE FROM page_cta_policy_bindings WHERE project_id='health'");
     assert.deepEqual(await (await decide(health,`http://localhost:${address.port}`)).json(),{action:'OBSERVE_ONLY'});
     await db.query("INSERT INTO page_cta_policy_bindings VALUES('health',$1,'main',1)",[hp]);
+    assert.equal((await (await decide(health,`http://localhost:${address.port}`)).json() as {action:string}).action,'OBSERVE_ONLY');
     const generation=await db.query('SELECT url_generation FROM protected_pages WHERE id=$1',[hp]);
     await db.query("INSERT INTO protected_page_urls(page_id,origin,pathname) VALUES($1,'https://new.test','/oferta')",[hp]);
     const changed=await db.query('SELECT url_generation,url_review_required FROM protected_pages WHERE id=$1',[hp]);
     assert.equal(BigInt(changed.rows[0].url_generation),BigInt(generation.rows[0].url_generation)+1n); assert.equal(changed.rows[0].url_review_required,true);
     assert.deepEqual(await (await decide(health,`http://localhost:${address.port}`)).json(),{action:'OBSERVE_ONLY'});
+    await assert.rejects(managePages(db,{action:'approve',project:'health',page:hp,generation:generation.rows[0].url_generation,configGeneration:'0',entryVersion:null,ctaVersions:[1]}),PageConflict);
     await assert.rejects(db.query("INSERT INTO page_cta_policy_bindings VALUES('finance',$1,'other',1)",[hp]),{code:'23503'});
     assert.equal((await fetch(`http://127.0.0.1:3000/i/${health}/observe`,{method:'POST',headers:{'content-type':'text/plain',origin},body:JSON.stringify({origin,pathname:'/saude',signals:{},project_id:'finance'})})).status,400);
   } finally {
