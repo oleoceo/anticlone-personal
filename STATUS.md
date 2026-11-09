@@ -1,4 +1,5 @@
 # STATUS — AntiClone Personal
+- **F01 multiprojeto em andamento:** aprovação no painel e retomada após migração de URL passaram com PostgreSQL/Chromium no SHA c66097b (CI focada). Revisão independente identificou riscos corrigidos; regressão de compatibilidade em CI anterior corrigida e validação do SHA final pendente no PR #59. LOW permanece laboratorial; sem merge ou deploy.
 - **F19/F20/F21/F22/F25/F41/F43 PARCIAIS:** multiplas superficies por projeto, captura local revisavel e atualizacao SPA em laboratorio; migration aditiva 036 preserva politica anterior. PostgreSQL/Chromium: sete pontos, colisoes, drift isolado e resposta atrasada em tests/multiple-cta-surfaces.test.ts; painel em tests/protection-admin-ui.test.ts. Formularios D07, botoes exclusivamente JavaScript e sites que bloqueiam iframe continuam sem suporte. Revisao e CI do SHA final no PR.
 - **F38/GS16 PARCIAL — Frente C:** backup snapshot PostgreSQL e restore transacional em banco novo isolado, integridade SHA-256/linhas, migrations 001–032/033/035 e dados sintéticos, inclusive tentativas SMTP, TOTP e recibos de checkout. Focados PostgreSQL16/Chromium recovery+checkout 2/2 e lint/typecheck/build/9 testes documentais passaram; reinícios reais gateway/admin em PILOT_OBSERVE preservados. Revisão independente /root do core 297e6e7 aprovada; integração, revisão e CI do SHA final no PR #55 antes de Ready. Offsite/criptografia, arquivos operacionais e rollback VPS pendentes; sem deploy ou exclusão de bancos. Operação: docs/POSTGRES-RECOVERY.md.
 - **Frente B / F17/F20/F21/F23/F24/F43 PARCIAIS:** painel existente publica políticas independentes por ação/classe, destinos aprovados por oferta e mapeamento/revisão de CTA; página publica snapshot exato atomicamente. Destinos externos exigem HTTPS e allowlist privada de URLs exatas; LOW continua apenas em laboratório.
@@ -100,3 +101,12 @@ PR #52 - correcao P2 de isolamento da timeline (F11 permanece PARCIAL):
 - tests/timeline-failure.test.ts forca AFTER INSERT e falhas principais: incidente, observacoes, alerta, auditoria e DNS preservados; recuperacao e rollback integral verificados.
 - Testes focados PostgreSQL: 2/2; limites, retencao e isolamento cobertos pela suite investigation-timeline existente.
 - Regressao completa, revisao detached e CI HTTPS do SHA corrigido: evidencias finais no PR; sem merge, auto-merge ou deploy.
+
+PR #59 - contrato multiprojeto (laboratorio):
+- Manutencao/retencao/saude/alertas/DNS por projeto, falhas e backoff isolados; gateway legado e scoped coexistem.
+- Checkout roteado por configuracao privada e HMAC distinto (inclusive chaves efetivamente equivalentes recusadas), idempotencia preservada.
+- PAGE_REDIRECT ativo pelo vinculo Page ID; duas LPs independentes, versoes historicas e aprovacao por geracao preservadas.
+- Local: regressao 88 PASS/0 FAIL/1 HTTPS reservado a CI; 6/6 focados PostgreSQL/Chromium, incluindo GS16 com paginas/aprovacoes/sinais e regressao PR58.
+- Revisao independente /root/final_review e CI HTTPS do SHA final: parecer/resultados vinculados ao SHA na descricao do PR #59.
+- URLs duplas OBSERVE_ONLY; sinais agregados nao verificam nova URL: conferir script/requisicoes no navegador, remover antiga e reaprovar pelo painel.
+- Sem merge/deploy, mitigacao operacional ou ciclo pausa/arquivo/exclusao; transicao e limites em docs/MULTIPROJECT-TRANSITION.md.

@@ -16,6 +16,8 @@ import { createAdminServer } from '../apps/admin-auth.js';
 import { classifyIncident } from '../apps/incident-triage.js';
 import { observe } from '../apps/detection.js';
 import { recordCheckout } from '../apps/checkout-webhook.js';
+import { managePages } from '../apps/protected-pages.js';
+import { currentApproval } from '../apps/page-policy-approval.js';
 
 // Optional local Windows adapter: executes the same PostgreSQL binaries in the
 // existing isolated lab container. CI exercises the default native tool runner.
@@ -66,6 +68,10 @@ test('GS16: real backup, isolated restore, complete data integrity and restarted
     await classifyIncident(source,{project:'recovery',host:'copy.test',incident_id:incident,version:'0',expected:'unverified',status:'investigating',justification:'Synthetic recovery exercise'});
     await source.query("INSERT INTO protection_policy_versions(project_id,version,enabled,approved_destination,stealth,allocation) VALUES('recovery',1,true,'https://owner.test/approved',true,'{\"PAID_ATTRIBUTED\":100,\"ORGANIC\":50,\"REFERRAL\":0,\"DIRECT_UNKNOWN\":0}')");
     await source.query("INSERT INTO active_protection_policies VALUES('recovery',1)");
+    const protectedPage=await managePages(source,{action:'create',project:'recovery',name:'Recovery LP',url:'https://owner.test/landing'}) as {page:string;installation:string};
+    const pageState=await source.query('SELECT url_generation,config_generation FROM protected_pages WHERE id=$1',[protectedPage.page]);
+    await managePages(source,{action:'approve',project:'recovery',page:protectedPage.page,generation:pageState.rows[0].url_generation,configGeneration:pageState.rows[0].config_generation,entryVersion:1,ctaVersions:[]});
+    await source.query("INSERT INTO page_installation_signals(project_id,page_id,source) VALUES('recovery',$1,'core')",[protectedPage.page]);
     await source.query("UPDATE notification_settings SET version=1,provider='smtp',host='smtp.test',port=587,tls_mode='starttls',sender='owner@example.test',recipient='owner@example.test'");
     await source.query("INSERT INTO notification_settings_audit(version,action,changed_fields) VALUES(1,'save',ARRAY['provider'])");
     await source.query('UPDATE alert_outbox SET attempts=1,next_attempt=now()+interval \'1 hour\'');
@@ -79,6 +85,7 @@ test('GS16: real backup, isolated restore, complete data integrity and restarted
     assert.ok(manifest.tables.some(table=>table.name==='incident_status_audit'&&table.rows===1));
     assert.ok(manifest.tables.some(table=>table.name==='admin_totp_replay'&&table.rows===1));
     for(const name of ['clone_delivery_attempts','checkout_sales','checkout_receipts']) assert.ok(manifest.tables.some(table=>table.name===name&&table.rows===1));
+    for(const name of ['protected_pages','protected_page_urls','page_entry_policy_bindings','page_policy_approvals','page_policy_approval_entries','page_installation_signals']) assert.ok(manifest.tables.some(table=>table.name===name&&table.rows===1));
     await assert.rejects(backup(sourceUrl,directory,tool));
     await assert.rejects(restore(sourceUrl,directory,sourceName,tool),/isolated/);
     await assert.rejects(restore(targetUrl,directory,'wrong-confirmation',tool),/isolated/);
@@ -94,6 +101,10 @@ test('GS16: real backup, isolated restore, complete data integrity and restarted
     const restored=new Pool({connectionString:targetUrl});
     try {
       assert.equal((await restored.query('SELECT count(*)::int n FROM projects')).rows[0].n,2);
+      assert.equal((await restored.query('SELECT installation_id FROM protected_pages WHERE id=$1',[protectedPage.page])).rows[0].installation_id,protectedPage.installation);
+      const approvalClient=await restored.connect();
+      try { assert.deepEqual(await currentApproval(approvalClient,'recovery',protectedPage.page),{entryVersion:1}); } finally { approvalClient.release(); }
+      assert.deepEqual((await restored.query('SELECT project_id,page_id,source FROM page_installation_signals')).rows,[{project_id:'recovery',page_id:protectedPage.page,source:'core'}]);
       assert.equal((await restored.query('SELECT status FROM incidents')).rows[0].status,'investigating');
       assert.equal((await restored.query('SELECT attempts FROM alert_outbox')).rows[0].attempts,1);
       assert.deepEqual((await restored.query('SELECT attempt,transport,outcome FROM clone_delivery_attempts')).rows,[{attempt:1,transport:'SMTP_LOCAL',outcome:'FAILED'}]);

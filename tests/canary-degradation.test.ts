@@ -139,9 +139,10 @@ test('F44 canaries through real gateway and browser: bounded temporal claims rem
     await db.query("INSERT INTO degradation_events(project_id,host,source,bucket,observed_at,origin) VALUES('lab','expired','html_canary',now()-interval '2 days',now()-interval '2 days',$1),('other','expired','html_canary',now()-interval '2 days',now()-interval '2 days',$1)",[origin]);
     await db.query("INSERT INTO degradation_audit(project_id,host,state,window_start,observed_at) VALUES('lab','expired','UNKNOWN',now()-interval '8 days',now()-interval '8 days'),('other','expired','UNKNOWN',now()-interval '8 days',now()-interval '8 days')");
     await wait(async()=> (await db.query("SELECT count(*)::int n FROM degradation_events WHERE project_id='lab' AND host='expired'")).rows[0].n===0);
-    assert.equal((await db.query("SELECT count(*)::int n FROM degradation_events WHERE project_id='other' AND host='expired'")).rows[0].n,1);
+    await wait(async()=> (await db.query("SELECT count(*)::int n FROM degradation_events WHERE project_id='other' AND host='expired'")).rows[0].n===0);
+    assert.equal((await db.query("SELECT count(*)::int n FROM degradation_events WHERE project_id='other' AND host='expired'")).rows[0].n,0);
     assert.equal((await db.query("SELECT count(*)::int n FROM degradation_audit WHERE project_id='lab' AND host='expired'")).rows[0].n,0);
-    assert.equal((await db.query("SELECT count(*)::int n FROM degradation_audit WHERE project_id='other' AND host='expired'")).rows[0].n,1);
+    assert.equal((await db.query("SELECT count(*)::int n FROM degradation_audit WHERE project_id='other' AND host='expired'")).rows[0].n,0);
     // Legacy core rows have no origin and cannot establish a canary baseline.
     await db.query("DELETE FROM degradation_events WHERE project_id='lab'");
     await db.query(`INSERT INTO degradation_events(project_id,host,source,bucket,observed_at,origin)
@@ -170,7 +171,7 @@ test('F44 canaries through real gateway and browser: bounded temporal claims rem
     assert.equal(await state(),'UNKNOWN');
     await db.query("UPDATE degradation_collection_gaps SET last_dropped_at=now()-interval '31 minutes' WHERE project_id='lab'");
     assert.equal(await state(),'POSSIBLE_DEGRADATION');
-    assert.equal((await db.query("SELECT count(*)::int n FROM degradation_events WHERE project_id='other'")).rows[0].n,1);
+    assert.equal((await db.query("SELECT count(*)::int n FROM degradation_events WHERE project_id='other'")).rows[0].n,0);
     // A failure before the temporal journal is reached also invalidates absence.
     await db.query('ALTER TABLE incidents RENAME TO unavailable_incidents');
     try {

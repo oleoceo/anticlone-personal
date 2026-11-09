@@ -1,4 +1,4 @@
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import { validateAllocation, selected } from './allocation.js';
 import { approvedDestination, configurationOrigin } from './page-redirect.js';
 
@@ -17,7 +17,12 @@ export async function publishCtaPolicy(db:Pool, project:string, body:unknown) {
     if (!projectRow.rowCount) throw Error('invalid project');
     configurationOrigin(projectRow.rows[0].origin);
     const existing=await client.query('SELECT 1 FROM active_cta_surface_policies a JOIN cta_policy_versions v USING(project_id,version) WHERE a.project_id=$1 AND a.surface=$2 AND v.pathname<>$3 LIMIT 1',[project,p.surface,p.pathname]);
-    if (existing.rowCount) throw Error('surface already bound to another pathname');
+    if (existing.rowCount) {
+      const schema=await client.query("SELECT to_regclass('page_cta_policy_bindings') IS NOT NULL AS available");
+      if (!schema.rows[0].available) throw Error('surface already bound to another pathname');
+      const migration=await client.query(`SELECT 1 FROM page_cta_policy_bindings b JOIN protected_pages p ON p.id=b.page_id AND p.project_id=b.project_id JOIN protected_page_urls u ON u.page_id=p.id WHERE b.project_id=$1 AND b.surface=$2 AND p.url_review_required AND u.pathname=$3 AND (SELECT count(*) FROM protected_page_urls WHERE page_id=p.id)=1`,[project,p.surface,p.pathname]);
+      if (!migration.rowCount) throw Error('surface already bound to another pathname');
+    }
     const result=await client.query(`INSERT INTO cta_policy_versions(project_id,version,enabled,surface,pathname,allocation)
       SELECT $1,COALESCE(MAX(version),0)+1,$2,$3,$4,$5 FROM cta_policy_versions WHERE project_id=$1 RETURNING version`,[project,p.enabled,p.surface,p.pathname,JSON.stringify(p.allocation)]);
     const version=result.rows[0].version as number;
@@ -25,18 +30,19 @@ export async function publishCtaPolicy(db:Pool, project:string, body:unknown) {
     await client.query('COMMIT'); return version;
   } catch(error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
 }
-export async function ctaDecision(db:Pool, project:string, original:string, origin:string, controlledOrigin:string|undefined, risk:string, session:unknown, trafficClass:string, pathname?:string): Promise<{action:string;ctaVersion?:number;version?:number;pathname?:string;original?:string;mappings?:{marker:string;kind:string;destination:string;surface?:string;requiresSurface?:boolean}[];externalDestinations?:string[]}> {
+export async function ctaDecision(db:Pool, project:string, original:string, origin:string, controlledOrigin:string|undefined, risk:string, session:unknown, trafficClass:string, pathname?:string, observedPathname?:string, pageId?:string, snapshotClient?:PoolClient): Promise<{action:string;ctaVersion?:number;version?:number;pathname?:string;original?:string;mappings?:{marker:string;kind:string;destination:string;surface?:string;requiresSurface?:boolean}[];externalDestinations?:string[]}> {
   if (origin===original || !controlledOrigin || origin!==controlledOrigin || risk!=='LOW') return {action:'OBSERVE_ONLY'};
-  const client=await db.connect().catch(()=>undefined);
+  const client=snapshotClient ?? await db.connect().catch(()=>undefined);
   if (!client) return {action:'OBSERVE_ONLY'};
   try {
-    await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
-    const policies=await client.query(`SELECT v.version,v.enabled,v.surface,v.pathname,v.allocation FROM active_cta_surface_policies a JOIN cta_policy_versions v ON v.project_id=a.project_id AND v.version=a.version WHERE a.project_id=$1 ORDER BY v.version`,[project]);
+    if (!snapshotClient) await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+    const policies=pageId ? await client.query(`SELECT v.version,v.enabled,v.surface,v.pathname,v.allocation FROM active_cta_surface_policies a JOIN cta_policy_versions v ON v.project_id=a.project_id AND v.version=a.version JOIN page_cta_policy_bindings b ON b.project_id=a.project_id AND b.surface=a.surface AND b.version=a.version WHERE a.project_id=$1 AND b.page_id=$2 ORDER BY v.version`,[project,pageId]) : await client.query(`SELECT v.version,v.enabled,v.surface,v.pathname,v.allocation FROM active_cta_surface_policies a JOIN cta_policy_versions v ON v.project_id=a.project_id AND v.version=a.version WHERE a.project_id=$1 ORDER BY v.version`,[project]);
     const all=policies.rows as Policy[];
     if (!all.length) return {action:'OBSERVE_ONLY'};
     const version=Math.max(...all.map(p=>p.version));
     const path=pathname ?? all[0].pathname;
     if (!/^\/[a-zA-Z0-9/_-]{0,200}$/.test(path)) return {action:'OBSERVE_ONLY',ctaVersion:version};
+    if (observedPathname !== undefined && !/^\/[a-zA-Z0-9/_-]{0,200}$/.test(observedPathname)) return {action:'OBSERVE_ONLY',ctaVersion:version};
     const selectedPolicies=all.filter(policy=>policy.pathname===path && validate(policyWithoutVersion(policy)).enabled && selected(session,'REPLACE_CONVERSION',policy.version,validateAllocation(policy.allocation),trafficClass));
     if (!selectedPolicies.length) return {action:'OBSERVE_ONLY',ctaVersion:version};
     const rows=await client.query(`SELECT p.surface,p.marker,p.kind,d.url FROM cta_points p JOIN cta_mappings m ON m.project_id=p.project_id AND m.point_id=p.id AND m.offer=p.offer JOIN cta_destinations d ON d.project_id=m.project_id AND d.offer=m.offer AND d.id=m.destination_id LEFT JOIN cta_commercial_references r ON r.project_id=p.project_id AND r.point_id=p.id WHERE p.project_id=$1 AND p.surface=ANY($2::text[]) AND p.kind='a' AND p.marker IS NOT NULL AND p.review_required=false AND r.suspension IS NULL ORDER BY p.id LIMIT 101`,[project,selectedPolicies.map(p=>p.surface)]);
@@ -50,8 +56,8 @@ export async function ctaDecision(db:Pool, project:string, original:string, orig
       catch { /* An unavailable approval suspends this point, not independent points. */ }
     }
     const externalDestinations=mappings.filter(row=>new URL(row.destination).origin!==original).map(row=>row.destination);
-    return {action:'REPLACE_CONVERSION',version,pathname:path,original,mappings,...(externalDestinations.length?{externalDestinations}:{})};
+    return {action:'REPLACE_CONVERSION',version,pathname:observedPathname ?? path,original,mappings,...(externalDestinations.length?{externalDestinations}:{})};
   } catch { return {action:'OBSERVE_ONLY'}; }
-  finally { try { await client.query('ROLLBACK'); client.release(); } catch { client.release(true); } }
+  finally { if (!snapshotClient) { try { await client.query('ROLLBACK'); client.release(); } catch { client.release(true); } } }
 }
 function policyWithoutVersion(p:Policy) { return {enabled:p.enabled,surface:p.surface,pathname:p.pathname,allocation:p.allocation}; }

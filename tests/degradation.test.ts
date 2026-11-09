@@ -73,13 +73,14 @@ test('real gateway/Core/fallback: temporal uncertainty, expiration, recovery and
     const audit=await db.query('SELECT uncertainty FROM degradation_audit');
     assert.ok(audit.rows.every(r=>r.uncertainty==='UNAUTHENTICATED_CLAIMS'));
     assert.equal((await db.query('SELECT count(*)::int n FROM installation_signals')).rows[0].n,0);
-    // No further requests: periodic gateway maintenance must clear expired rows for its project only.
+    // No further requests: periodic gateway maintenance clears expired rows separately for both projects.
     await db.query("INSERT INTO degradation_events(project_id,host,source,bucket,observed_at) VALUES('lab','expired.test','core',now()-interval '2 days',now()-interval '2 days'),('other','expired.test','core',now()-interval '2 days',now()-interval '2 days')");
     await db.query("INSERT INTO degradation_audit(project_id,host,state,window_start,observed_at) VALUES('lab','expired.test','UNKNOWN',now()-interval '8 days',now()-interval '8 days'),('other','expired.test','UNKNOWN',now()-interval '8 days',now()-interval '8 days')");
     await wait(async()=> (await db.query("SELECT count(*)::int n FROM degradation_events WHERE project_id='lab' AND host='expired.test'")).rows[0].n===0);
     assert.equal((await db.query("SELECT count(*)::int n FROM degradation_audit WHERE project_id='lab' AND observed_at<now()-interval '7 days'")).rows[0].n,0);
-    assert.equal((await db.query("SELECT count(*)::int n FROM degradation_events WHERE project_id='other'")).rows[0].n,1);
-    assert.equal((await db.query("SELECT count(*)::int n FROM degradation_audit WHERE project_id='other' AND host='expired.test'")).rows[0].n,1);
+    await wait(async()=> (await db.query("SELECT count(*)::int n FROM degradation_events WHERE project_id='other'")).rows[0].n===0);
+    assert.equal((await db.query("SELECT count(*)::int n FROM degradation_events WHERE project_id='other'")).rows[0].n,0);
+    assert.equal((await db.query("SELECT count(*)::int n FROM degradation_audit WHERE project_id='other' AND host='expired.test'")).rows[0].n,0);
   } finally {
     await browser?.close(); if(child && child.exitCode===null){child.kill();await once(child,'exit');}
     if(site.listening) await new Promise<void>(resolve=>site.close(()=>resolve()));

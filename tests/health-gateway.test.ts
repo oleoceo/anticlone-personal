@@ -71,9 +71,13 @@ test('gateway reconciles health episodes after restart and a real maintenance fa
     await db.query('ALTER TABLE observations RENAME TO observations_unavailable');
     await wait(async()=>logs.includes('maintenance MAINTENANCE_ERROR'));
     await wait(async()=>(await db.query("SELECT count(*)::int n FROM health_episodes WHERE project_id='one' AND source='maintenance' AND recovered_at IS NULL")).rows[0].n===1);
-    await wait(async()=>(await db.query("SELECT count(*)::int n FROM health_history h JOIN health_episodes e ON e.id=h.episode_id WHERE e.source='maintenance' AND h.event='ATTEMPT'")).rows[0].n===1);
+    for(const project of ['one','two']) {
+      await wait(async()=>(await db.query("SELECT count(*)::int n FROM health_episodes WHERE project_id=$1 AND source='maintenance' AND recovered_at IS NULL",[project])).rows[0].n===1);
+      await wait(async()=>(await db.query("SELECT count(*)::int n FROM health_history h JOIN health_episodes e ON e.id=h.episode_id WHERE e.project_id=$1 AND e.source='maintenance' AND h.event='ATTEMPT'",[project])).rows[0].n===1);
+    }
     await db.query('ALTER TABLE observations_unavailable RENAME TO observations');
     await wait(async()=>(await db.query("SELECT count(*)::int n FROM health_episodes WHERE project_id='one' AND kind='OPERATIONAL' AND recovered_at IS NOT NULL")).rows[0].n===1);
+    await wait(async()=>(await db.query("SELECT count(*)::int n FROM health_episodes WHERE project_id='two' AND source='maintenance' AND recovered_at IS NOT NULL")).rows[0].n===1);
     // A real optional operation failure is persisted, survives restart, and is
     // recovered only after the same operation succeeds in the new process.
     await db.query('ALTER TABLE installation_signals RENAME TO unavailable_signals');
