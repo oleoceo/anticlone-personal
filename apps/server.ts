@@ -103,24 +103,32 @@ function degradationTask(operation: string, action: () => Promise<unknown>, forc
   degradationQueue = task.catch(() => { degradationGapVersion++; });
   return task.then(() => completed);
 }
-function lostDegradationClaim(): void {
+async function lostDegradationClaim(): Promise<void> {
   healthBaselineVersion++;
   degradationGapVersion++;
-  if (gapBarrier) return;
+  if (gapBarrier) { await gapBarrier; return; }
   // One bounded reconciliation, independent of the normal queue limit. The
   // gateway never holds rejected requests open waiting for database work.
   gapBarrier = degradationTask('gap', async () => {
     if (controlledOrigin && optional.canaryDegradation.state !== 'NOT_INSTALLED')
       await degradationState(pool,activeProject,new URL(controlledOrigin).hostname,controlledOrigin);
   }, true).finally(() => { gapBarrier = undefined; });
-  void gapBarrier.catch(() => {});
+  await gapBarrier;
 }
 function recordClaim(origin: string, source: 'core' | 'fallback') {
-  if (origin !== normalizedOrigin || claimPending.has(source) || Date.now() < (claimAfter.get(source) ?? 0)) return;
+  if (origin !== normalizedOrigin || claimPending.has(source) || Date.now() < (claimAfter.get(source) ?? 0)) return Promise.resolve();
   claimPending.add(source);
   // Bound writes for installed, explicitly enabled projects. Missing schemas are skipped by the gate.
   claimAfter.set(source,Date.now()+60_000);
-  void optional.installation.run('claim', () => recordInstallationClaim(pool,activeProject,origin,source)).finally(()=>claimPending.delete(source));
+  return optional.installation.run('claim', () => recordInstallationClaim(pool,activeProject,origin,source)).then(()=>{}).finally(()=>claimPending.delete(source));
+}
+async function withLegacyEligibility<T>(action: () => Promise<T>): Promise<T | undefined> {
+  const client=await pool.connect();
+  try {
+    await client.query('BEGIN');
+    if (!await legacyOperationallyEligible(client,activeProject)) return undefined;
+    return await action();
+  } finally { try { await client.query('ROLLBACK'); client.release(); } catch { client.release(true); } }
 }
 const handleCheckout = checkoutWebhook(pool,activeProject,project ? process.env : {...process.env,CHECKOUT_WEBHOOK_SECRET:undefined});
 const handleProjectCheckout = projectCheckoutWebhooks(pool,process.env);
@@ -141,10 +149,10 @@ const server = http.createServer((req, res) => {
   }
   if (req.method === 'GET' && (req.url === '/canary/html.gif' || req.url === '/canary/css.gif')) {
     if (Date.now() - windowStart >= 60_000) { windowStart = Date.now(); count = 0; }
-    if (++count > 60 && process.env.GATEWAY_TRANSPORT !== 'HTTPS_PROXY') { lostDegradationClaim(); res.writeHead(429).end(); return; }
+    if (++count > 60 && process.env.GATEWAY_TRANSPORT !== 'HTTPS_PROXY') { void withLegacyEligibility(lostDegradationClaim).catch(()=>{}); res.writeHead(429).end(); return; }
     const source = req.url === '/canary/html.gif' ? 'html_canary' : 'css_canary';
-    void observeCanary(pool, activeProject, req.headers.referer, source).then(() => {
-      res.writeHead(200, { 'Content-Type': 'image/gif' }).end(Buffer.from('R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==', 'base64'));
+    void withLegacyEligibility(async () => {
+      await observeCanary(pool, activeProject, req.headers.referer, source);
       // Referer is an unauthenticated claim. Only the explicitly configured
       // laboratory origin can contribute to the existing F44 journal.
       let claimedOrigin: string | undefined;
@@ -156,16 +164,16 @@ const server = http.createServer((req, res) => {
       } catch { /* Missing or ambiguous claims never contribute. */ }
       if (claimedOrigin === normalizedOrigin && !activityPending && Date.now() >= activityAfter) {
         activityPending=true; activityAfter=Date.now()+60_000;
-        void optional.health.run('activity', () => recordInstallationActivity(pool,activeProject,normalizedOrigin)).finally(()=>{activityPending=false;});
+        await optional.health.run('activity', () => recordInstallationActivity(pool,activeProject,normalizedOrigin)).finally(()=>{activityPending=false;});
       }
       if (!mode.pilot && controlledOrigin && controlledOrigin !== normalizedOrigin && claimedOrigin === controlledOrigin) {
-        if (optional.canaryDegradation.state !== 'NOT_INSTALLED') void degradationTask('correlation', async () => {
+        if (optional.canaryDegradation.state !== 'NOT_INSTALLED') await degradationTask('correlation', async () => {
           const host = new URL(controlledOrigin).hostname;
           await recordDegradationClaim(pool,activeProject,host,source,controlledOrigin);
           await degradationState(pool,activeProject,host,controlledOrigin);
         });
       }
-    }).catch(() => { lostDegradationClaim(); res.writeHead(503).end(); }); return;
+    }).then(() => res.writeHead(200, { 'Content-Type': 'image/gif' }).end(Buffer.from('R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==', 'base64'))).catch(() => res.writeHead(503).end()); return;
   }
   if (req.method === 'POST' && (req.url === '/entry-decision' || req.url === '/cta-refresh')) {
     const refresh = req.url === '/cta-refresh';
@@ -219,7 +227,7 @@ const server = http.createServer((req, res) => {
   }
   if (req.method !== 'POST' || req.url !== '/observe' && req.url !== '/observe/fallback') { res.writeHead(404).end(); return; }
   if (Date.now() - windowStart >= 60_000) { windowStart = Date.now(); count = 0; }
-  if (++count > 60 && process.env.GATEWAY_TRANSPORT !== 'HTTPS_PROXY') { lostDegradationClaim(); res.writeHead(429).end(); return; }
+  if (++count > 60 && process.env.GATEWAY_TRANSPORT !== 'HTTPS_PROXY') { void withLegacyEligibility(lostDegradationClaim).catch(()=>{}); res.writeHead(429).end(); return; }
   if (!/^text\/plain(?:\s*;|$)/i.test(req.headers['content-type'] ?? '')) { res.writeHead(415).end(); return; }
   let length = 0; const chunks: Buffer[] = []; let rejected = false;
   req.on('data', (chunk: Buffer) => {
@@ -243,17 +251,18 @@ const server = http.createServer((req, res) => {
     }
     catch { res.writeHead(400).end(); return; }
     const source = req.url === '/observe/fallback' ? 'fallback' : 'core';
-    void observe(pool, activeProject, mode.origins, origin, source, evidence).then(result => {
-      if (result === 'authorized') recordClaim(origin,source);
+    void withLegacyEligibility(async () => {
+      const result=await observe(pool, activeProject, mode.origins, origin, source, evidence);
+      if (result === 'authorized') await recordClaim(origin,source);
       if (!mode.pilot && controlledOrigin && origin === controlledOrigin && origin !== normalizedOrigin) {
-        void degradationTask('correlation', async () => {
+        await degradationTask('correlation', async () => {
           const temporalOrigin = optional.canaryDegradation.state === 'NOT_INSTALLED' ? undefined : origin;
           await recordDegradationClaim(pool,activeProject,new URL(origin).hostname,source,temporalOrigin);
           await degradationState(pool,activeProject,new URL(origin).hostname,temporalOrigin);
         });
       }
-      res.writeHead(result === 'capacity' ? 429 : 204).end();
-    }).catch(() => { lostDegradationClaim(); res.writeHead(503).end(); });
+      return result;
+    }).then(result => res.writeHead(result === 'capacity' ? 429 : 204).end()).catch(() => res.writeHead(503).end());
   });
 });
 server.requestTimeout = 5000; server.headersTimeout = 6000;

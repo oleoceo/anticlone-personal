@@ -44,6 +44,11 @@ test('GS06 integration: persisted policy, controlled LOW and original', {timeout
     assert.equal((await decision()).action,'PAGE_REDIRECT');
     await db.query("UPDATE projects SET lifecycle_state='PAUSED' WHERE id=$1",[project]);
     assert.equal((await decision()).action,'OBSERVE_ONLY');
+    const counts=await db.query('SELECT (SELECT count(*)::int FROM incidents WHERE project_id=$1) AS incidents,(SELECT count(*)::int FROM observations WHERE project_id=$1) AS observations,(SELECT count(*)::int FROM canary_observations WHERE project_id=$1) AS canaries',[project]);
+    assert.equal((await fetch('http://127.0.0.1:3000/observe',{method:'POST',headers:{origin:clone,'content-type':'text/plain'},body:clone})).status,204);
+    assert.equal((await fetch('http://127.0.0.1:3000/observe/fallback',{method:'POST',headers:{origin:clone,'content-type':'text/plain'},body:clone})).status,204);
+    assert.equal((await fetch('http://127.0.0.1:3000/canary/html.gif',{headers:{referer:clone+'/copy'}})).status,200);
+    assert.deepEqual((await db.query('SELECT (SELECT count(*)::int FROM incidents WHERE project_id=$1) AS incidents,(SELECT count(*)::int FROM observations WHERE project_id=$1) AS observations,(SELECT count(*)::int FROM canary_observations WHERE project_id=$1) AS canaries',[project])).rows[0],counts.rows[0]);
     await db.query("UPDATE projects SET lifecycle_state='ACTIVE' WHERE id=$1",[project]);
     assert.equal((await decision()).action,'PAGE_REDIRECT');
     await db.query("UPDATE protected_pages SET lifecycle_state='PAUSED' WHERE project_id=$1",[project]);
