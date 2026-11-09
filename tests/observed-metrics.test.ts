@@ -28,6 +28,9 @@ test('observed metrics persist idempotently, isolate pages and separate estimate
   await assert.rejects(recordObservedFact(db,'one',{...fact,action:'PAGE_REDIRECT_ATTEMPT'}),TypeError);
   await assert.rejects(recordObservedFact(db,'two',{...fact,event:crypto.randomUUID()}));
   await configureEstimate(db,'one',10000,250,'BRL');
+  await configureEstimate(db,'two',10000,250,'BRL');
+  await recordObservedFact(db,'two',{...fact,page:other,event:crypto.randomUUID(),action:'SESSION_OBSERVED',version:null});
+  assert.equal((await observedMetrics(db,'two',other,from,until)).estimate,null);
   await db.end(); db=new Pool({connectionString:process.env.TEST_DATABASE_URL,options:`-c search_path=${schema}`});
   assert.equal((await recordObservedFact(db,'one',fact)).duplicate,true);
   let summary=await observedMetrics(db,'one',page,from,until);
