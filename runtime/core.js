@@ -18,9 +18,10 @@
         if (['http:', 'https:'].includes(ref.protocol) && !ref.username && !ref.password && /^[a-z0-9]+(?:[a-z0-9.-]*[a-z0-9])?$/.test(ref.hostname) && ref.hostname.length <= 253 && !ref.hostname.includes('..')) signals.referrerHost = ref.hostname.toLowerCase();
       } catch (_) { /* Missing or invalid referrer. */ }
     }
-    fetch(new URL('/observe', source).href, {
+    const scoped = new URL(source).pathname.startsWith('/i/');
+    fetch(new URL('observe', source).href, {
       method: 'POST', headers: { 'Content-Type': 'text/plain' },
-      body: JSON.stringify({origin: location.origin, signals}), keepalive: true
+      body: JSON.stringify(scoped ? {origin: location.origin, pathname: location.pathname, signals} : {origin: location.origin, signals}), keepalive: true
     }).catch(() => {});
   } catch (_) { /* Observation is best effort. */ }
 })();

@@ -2,6 +2,7 @@
   try {
     const source = document.currentScript && document.currentScript.src;
     if (!source) return;
+    const endpoint = path => new URL(path, source).href;
     // Explicit operator-requested inventory is available only on loopback laboratory pages.
     if (['localhost','127.0.0.1'].includes(location.hostname)) addEventListener('message', event => {
       try {
@@ -103,7 +104,7 @@
           // Preserve native form submission until cancellation and data safety can be guaranteed.
     };
     const core = document.createElement('script');
-    core.src = new URL('/core.js', source).href;
+    core.src = endpoint('core.js');
     core.async = true;
     startCore = () => {
       if (!validContext()) return;
@@ -139,7 +140,7 @@
           inFlight = true; const id = ++sequence, wall = Date.now(), mono = performance.now(); lastAttempt = wall;
           controller = new AbortController();
           const requestController = controller, timeout = setTimeout(() => requestController.abort(), 5000);
-          fetch(new URL('/cta-refresh', source).href, {method:'POST', headers:{'Content-Type':'text/plain'}, body:JSON.stringify({session,signals,pathname:initialPath}), cache:'no-store', signal:requestController.signal})
+          fetch(endpoint('cta-refresh'), {method:'POST', headers:{'Content-Type':'text/plain'}, body:JSON.stringify({session,signals,pathname:initialPath}), cache:'no-store', signal:requestController.signal})
             .then(response => { if (!response.ok) throw Error('unavailable'); return response.json(); })
             .then(decision => { if (id !== sequence || !validContext()) return; failed = false; backoff = refreshIntervalMs; activeCtas = null; observeCtaVersion(decision); if (decision && decision.action === 'REPLACE_CONVERSION') prepareCtas(decision, wall, mono); })
             .catch(() => { if (id === sequence) { activeCtas = null; failed = true; backoff = Math.min(backoff * 2, 240000); } })
@@ -151,7 +152,7 @@
         addEventListener('pagehide', event => { if (!event.persisted) { clearInterval(timer); suspendCtas(); } });
         document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(true); });
         const entryWall = Date.now(), entryMono = performance.now(), entrySequence = sequence;
-        fetch(new URL('/entry-decision', source).href, { method:'POST', headers:{'Content-Type':'text/plain'}, body:JSON.stringify({session,signals,pathname:initialPath}), cache: 'no-store' })
+        fetch(endpoint('entry-decision'), { method:'POST', headers:{'Content-Type':'text/plain'}, body:JSON.stringify({session,signals,pathname:initialPath}), cache: 'no-store' })
           .then(response => { if (!response.ok) throw new Error('decision unavailable'); return response.json(); })
           .then(decision => {
             if (!validContext()) return;

@@ -18,27 +18,30 @@ import { recordDegradationClaim, degradationState, maintainDegradation, markDegr
 import { optionalSchemas } from './optional-schema.js';
 import { evaluateInactivity, deliverHealth, reconcileOperationalEpisode, recoverOperationalSource, maintainHealthHistory, invalidateInactivity, recordInstallationActivity } from './health-alerts.js';
 import { OperationalObservations } from './operational-observations.js';
+import { scopedGateway } from './scoped-gateway.js';
 const boundary = gatewayBoundary(process.env);
 const connectionString = process.env.DATABASE_URL, project = process.env.PROJECT_ID;
 const smtpPort = Number(process.env.SMTP_PORT), port = Number(process.env.PORT ?? 3000);
 const cloneSmtp = smtpProvider(process.env);
-if (!connectionString || !project || !/^[a-zA-Z0-9_-]{1,64}$/.test(project) || !Number.isInteger(smtpPort) || smtpPort < 1 || smtpPort > 65535 || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('invalid local test configuration');
-const activeProject: string = project;
+if (!connectionString || (project !== undefined && !/^[a-zA-Z0-9_-]{1,64}$/.test(project)) || !Number.isInteger(smtpPort) || smtpPort < 1 || smtpPort > 65535 || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('invalid local test configuration');
+const activeProject: string = project ?? '';
+// Multiproject observation is currently a laboratory-only checkpoint.
+if (!project && (process.env.GATEWAY_MODE === 'PILOT_OBSERVE' || process.env.GATEWAY_TRANSPORT || process.env.ALLOWED_ORIGIN || process.env.LAB_CONTROLLED_ORIGIN || process.env.LAB_CONTROLLED_RISK)) throw Error('multiproject pilot configuration unavailable');
 const pool = new Pool({ connectionString, max: 5, connectionTimeoutMillis: 2000, statement_timeout: 3000, query_timeout: 4000 });
 if (cloneSmtp) await pool.query('SELECT outbox_id,attempt,transport,started_at,finished_at,outcome FROM clone_delivery_attempts LIMIT 0');
 pool.on('error', () => process.stderr.write('database connection failed\n'));
 if (process.env.GATEWAY_MODE === 'PILOT_OBSERVE' && (process.env.ALLOWED_ORIGIN || process.env.LAB_CONTROLLED_ORIGIN || process.env.LAB_CONTROLLED_RISK)) throw Error('laboratory configuration forbidden in pilot');
 // One-time legacy import is driven solely by the local operator's old configuration.
 const legacyOrigin = process.env.ALLOWED_ORIGIN && configuredOrigin(process.env.ALLOWED_ORIGIN);
-if (legacyOrigin) {
+if (legacyOrigin && project) {
   await pool.query('INSERT INTO projects(id,name,origin) VALUES($1,$1,$2) ON CONFLICT (id) DO NOTHING', [activeProject, legacyOrigin]);
 }
 await pool.query('SELECT project_id, host, day, traffic_class, evidence, certainty, source, observed_at FROM traffic_observation_days LIMIT 0');
 await pool.query('SELECT project_id,host,day,level,evaluator_version,source,reason,confidence,evidence_kind,evidence_provenance,evidence_reliability,observed_at FROM risk_assessment_days LIMIT 0');
-const projectRow = await pool.query('SELECT origin FROM projects WHERE id=$1', [activeProject]);
-if (projectRow.rowCount !== 1) throw new Error('unknown project');
-const normalizedOrigin = configuredOrigin(projectRow.rows[0].origin);
-const mode = gatewayMode(process.env, normalizedOrigin);
+const projectRow = project ? await pool.query('SELECT origin FROM projects WHERE id=$1', [activeProject]) : null;
+if (project && projectRow?.rowCount !== 1) throw new Error('unknown project');
+const normalizedOrigin = projectRow ? configuredOrigin(projectRow.rows[0].origin) : 'http://localhost';
+const mode = project ? gatewayMode(process.env, normalizedOrigin) : {pilot:true,origins:[]};
 let healthBaselineVersion = 1, healthBaselinePersisted = 0;
 const failures = new OperationalObservations();
 function observeFailure(source: string, failed: boolean, code?: string) {
@@ -58,6 +61,7 @@ const bootstrap = readFileSync('runtime/bootstrap.js');
 const core = readFileSync('runtime/core.js');
 const inventoryScript = readFileSync('runtime/cta-inventory.js');
 const fallback = readFileSync('runtime/fallback.js');
+const scoped = scopedGateway(pool, {'runtime.js':bootstrap,'core.js':core,'fallback.js':fallback});
 let windowStart = Date.now(), count = 0;
 let decisionWindowStart = Date.now(), decisionCount = 0;
 let refreshWindowStart = Date.now(), refreshCount = 0;
@@ -112,6 +116,8 @@ function recordClaim(origin: string, source: 'core' | 'fallback') {
 const handleCheckout = checkoutWebhook(pool,activeProject,process.env);
 const server = http.createServer((req, res) => {
   if (!boundary(req, res)) return;
+  if (scoped(req,res)) return;
+  if (!project && req.url !== '/healthz') { res.writeHead(404).end(); return; }
   if (handleCheckout(req,res)) return;
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Access-Control-Allow-Origin', '*'); res.setHeader('Cache-Control', 'no-store');
@@ -308,8 +314,8 @@ async function infrastructureMaintenance() {
   } catch { process.stderr.write('infrastructure DNS maintenance failed\n'); }
   finally { dnsBusy = false; }
 }
-void infrastructureMaintenance();
+if (project) void infrastructureMaintenance();
 const dnsTimer = setInterval(() => void infrastructureMaintenance(),60_000);
 dnsTimer.unref();
-void maintenance(); const timer = setInterval(() => void maintenance(), 1000);
+if (project) void maintenance(); const timer = setInterval(() => { if (project) void maintenance(); }, 1000);
 process.on('SIGTERM', () => { clearInterval(timer); clearInterval(dnsTimer); server.close(() => { void pool.end().finally(() => process.exit()); }); });
