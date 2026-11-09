@@ -45,28 +45,20 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>) {
           const review=await db.query('SELECT url_review_required FROM protected_pages WHERE id=$1',[context.page]);
           if (!review.rowCount || review.rows[0].url_review_required) { fallback(); return; }
           const original=context.urls[0];
-          // Legacy surface policies are keyed by path, not page identity.
-          // Ambiguous paths in one project must never share a policy.
-          const ambiguous=await db.query(`SELECT 1 FROM protected_pages p JOIN protected_page_urls u ON u.page_id=p.id
-            WHERE p.project_id=$1 AND p.id<>$2 AND u.pathname=$3 LIMIT 1`,[context.project,context.page,original.pathname]);
-          if (ambiguous.rowCount) { fallback(); return; }
           const evidence={source:'browser' as const,reliability:'uncorroborated' as const,trafficClass:traffic.trafficClass,kind:traffic.evidence};
           const controlled=match[1].toLowerCase()===fixtureId?.toLowerCase() && origin===fixtureOrigin && ['localhost','127.0.0.1'].includes(new URL(original.origin).hostname) && origin!==original.origin;
           const assessment=safeEvaluateRisk(controlled,fixture=>assessObservation(evidence,fixture));
           if (!assessment) { fallback(); return; }
           await recordRisk(db,context.project,new URL(origin).hostname,assessment,evidence);
           if (!stealthEligible(assessment,false)) { fallback(); return; }
-          // Legacy entry policy is project-wide. Until explicitly bound to a
-          // page it can only be used where the project has exactly one page.
-          const pages=await db.query('SELECT count(*)::int AS n FROM protected_pages WHERE project_id=$1',[context.project]);
-          if (endpoint==='entry-decision' && pages.rows[0].n===1) {
-            const result=await db.query('SELECT v.version,v.enabled,v.approved_destination,v.allocation FROM active_protection_policies a JOIN protection_policy_versions v ON v.project_id=a.project_id AND v.version=a.version WHERE a.project_id=$1 AND v.stealth=true',[context.project]);
+          if (endpoint==='entry-decision') {
+            const result=await db.query('SELECT v.version,v.enabled,v.approved_destination,v.allocation FROM active_protection_policies a JOIN protection_policy_versions v ON v.project_id=a.project_id AND v.version=a.version JOIN page_entry_policy_bindings b ON b.project_id=a.project_id AND b.version=a.version WHERE a.project_id=$1 AND b.page_id=$2 AND v.stealth=true',[context.project,context.page]);
             const policy=result.rows[0];
             if (policy?.enabled) { approvedDestination(policy.approved_destination,original.origin); validateAllocation(policy.allocation); }
             const entry=entryDecision(policy,original.origin,origin,fixtureOrigin,assessment.level,fields.session,traffic.trafficClass);
             if (entry.action==='PAGE_REDIRECT') { res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(entry)); return; }
           }
-          const result=await ctaDecision(db,context.project,original.origin,origin,fixtureOrigin,assessment.level,fields.session,traffic.trafficClass,original.pathname,fields.pathname);
+          const result=await ctaDecision(db,context.project,original.origin,origin,fixtureOrigin,assessment.level,fields.session,traffic.trafficClass,original.pathname,fields.pathname,context.page);
           res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result)); return;
         }
         const core = endpoint === 'observe';

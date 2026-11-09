@@ -25,13 +25,13 @@ export async function publishCtaPolicy(db:Pool, project:string, body:unknown) {
     await client.query('COMMIT'); return version;
   } catch(error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
 }
-export async function ctaDecision(db:Pool, project:string, original:string, origin:string, controlledOrigin:string|undefined, risk:string, session:unknown, trafficClass:string, pathname?:string, observedPathname?:string): Promise<{action:string;ctaVersion?:number;version?:number;pathname?:string;original?:string;mappings?:{marker:string;kind:string;destination:string;surface?:string;requiresSurface?:boolean}[];externalDestinations?:string[]}> {
+export async function ctaDecision(db:Pool, project:string, original:string, origin:string, controlledOrigin:string|undefined, risk:string, session:unknown, trafficClass:string, pathname?:string, observedPathname?:string, pageId?:string): Promise<{action:string;ctaVersion?:number;version?:number;pathname?:string;original?:string;mappings?:{marker:string;kind:string;destination:string;surface?:string;requiresSurface?:boolean}[];externalDestinations?:string[]}> {
   if (origin===original || !controlledOrigin || origin!==controlledOrigin || risk!=='LOW') return {action:'OBSERVE_ONLY'};
   const client=await db.connect().catch(()=>undefined);
   if (!client) return {action:'OBSERVE_ONLY'};
   try {
     await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
-    const policies=await client.query(`SELECT v.version,v.enabled,v.surface,v.pathname,v.allocation FROM active_cta_surface_policies a JOIN cta_policy_versions v ON v.project_id=a.project_id AND v.version=a.version WHERE a.project_id=$1 ORDER BY v.version`,[project]);
+    const policies=pageId ? await client.query(`SELECT v.version,v.enabled,v.surface,v.pathname,v.allocation FROM active_cta_surface_policies a JOIN cta_policy_versions v ON v.project_id=a.project_id AND v.version=a.version JOIN page_cta_policy_bindings b ON b.project_id=a.project_id AND b.surface=a.surface AND b.version=a.version WHERE a.project_id=$1 AND b.page_id=$2 ORDER BY v.version`,[project,pageId]) : await client.query(`SELECT v.version,v.enabled,v.surface,v.pathname,v.allocation FROM active_cta_surface_policies a JOIN cta_policy_versions v ON v.project_id=a.project_id AND v.version=a.version WHERE a.project_id=$1 ORDER BY v.version`,[project]);
     const all=policies.rows as Policy[];
     if (!all.length) return {action:'OBSERVE_ONLY'};
     const version=Math.max(...all.map(p=>p.version));
