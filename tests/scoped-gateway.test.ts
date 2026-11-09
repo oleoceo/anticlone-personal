@@ -60,6 +60,7 @@ test('scoped browser observations isolate projects on one origin and preserve co
     assert.equal(concurrent.filter(result=>result.status==='rejected').length,1);
     const financeState=await db.query('SELECT config_generation FROM protected_pages WHERE id=$1',[fp]);
     await managePages(db,{action:'approve',project:'finance',page:fp,generation:'1',configGeneration:financeState.rows[0].config_generation,entryVersion:null,ctaVersions:[1]});
+    const financeSnapshot=await db.query(`SELECT p.url_generation,p.config_generation,p.url_review_required,b.surface,b.version,a.id AS approval FROM protected_pages p JOIN page_cta_policy_bindings b ON b.page_id=p.id AND b.project_id=p.project_id JOIN page_policy_approvals a ON a.page_id=p.id AND a.project_id=p.project_id WHERE p.id=$1`,[fp]);
     const env: NodeJS.ProcessEnv={...process.env,PGOPTIONS:options,DATABASE_URL:process.env.TEST_DATABASE_URL,SMTP_PORT:'1',PORT:'3000',SCOPED_LAB_INSTALLATION:health,SCOPED_LAB_ORIGIN:`http://localhost:${address.port}`};
     delete env.PROJECT_ID; delete env.ALLOWED_ORIGIN;
     child=spawn(process.execPath,['dist/apps/server.js'],{env,stdio:'ignore'});
@@ -122,6 +123,8 @@ test('scoped browser observations isolate projects on one origin and preserve co
     assert.equal(resumed,origin+'/health-checkout');
     await managePages(db,{action:'add-url',project:'health',page:hp,url:origin+'/outra'});
     assert.deepEqual(await (await decide(health,`http://localhost:${address.port}`)).json(),{action:'OBSERVE_ONLY'});
+    const financeAfter=await db.query(`SELECT p.url_generation,p.config_generation,p.url_review_required,b.surface,b.version,a.id AS approval FROM protected_pages p JOIN page_cta_policy_bindings b ON b.page_id=p.id AND b.project_id=p.project_id JOIN page_policy_approvals a ON a.page_id=p.id AND a.project_id=p.project_id WHERE p.id=$1`,[fp]);
+    assert.deepEqual(financeAfter.rows,financeSnapshot.rows);
     await assert.rejects(db.query("INSERT INTO page_cta_policy_bindings VALUES('finance',$1,'other',1)",[hp]),{code:'23503'});
     assert.equal((await fetch(`http://127.0.0.1:3000/i/${health}/observe`,{method:'POST',headers:{'content-type':'text/plain',origin},body:JSON.stringify({origin,pathname:'/saude',signals:{},project_id:'finance'})})).status,400);
   } finally {
