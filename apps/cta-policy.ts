@@ -18,6 +18,8 @@ export async function publishCtaPolicy(db:Pool, project:string, body:unknown) {
     configurationOrigin(projectRow.rows[0].origin);
     const existing=await client.query('SELECT 1 FROM active_cta_surface_policies a JOIN cta_policy_versions v USING(project_id,version) WHERE a.project_id=$1 AND a.surface=$2 AND v.pathname<>$3 LIMIT 1',[project,p.surface,p.pathname]);
     if (existing.rowCount) {
+      const schema=await client.query("SELECT to_regclass('page_cta_policy_bindings') IS NOT NULL AS available");
+      if (!schema.rows[0].available) throw Error('surface already bound to another pathname');
       const migration=await client.query(`SELECT 1 FROM page_cta_policy_bindings b JOIN protected_pages p ON p.id=b.page_id AND p.project_id=b.project_id JOIN protected_page_urls u ON u.page_id=p.id WHERE b.project_id=$1 AND b.surface=$2 AND p.url_review_required AND u.pathname=$3 AND (SELECT count(*) FROM protected_page_urls WHERE page_id=p.id)=1`,[project,p.surface,p.pathname]);
       if (!migration.rowCount) throw Error('surface already bound to another pathname');
     }
