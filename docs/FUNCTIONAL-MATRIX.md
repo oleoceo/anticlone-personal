@@ -99,7 +99,7 @@ Este quadro complementa as provas acima, sem mudar criterios. `Parcial` signific
 | F26 · A | Parcial: detection.test.ts, notification-*.test.ts | SMTP externo aprovado, historico operacional e GS13 externo. |
 | F27 · B | Parcial: cta-local-smtp.test.ts/gs08.test.ts | Provedor externo e GS13 operacional, sem exactly-once prometido. |
 | F28 · A | Integracao: admin-ui.ts e consultas locais | Evidencias, filtros, lifecycle e auditoria completos (GS12). |
-| F29 · C | Parcial: fatos/recibos e painel em observed-metrics.test.ts e scoped-gateway.test.ts. | Handoff/carregamento externo indisponiveis; regressoes finais pendentes. |
+| F29 · C | Parcial: fatos/recibos e painel em observed-metrics.test.ts e scoped-gateway.test.ts. | Handoff/carregamento externo indisponiveis; 98 PASS/0 FAIL/0 SKIP em PRE-VPS-FUNCTIONAL-LAB.md. |
 | F30 · C | Parcial: premissas versionadas, moeda e estimativa exata em observed-metrics.test.ts. | Estimativa de cliques observados; receita comprovada indisponivel. |
 | F31 · C | Parcial: contrato generico HMAC e idempotencia em tests/checkout-webhook.test.ts. | Adaptador externo e atribuicao de receita; GS14 integral. |
 | F32 · A | Parcial: DNS autorizado e historico em tests/infrastructure-dns.test.ts; ASN/hosting NOT_AVAILABLE | Fonte confiavel de ASN/hosting, TTL verificavel e GS12 integral pendentes. |
@@ -133,3 +133,5 @@ Tenants/organizações comerciais, memberships de clientes, checkout de assinatu
 GS03 laboratorial recorte A demonstrado: `tests/gs03.test.ts`, CI 41911761424 em 6756c37, PostgreSQL/Chromium. F19/F20/F21 continuam PARCIAL; oferta sem marcador e destinos externos reais pendentes, conforme `docs/CTA-INVENTORY-LAB.md`. Nao equivale a protecao operacional nem conclui GS17.
 
 Interpretador comercial isolado (recorte F25/F41): `tests/commercial-interpreter.test.ts` demonstra parsing monetario exato e significado limitado em Chromium localhost; sem associacao, persistencia ou integracao de protecao. Limites em `docs/COMMERCIAL-INTERPRETER-LAB.md`. Nao conclui F25/F41 nem GS17; prototipo contextual anterior permanece BLOCKED. Revisao e CI do SHA final no PR.
+
+Consolidacao pre-VPS (F29/F30/F42, recorte laboratorial): suite integral Linux PostgreSQL/Chromium/HTTPS com 98 PASS, 0 FAIL, 0 SKIP, lint/typecheck/build e revisao independente aprovados no codigo f0dd974. Provas e limites em PRE-VPS-FUNCTIONAL-LAB.md. Estados PARCIAL preservam os limites operacionais do blueprint; nao ha LOW operacional, atribuicao comprovada de receita ou comprovacao de carregamento externo.
