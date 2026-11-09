@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
+import { resolvePageContext } from '../apps/page-context.js';
 
 test('protected page migration preserves legacy identity and enforces URL ownership', async () => {
   assert.ok(process.env.TEST_DATABASE_URL);
@@ -22,12 +23,20 @@ test('protected page migration preserves legacy identity and enforces URL owners
     assert.equal(rows.rows[1].installation_id, installation);
     assert.equal(rows.rows[0].enabled, false);
     await db.query("UPDATE projects SET origin='https://example.test' WHERE id='finance'");
-    const page = randomUUID();
-    await db.query("INSERT INTO protected_pages(id,project_id,installation_id,name) VALUES ($1,'finance',$2,'Finance')", [page,randomUUID()]);
+    const page = randomUUID(), financeInstallation = randomUUID();
+    await db.query("INSERT INTO protected_pages(id,project_id,installation_id,name) VALUES ($1,'finance',$2,'Finance')", [page,financeInstallation]);
     await db.query("INSERT INTO protected_page_urls(page_id,origin,pathname) VALUES ($1,'https://example.test','/financas')", [page]);
     await assert.rejects(db.query("INSERT INTO protected_page_urls(page_id,origin,pathname) VALUES ($1,'https://example.test','/')", [page]), {code:'23505'});
     await assert.rejects(db.query("INSERT INTO protected_pages(id,project_id,installation_id,name) VALUES ($1,'missing',$2,'Invalid')", [randomUUID(),randomUUID()]), {code:'23503'});
     assert.equal((await db.query('SELECT id FROM installations WHERE project_id=$1',['health'])).rows[0].id, installation);
+    const health = await resolvePageContext(db, installation);
+    const finance = await resolvePageContext(db, financeInstallation);
+    assert.equal(health?.project, 'health'); assert.equal(finance?.project, 'finance');
+    assert.deepEqual(finance?.urls, [{origin:'https://example.test',pathname:'/financas'}]);
+    assert.equal(await resolvePageContext(db, 'not-a-uuid'), null);
+    assert.equal(await resolvePageContext(db, randomUUID()), null);
+    await db.query('UPDATE protected_pages SET enabled=false WHERE id=$1', [page]);
+    assert.equal(await resolvePageContext(db, financeInstallation), null);
   } finally {
     await db.end(); await root.query(`DROP SCHEMA ${schema} CASCADE`); await root.end();
   }
