@@ -1,3 +1,4 @@
+- **Consolidacao pre-VPS validada em laboratorio:** codigo f0dd974; F42, fatos/recibos F29, premissas/estimativa F30 e painel integrados a PostgreSQL/Chromium/SMTP. Suite Linux HTTPS final: 98 PASS, 0 FAIL, 0 SKIP; lint/typecheck/build e 9 testes Python PASS. Revisao independente consolidada favoravel, incluindo retencao periodica, proxy scoped e fixture TTL atomica. Evidencias em docs/PRE-VPS-FUNCTIONAL-LAB.md. Receita comprovada/carregamento externo indisponiveis; LOW apenas LAB. Branch para revisao externa, sem merge/deploy.
 # STATUS — AntiClone Personal
 - **PR #60 CI corrigida:** limpeza antes do envio e falha reconciliavel; gate pre-projects explicito; aprovacao incompativel PageConflict; F44 assincrono com lock proprio e registro de lacunas.
 - **Regressoes adicionais:** admissao HTTP limitada preserva conexoes para escritas; fixture de retencao transacional, asserts/TTLs mantidos. Causas e provas: docs/PR60-CI-FIXES.md.

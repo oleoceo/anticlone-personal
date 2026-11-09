@@ -96,6 +96,10 @@ test('GS16: real backup, isolated restore, complete data integrity and restarted
     await assert.rejects(restore(targetUrl,directory,targetName,tool),/empty and offline/);
     // No live target sessions may coexist with restore.
     await target.end();
+    // Pool.end closes sockets locally; wait for PostgreSQL to observe every close.
+    let offline=false;
+    for(let i=0;i<100;i++){const remaining=await root.query('SELECT count(*)::int n FROM pg_stat_activity WHERE datname=$1',[targetName]);if(remaining.rows[0].n===0){offline=true;break;}await new Promise(r=>setTimeout(r,10));}
+    assert.ok(offline,'restore target has no server-side sessions');
     assert.ok((await restore(targetUrl,directory,targetName,tool)).verified);
     await assert.rejects(restore(targetUrl,directory,targetName,tool),/empty and offline/);
     const restored=new Pool({connectionString:targetUrl});

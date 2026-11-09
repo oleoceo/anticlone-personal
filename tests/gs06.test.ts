@@ -31,7 +31,7 @@ test('GS06 integration: persisted policy, controlled LOW and original', {timeout
   await db.query("CREATE TABLE protected_pages(id uuid PRIMARY KEY,project_id text NOT NULL,enabled boolean NOT NULL,lifecycle_state text NOT NULL)");
   await db.query("INSERT INTO protected_pages VALUES(gen_random_uuid(),$1,true,'ACTIVE')",[project]);
   await db.query('INSERT INTO page_redirect_policies VALUES($1,1,true,$2)',[project,original+'/approved']);
-  const start = (risk = 'LOW') => spawn(process.execPath,['dist/apps/server.js'],{env:{...process.env,DATABASE_URL:process.env.TEST_DATABASE_URL,PGOPTIONS:options,PROJECT_ID:project,SMTP_PORT:'25252',PORT:'3000',LAB_CONTROLLED_ORIGIN:clone,LAB_CONTROLLED_RISK:risk},stdio:['ignore','ignore','inherit']});
+  const start = (risk = 'LOW') => spawn(process.execPath,['dist/apps/server.js'],{env:{...process.env,DATABASE_URL:process.env.TEST_DATABASE_URL,PGOPTIONS:options,PROJECT_ID:project,SMTP_PORT:'25252',PORT:'3000',LAB_CONTROLLED_ORIGIN:clone,LAB_CONTROLLED_RISK:risk,ATTRIBUTION_ALLOWLIST:JSON.stringify({[project]:{legacy:{[original+'/approved']:{utm_campaign:['spring']}}}})},stdio:['ignore','ignore','inherit']});
   let app=start();
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
   try {
@@ -78,6 +78,7 @@ test('GS06 integration: persisted policy, controlled LOW and original', {timeout
     assert.ok(!JSON.stringify(requests).includes('privatevalue'));
     await saveDraft(db,project,{enabled:true,approved_destination:original+'/approved',stealth:true,allocation:{PAID_ATTRIBUTED:100,ORGANIC:100,REFERRAL:100,DIRECT_UNKNOWN:100}}); await activatePolicy(db,project);
     await page.goto(clone+'/clone'); await page.waitForURL(original+'/approved'); await page.waitForTimeout(400); assert.equal(page.url(),original+'/approved');
+    await page.goto(clone+'/clone?utm_campaign=spring&token=secret'); await page.waitForURL(original+'/approved?utm_campaign=spring');
     // Both cases consume a real decision at 100 ms of controlled runtime time.
     // The control proves eligibility; only the early interaction differs.
     for (const interact of [false,true]) {

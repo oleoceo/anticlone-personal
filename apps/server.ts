@@ -1,3 +1,5 @@
+import { observedSessionGateway } from './observed-session-gateway.js';
+import { withAttribution } from './attribution.js';
 import { authorizedHosts, collectInfrastructure, realResolver } from './infrastructure-dns.js';
 import http from 'node:http';
 import { randomUUID } from 'node:crypto';
@@ -143,11 +145,13 @@ async function withLegacyEligibility<T>(action: () => Promise<T>, reserve=true):
     if (reserve) { const next=legacyWaiters.shift(); if(next) next(); else legacyAdmissions--; }
   }
 }
+const handleObservedSession=observedSessionGateway(pool);
 const handleCheckout = checkoutWebhook(pool,activeProject,project ? process.env : {...process.env,CHECKOUT_WEBHOOK_SECRET:undefined});
 const handleProjectCheckout = projectCheckoutWebhooks(pool,process.env);
 const server = http.createServer((req, res) => {
   if (!boundary(req, res)) return;
   if (handleProjectCheckout(req,res)) return;
+  if (handleObservedSession(req,res)) return;
   if (scoped(req,res)) return;
   if (!project && req.url !== '/healthz') { res.writeHead(404).end(); return; }
   if (handleCheckout(req,res)) return;
@@ -230,7 +234,7 @@ const server = http.createServer((req, res) => {
       const entry = entryDecision(entryPolicy, normalizedOrigin, origin, controlledOrigin, assessment.level, session, trafficClass);
       if (entry.action === 'PAGE_REDIRECT') return entry;
       return await ctaDecision(pool, activeProject, normalizedOrigin, origin, controlledOrigin, assessment.level, session, trafficClass, pathname);
-    }).then(decision => res.writeHead(200, {'Content-Type': 'application/json'}).end(JSON.stringify(decision ?? {action:'OBSERVE_ONLY'})))
+    }).then(decision => res.writeHead(200, {'Content-Type': 'application/json'}).end(JSON.stringify(withAttribution(decision ?? {action:'OBSERVE_ONLY'}, activeProject, 'legacy', normalizedOrigin))))
       .catch(() => res.writeHead(200, {'Content-Type': 'application/json'}).end(JSON.stringify({action:'OBSERVE_ONLY'}))); }); return;
   }
   if (req.method !== 'POST' || req.url !== '/observe' && req.url !== '/observe/fallback') { res.writeHead(404).end(); return; }
