@@ -98,6 +98,13 @@ test('safe deletion: project write guards, isolated LP closure, URL reuse and ho
    assert.ok(waiting);await publishPagePolicy(db,'finance',draft);await blocker.query('COMMIT');await rejected;
   }finally{await blocker.query('ROLLBACK');blocker.release();await writing?.catch(()=>{});}
   assert.deepEqual(await rows('protection_policy_versions','health'),beforeVersions);
+  // Live LPs in a deleted project reject both transitions without writes.
+  const beforePage=await pageRow(b);
+  for(const action of ['pause-page','resume-page']) assert.equal((await post({project:'health',page:b,action})).status,409);
+  assert.deepEqual(await pageRow(b),beforePage);
+  assert.equal((await post({project:'health',action:'project-state'})).status,200);
+  for(const action of ['pause-page','resume-page']) assert.equal((await post({project:'finance',page:f,action})).status,200);
+  assert.deepEqual(await pageRow(f),{...untouchedF,deletion_version:(BigInt(untouchedF.deletion_version)+2n).toString()});
   const mutations=[()=>saveDraft(db,'health',draft),()=>activatePolicy(db,'health',1),()=>publishCtaPolicy(db,'health',{enabled:true,surface:'main',pathname:'/health-a',allocation}),()=>importInventory(db,'health',inventory),()=>approveDestination(db,'health',{offer:'offer',url:origin+'/checkout'}),()=>mapPoint(db,'health',{offer:'offer',pointId:point,destinationId:destination}),()=>reviewPoint(db,'health',{pointId:point,destinationId:destination,observationId:signal.id}),()=>selectObservation(db,{project:'health',captureId:signal.capture_id,destinationId:destination,observationId:signal.id,offer:'offer',pointId:point,surface:'main'}),()=>approveCommercial(db,{project:'health',captureId:signal.capture_id,destinationId:destination,observationId:signal.id,pointId:point,surface:'main',amount:100,currency:'BRL',version:0}),()=>enableInstallation(db,'health'),()=>disableInstallation(db,'health'),()=>configureHealth(db,'health',true,60,true)];
   for(const mutate of mutations)await assert.rejects(mutate,DeletedProjectConflict);
   assert.equal((await post({project:'health',page:a,action:'preview-delete-page'})).status,200,'consultation remains available after project tombstone');
@@ -112,7 +119,7 @@ test('safe deletion: project write guards, isolated LP closure, URL reuse and ho
   assert.equal(purge.physicalDeletionAvailable,false);assert.equal(purge.executed,false);assert.ok(purge.blockers.some((v:{table:string;reason:string})=>v.table==='page_policy_approvals'&&v.reason.includes('Immutable')));assert.ok(purge.blockers.some((v:{table:string})=>v.table===external+'.external_audit'));
   assert.ok(purge.foreignKeys.some((v:{schema:string})=>v.schema===external));assert.ok(purge.inventory.some((v:{table:string;scope:string;rows:number})=>v.table==='page_policy_approval_entries'&&v.scope==='PROJECT_KEY'&&v.rows===1));
   assert.equal((await post({project:'health',action:'purge-project',version:'999',confirmation:purge.confirmation,justification:'Blocked physical test'})).status,409);
-  const attempted=await post({project:'health',action:'purge-project',version:purge.version,confirmation:purge.confirmation,justification:'Blocked physical test'});assert.equal(attempted.status,200);assert.equal(attempted.body.executed,false);
+  const attempted=await post({project:'health',action:'purge-project',version:purge.version,confirmation:purge.confirmation,justification:'Blocked physical test'});assert.equal(attempted.status,409);
   assert.equal((await db.query("SELECT count(*)::int n FROM projects WHERE id='health'")).rows[0].n,1);assert.deepEqual(await rows('page_policy_approvals','health'),history);assert.deepEqual(await rows('checkout_receipts','health'),finances);
   assert.ok(purge.backupPolicy.includes('backups'));
   const current=(await db.query("SELECT lifecycle_version FROM projects WHERE id='health'")).rows[0].lifecycle_version;

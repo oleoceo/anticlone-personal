@@ -1,6 +1,6 @@
 # Safe page closure and project deletion boundaries
 
-Scope: F36/GS15, same single-owner admin interface and branch. Existing pause/archive/restore, DNS and CTA transport semantics were not rebuilt. No real project/page was deleted, no production migration was applied and no PR/deploy was created.
+Scope: F36/GS15, same single-owner admin interface and branch. Existing pause/archive/restore, DNS and CTA transport semantics were not rebuilt. No real project/page was deleted, no production migration was applied and no production deploy was created.
 
 ## Administrative writes on deleted projects
 
@@ -22,7 +22,7 @@ Removed live URL rows release the existing UNIQUE(origin,pathname) constraint fo
 
 preview-purge-project enumerates the resolved projects-table schema plus inbound FK-reachable dependencies from other user schemas. It reports project-key counts, FK-reachable candidates, shared/unproven counts, FK definitions and triggers. SQL identifiers come from the catalog and are quoted; values stay parameterized. Missing SELECT permission is an explicit blocker/count-null rather than silently treating dependencies as empty.
 
-The purge-project request requires ARCHIVED, the expected lifecycle version and exact PURGE PROJECT ID:name confirmation plus justification, but always returns physicalDeletionAvailable=false and executed=false with the current blockers. No DELETE-project executor exists, even for apparently empty projects. The panel exposes inspection, not a fake purge success.
+The purge-project request requires ARCHIVED, the expected lifecycle version and exact PURGE PROJECT ID:name confirmation plus justification, but always rejects execution with HTTP 409. The preview remains HTTP 200 with physicalDeletionAvailable=false, executed=false and the current blockers. No DELETE-project executor exists, even for apparently empty projects. The panel exposes inspection, not a fake purge success.
 
 Concrete blockers in the tested complete schema include:
 
@@ -44,4 +44,4 @@ Build and run tests/safe-deletion.test.ts through dist with TEST_DATABASE_URL po
 
 The test proves URL reuse with a new identity, uniqueness, stale and concurrent deletion, audit rollback, unchanged other LP/approval/financial/CTA rows, tombstone-versus-policy lock ordering, rejection of twelve administrative mutation families, Finance configuration/checkout continuity, consultable deleted projects, archived/versioned physical-purge refusal, external FK discovery and unchanged retained evidence. Tests do not use mocked eligibility. PostgreSQL barriers use concrete locks/PIDs rather than sleeps. Related policy/CTA/installation/health/triage/page/lifecycle regressions are run separately.
 
-Final local checks: lint/typecheck/build PASS; the 19-case focused PostgreSQL/Chromium regression suite PASS. The integrated safe-deletion scenario also checks resolution of the actual projects schema when another schema is first in search_path. Independent read-only review: /root/safe_deletion_review. Remote CI was not started; this branch workflow runs on PR/main and no PR is authorized.
+Final local checks: lint/typecheck/build PASS; the 19-case focused PostgreSQL/Chromium regression suite PASS. The integrated safe-deletion scenario also checks resolution of the actual projects schema when another schema is first in search_path. Independent read-only review: /root/safe_deletion_review. The lifecycle PR carries CI and independent review for the final SHA; physical project deletion remains BLOCKED without an executor.

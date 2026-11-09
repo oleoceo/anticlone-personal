@@ -1,4 +1,7 @@
 # STATUS — AntiClone Personal
+- **Ajustes finais F36/GS15:** pause/resume-page verificam deleted_at sob lock transacional; purge-project retorna HTTP 409, previa HTTP 200 com bloqueadores.
+- **Validacao final local:** lint/typecheck/build PASS; safe-deletion e project-lifecycle-admin PostgreSQL/Chromium 2/2 PASS. Regressao adicional multiproject-contract falhou em attempts de manutencao (Finance 1, esperado 0); sem mudanca fora do escopo.
+- **Revisao do delta:** /root/final_delta_review aprovada sem bloqueios sobre 76b652a, diff 5aeaa0e684ff028cfced049b44ef97992e80715a. PR unico para CI/revisao do SHA final; exclusao fisica BLOCKED, sem executor, merge/deploy/exclusoes reais.
 - **F36/GS15 exclusoes:** guard transacional de escritas admin em projeto tombstonado; LP encerrada com URL reutilizavel, versao/confirmacao/CSRF/auditoria e ancora historica. Apenas dados sinteticos exercitados.
 - **Exclusao fisica BLOCKED isolada:** preview catalogado com FKs/triggers e schemas externos; aprovacoes/versoes imutaveis, FKs de auditoria e ledger financeiro sem politica de desvinculo impedem purga comprovada. Nenhum executor habilitado; nao concluida.
 - **Provas/revisao:** Lint/typecheck/build PASS e 19/19 focados PostgreSQL/Chromium PASS; integrado safe-deletion passou. Revisao read-only /root/safe_deletion_review. Politica/limites: docs/SAFE-DELETION.md. Sem PR/merge/deploy ou exclusao de dados reais.

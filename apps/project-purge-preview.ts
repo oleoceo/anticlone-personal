@@ -61,6 +61,7 @@ export async function projectPurgePreview(db:Pool,data:Record<string,unknown>) {
   const direct=keys.filter(fk=>byId.get(fk.parent)?.schema===currentSchema && byId.get(fk.parent)?.name==='projects');
   for(const fk of direct){const item=inventory.find(t=>t.schema===byId.get(fk.child)?.schema && t.table===byId.get(fk.child)?.name);if(item?.rows)blockers.push({table:item.schema===currentSchema?item.table:item.schema+'.'+item.table,constraint:fk.name,reason:fk.definition,rows:item.rows});}
   if(!blockers.length)blockers.push({table:'projects',reason:'No verified complete physical purge procedure; executor remains disabled'});
+  if(!preview) throw new ProjectPurgeConflict('Physical project deletion is blocked; no verified executor is available');
   await client.query('COMMIT');
   return {project,version:row.lifecycle_version,state:row.lifecycle_state,confirmation,physicalDeletionAvailable:false,executed:false,blockers,inventory,foreignKeys:keys.filter(k=>selected.has(k.child)||selected.has(k.parent)).map(k=>({schema:byId.get(k.child)?.schema,table:byId.get(k.child)?.name,targetSchema:byId.get(k.parent)?.schema,target:byId.get(k.parent)?.name,...k})),triggers,sharedRecordsPolicy:'No unproven/shared record is deleted',backupPolicy:'Active-database deletion would not erase existing backups; backup retention and restore replay remain separate obligations'};
  }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}

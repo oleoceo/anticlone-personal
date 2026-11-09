@@ -34,13 +34,14 @@ export async function managePages(db: Pool, body: unknown) {
     const client=await db.connect();
     try {
       await client.query('BEGIN');
-      const p=await client.query('SELECT lifecycle_state FROM projects WHERE id=$1 FOR UPDATE',[project]);
+      const p=await client.query("SELECT lifecycle_state,to_jsonb(p)->>'deleted_at' AS deleted_at FROM projects p WHERE id=$1 FOR UPDATE",[project]);
       if (!p.rowCount) throw new TypeError('unknown project');
       if (action==='project-state') {
         const pages=await client.query('SELECT id,installation_id,name,enabled,lifecycle_state FROM protected_pages WHERE project_id=$1 ORDER BY name,id',[project]);
         await client.query('COMMIT'); return {project,state:p.rows[0].lifecycle_state,pages:pages.rows};
       }
       if (pageAction) {
+        if (p.rows[0].deleted_at) throw new PageConflict('logically deleted project');
         await assertPageAdministrativeWrite(client,project,data.page as string);
         const page=await client.query('SELECT lifecycle_state,enabled FROM protected_pages WHERE project_id=$1 AND id=$2 FOR UPDATE',[project,data.page]);
         if (!page.rowCount) throw new TypeError('unknown page');
