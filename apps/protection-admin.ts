@@ -34,10 +34,10 @@ export async function protectionAdmin(db: Pool, body: unknown) {
     if (input.action === 'inspect') {
       if (input.data !== null) throw new TypeError('invalid inspection');
       const page = await db.query('SELECT v.* FROM active_protection_policies a JOIN protection_policy_versions v USING(project_id,version) WHERE a.project_id=$1',[project]);
-      const cta = await db.query('SELECT v.* FROM active_cta_policies a JOIN cta_policy_versions v USING(project_id,version) WHERE a.project_id=$1',[project]);
+      const cta = await db.query('SELECT v.* FROM active_cta_surface_policies a JOIN cta_policy_versions v USING(project_id,version) WHERE a.project_id=$1 ORDER BY v.surface',[project]);
       const destinations = await db.query('SELECT id,offer,url FROM cta_destinations WHERE project_id=$1 ORDER BY offer,id LIMIT 1000',[project]);
       const versions = await db.query('SELECT version,enabled,approved_destination,allocation FROM protection_policy_versions WHERE project_id=$1 ORDER BY version DESC LIMIT 20',[project]);
-      return {project:found.rows[0],page:page.rows[0]??null,cta:cta.rows[0]??null,destinations:destinations.rows,versions:versions.rows,externalDestinations:externalDestinations(found.rows[0].origin)};
+      return {project:found.rows[0],page:page.rows[0]??null,cta:cta.rows[0]??null,ctaSurfaces:cta.rows,destinations:destinations.rows,versions:versions.rows,externalDestinations:externalDestinations(found.rows[0].origin)};
     }
     if (input.action === 'page-publish') return publishPagePolicy(db,project,input.data);
     if (input.action === 'cta-publish') return {version:await publishCtaPolicy(db,project,input.data)};

@@ -2,10 +2,21 @@
   try {
     const source = document.currentScript && document.currentScript.src;
     if (!source) return;
+    // Explicit operator-requested inventory is available only on loopback laboratory pages.
+    if (['localhost','127.0.0.1'].includes(location.hostname)) addEventListener('message', event => {
+      try {
+        const sender = new URL(event.origin), request = event.data;
+        if (window.parent === window || event.source !== window.parent || !['localhost','127.0.0.1'].includes(sender.hostname) || !['http:','https:'].includes(sender.protocol) || !request || request.type !== 'anticlone-inventory-request' || typeof request.nonce !== 'string' || !/^[a-f0-9]{32}$/.test(request.nonce) || typeof request.surface !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(request.surface)) return;
+        if (!window.confirm('Permitir captura local dos elementos desta superficie para ' + event.origin + '?')) return;
+        const script = document.createElement('script'); script.src = new URL('/cta-inventory.js', source).href;
+        script.onload = () => { try { event.source.postMessage({type:'anticlone-inventory-result',nonce:request.nonce,surface:request.surface,pathname:location.pathname,candidates:window.anticloneLabInventory(request.surface)},event.origin); } catch (_) { /* No capture on failure. */ } script.remove(); };
+        script.onerror = () => script.remove(); document.head.appendChild(script);
+      } catch (_) { /* Untrusted message. */ }
+    });
     const deadline = performance.now() + 150;
     let redirectPending = true, redirectInteracted = false, abandoned = false, suspended = false;
     let suspendCtas = () => {}, resumeCtas = () => {}, startCore = () => {}, coreLoaded = false, coreStarted = false;
-    const initialPath = location.pathname, initialSearch = location.search;
+    let initialPath = location.pathname, initialSearch = location.search;
     const validContext = () => !abandoned && !suspended && location.pathname === initialPath && location.search === initialSearch;
     const abandon = () => { abandoned = true; cancelRedirect(); };
     const cancelRedirect = () => { redirectPending = false; redirectInteracted = true; };
@@ -16,13 +27,17 @@
     addEventListener('pointerdown', cancelRedirect, {once:true, capture:true});
     addEventListener('keydown', cancelRedirect, {once:true, capture:true});
     addEventListener('click', cancelRedirect, {once:true, capture:true});
-    addEventListener('popstate', () => { if (!validContext()) abandon(); });
-    // A pathname transition permanently invalidates this navigation's prepared decision.
+    const routeChanged = () => {
+      if (location.pathname === initialPath && location.search === initialSearch) return;
+      cancelRedirect(); suspendCtas(); initialPath = location.pathname; initialSearch = location.search;
+      if (!abandoned && !suspended) { if (coreStarted) resumeCtas(); else if (coreLoaded) startCore(); }
+    };
+    addEventListener('popstate', routeChanged);
     for (const method of ['pushState', 'replaceState']) {
       const original = history[method];
       history[method] = function (...args) {
         const result = original.apply(this, args);
-        if (!validContext()) abandon();
+        routeChanged();
         return result;
       };
     }
@@ -41,10 +56,13 @@
         const external = decision.externalDestinations ?? [];
         if (!Array.isArray(external) || external.length > 100 || external.some(url => typeof url !== 'string' || url.length > 2048)) return;
         for (const row of decision.mappings) {
-          if (!row || typeof row.marker !== 'string' || !/^[a-zA-Z0-9_-]{8,64}$/.test(row.marker) || mappings.has(row.marker) || !['a','form'].includes(row.kind) || typeof row.destination !== 'string') return;
+          if (!row || typeof row.marker !== 'string' || !/^[a-zA-Z0-9_-]{8,64}$/.test(row.marker) || (row.surface !== undefined && (typeof row.surface !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(row.surface))) || !['a','form'].includes(row.kind) || typeof row.destination !== 'string') return;
           const target = new URL(row.destination);
           if ((target.origin !== original.origin && (target.protocol !== 'https:' || !external.includes(target.href))) || target.username || target.password || target.hash || !['http:', 'https:'].includes(target.protocol)) return;
-          mappings.set(row.marker, {kind:row.kind, destination:target.href});
+          const entries = mappings.get(row.marker) || [];
+          if (entries.some(item => item.surface === row.surface)) return;
+          if (row.requiresSurface !== undefined && typeof row.requiresSurface !== 'boolean') return;
+          entries.push({surface:row.surface, requiresSurface:row.requiresSurface, kind:row.kind, destination:target.href}); mappings.set(row.marker, entries);
         }
         if (!validContext() || Date.now() < startedWall || Date.now() - startedWall > 5000 || performance.now() - startedMono > 5000) return;
         latestCtaVersion = decision.version;
@@ -66,11 +84,14 @@
                   if (event.defaultPrevented || !validContext() || location.pathname !== snapshot.pathname || !node.isConnected || !node.hasAttribute('href')) return;
                   const mappings = snapshot.mappings;
                   const marker = node.getAttribute('data-anticlone-point');
-                  if (mappings.get(marker)?.kind !== 'a') return;
+                  const entries = mappings.get(marker) || [];
+                  const scope = node.closest('[data-anticlone-surface]')?.getAttribute('data-anticlone-surface');
+                  const entry = scope ? entries.find(item => item.surface === scope) : entries.length === 1 && !entries[0].requiresSurface ? entries[0] : null;
+                  if (!entry || entry.kind !== 'a') return;
                   const current = Array.from(document.querySelectorAll('[data-anticlone-point]'));
-                  if (current.length > 1000 || current.filter(item => item.getAttribute('data-anticlone-point') === marker).length !== 1) return;
+                  if (current.length > 1000 || current.filter(item => item.getAttribute('data-anticlone-point') === marker && (!scope || item.closest('[data-anticlone-surface]')?.getAttribute('data-anticlone-surface') === scope)).length !== 1) return;
                   const previous = node.getAttribute('href');
-                  const replacement = mappings.get(marker).destination;
+                  const replacement = entry.destination;
                   node.setAttribute('href', replacement);
                   setTimeout(() => { if (node.getAttribute('href') === replacement) node.setAttribute('href', previous); }, 0);
                 } catch (_) { /* Preserve the page on incompatible DOM implementations. */ }
@@ -118,7 +139,7 @@
           inFlight = true; const id = ++sequence, wall = Date.now(), mono = performance.now(); lastAttempt = wall;
           controller = new AbortController();
           const requestController = controller, timeout = setTimeout(() => requestController.abort(), 5000);
-          fetch(new URL('/cta-refresh', source).href, {method:'POST', headers:{'Content-Type':'text/plain'}, body:JSON.stringify({session,signals}), cache:'no-store', signal:requestController.signal})
+          fetch(new URL('/cta-refresh', source).href, {method:'POST', headers:{'Content-Type':'text/plain'}, body:JSON.stringify({session,signals,pathname:initialPath}), cache:'no-store', signal:requestController.signal})
             .then(response => { if (!response.ok) throw Error('unavailable'); return response.json(); })
             .then(decision => { if (id !== sequence || !validContext()) return; failed = false; backoff = refreshIntervalMs; activeCtas = null; observeCtaVersion(decision); if (decision && decision.action === 'REPLACE_CONVERSION') prepareCtas(decision, wall, mono); })
             .catch(() => { if (id === sequence) { activeCtas = null; failed = true; backoff = Math.min(backoff * 2, 240000); } })
@@ -130,7 +151,7 @@
         addEventListener('pagehide', event => { if (!event.persisted) { clearInterval(timer); suspendCtas(); } });
         document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(true); });
         const entryWall = Date.now(), entryMono = performance.now(), entrySequence = sequence;
-        fetch(new URL('/entry-decision', source).href, { method:'POST', headers:{'Content-Type':'text/plain'}, body:JSON.stringify({session,signals}), cache: 'no-store' })
+        fetch(new URL('/entry-decision', source).href, { method:'POST', headers:{'Content-Type':'text/plain'}, body:JSON.stringify({session,signals,pathname:initialPath}), cache: 'no-store' })
           .then(response => { if (!response.ok) throw new Error('decision unavailable'); return response.json(); })
           .then(decision => {
             if (!validContext()) return;

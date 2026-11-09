@@ -56,6 +56,7 @@ const controlledOrigin = process.env.LAB_CONTROLLED_ORIGIN ? configuredOrigin(pr
 if (controlledOrigin && (!['127.0.0.1', 'localhost'].includes(new URL(controlledOrigin).hostname) || !['127.0.0.1', 'localhost'].includes(new URL(normalizedOrigin).hostname))) throw new Error('lab origins must be loopback');
 const bootstrap = readFileSync('runtime/bootstrap.js');
 const core = readFileSync('runtime/core.js');
+const inventoryScript = readFileSync('runtime/cta-inventory.js');
 const fallback = readFileSync('runtime/fallback.js');
 let windowStart = Date.now(), count = 0;
 let decisionWindowStart = Date.now(), decisionCount = 0;
@@ -117,9 +118,9 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && req.url === '/healthz') {
     void pool.query('SELECT 1').then(() => res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify({status:'ready', mode:mode.pilot ? 'PILOT_OBSERVE' : 'LAB', action:'OBSERVE_ONLY'}))).catch(() => res.writeHead(503).end()); return;
   }
-  if (req.method === 'GET' && (req.url === '/runtime.js' || req.url === '/core.js' || req.url === '/fallback.js')) {
+  if (req.method === 'GET' && (req.url === '/runtime.js' || req.url === '/core.js' || req.url === '/fallback.js' || req.url === '/cta-inventory.js')) {
     res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
-    res.end(req.url === '/runtime.js' ? bootstrap : req.url === '/core.js' ? core : fallback); return;
+    res.end(req.url === '/runtime.js' ? bootstrap : req.url === '/core.js' ? core : req.url === '/cta-inventory.js' ? inventoryScript : fallback); return;
   }
   if (req.method === 'GET' && (req.url === '/canary/html.gif' || req.url === '/canary/css.gif')) {
     if (Date.now() - windowStart >= 60_000) { windowStart = Date.now(); count = 0; }
@@ -165,8 +166,8 @@ const server = http.createServer((req, res) => {
     req.on('data', (chunk: Buffer) => { if (rejected) return; bodyBytes += chunk.length; body += chunk.toString('utf8'); if (bodyBytes > 2048) { rejected = true; body = ''; res.writeHead(413).end(); } });
     req.on('end', () => {
     if (rejected) return;
-    let session: unknown; let trafficClass: string; let evidence: RiskEvidence;
-    try { const input: unknown = JSON.parse(body); if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).sort().join(',') !== 'session,signals') throw Error('invalid'); const fields = input as Record<string, unknown>; session = fields.session; const traffic = classifyTraffic(fields.signals, origin); trafficClass = traffic.trafficClass; evidence = {source:'browser',reliability:'uncorroborated',trafficClass,kind:traffic.evidence}; } catch { res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify({action:'OBSERVE_ONLY'})); return; }
+    let session: unknown; let trafficClass: string; let evidence: RiskEvidence; let pathname: string|undefined;
+    try { const input: unknown = JSON.parse(body); if (!input || typeof input !== 'object' || Array.isArray(input) || !['session,signals','pathname,session,signals'].includes(Object.keys(input).sort().join(','))) throw Error('invalid'); const fields = input as Record<string, unknown>; if (fields.pathname !== undefined && (typeof fields.pathname !== 'string' || !/^\/[a-zA-Z0-9/_-]{0,200}$/.test(fields.pathname))) throw Error('invalid pathname'); pathname=fields.pathname as string|undefined; session = fields.session; const traffic = classifyTraffic(fields.signals, origin); trafficClass = traffic.trafficClass; evidence = {source:'browser',reliability:'uncorroborated',trafficClass,kind:traffic.evidence}; } catch { res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify({action:'OBSERVE_ONLY'})); return; }
     void (async () => {
       const controlled = controlledOrigin === origin && origin !== normalizedOrigin;
       const assessment = safeEvaluateRisk(controlled && process.env.LAB_CONTROLLED_RISK === 'LOW', fixture => {
@@ -179,7 +180,7 @@ const server = http.createServer((req, res) => {
       await recordRisk(pool, activeProject, new URL(origin).hostname, assessment, evidence);
       if (!stealthEligible(assessment, mode.pilot)) return {action:'OBSERVE_ONLY'};
       // Entry selection has no authority over a later interaction.
-      if (refresh) return ctaDecision(pool, activeProject, normalizedOrigin, origin, controlledOrigin, assessment.level, session, trafficClass);
+      if (refresh) return ctaDecision(pool, activeProject, normalizedOrigin, origin, controlledOrigin, assessment.level, session, trafficClass, pathname);
       const result = await pool.query('SELECT v.version,v.enabled,v.approved_destination,v.allocation FROM active_protection_policies a JOIN protection_policy_versions v ON v.project_id=a.project_id AND v.version=a.version WHERE a.project_id=$1 AND v.stealth=true', [activeProject]);
       const entryPolicy = result.rows[0];
       // Invalid enabled entry policy is an evaluation failure, not permission to continue.
@@ -190,7 +191,7 @@ const server = http.createServer((req, res) => {
       }
       const entry = entryDecision(entryPolicy, normalizedOrigin, origin, controlledOrigin, assessment.level, session, trafficClass);
       if (entry.action === 'PAGE_REDIRECT') return entry;
-      return ctaDecision(pool, activeProject, normalizedOrigin, origin, controlledOrigin, assessment.level, session, trafficClass);
+      return ctaDecision(pool, activeProject, normalizedOrigin, origin, controlledOrigin, assessment.level, session, trafficClass, pathname);
     })().then(decision => res.writeHead(200, {'Content-Type': 'application/json'}).end(JSON.stringify(decision)))
       .catch(() => res.writeHead(200, {'Content-Type': 'application/json'}).end(JSON.stringify({action:'OBSERVE_ONLY'}))); }); return;
   }

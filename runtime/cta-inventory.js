@@ -1,8 +1,9 @@
 // Passive, bounded snapshot for operator-assisted laboratory import. No network or DOM writes.
 (() => {
-  window.anticloneLabInventory = () => {
+  window.anticloneLabInventory = (surface) => {
     if (!['localhost', '127.0.0.1'].includes(location.hostname) || !['http:', 'https:'].includes(location.protocol)) throw new Error('laboratory only');
-    const nodes = Array.from(document.querySelectorAll('a[href], form[action], button'));
+    if (surface !== undefined && (typeof surface !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(surface))) throw new Error('invalid surface');
+    const nodes = Array.from(document.querySelectorAll('a[href], form[action], button')).filter(node => surface === undefined || node.closest('[data-anticlone-surface]')?.getAttribute('data-anticlone-surface') === surface);
     if (nodes.length > 100) throw new Error('inventory limit exceeded');
     return nodes.map((node, index) => {
       const marker = node.getAttribute('data-anticlone-point');
