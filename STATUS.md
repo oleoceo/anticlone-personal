@@ -1,4 +1,6 @@
 # STATUS — AntiClone Personal
+- **F36/GS15 ciclo reversivel:** arquivo, restauracao para PAUSED e exclusao logica confirmada no painel; migration045 aditiva com versao e auditoria atomicas. Sem purga fisica, perda de IDs/historico ou resolucao de backlog.
+- **Validacao lifecycle:** PostgreSQL/Chromium/SMTP sinteticos; fluxo admin/CSRF, confirmacao, concorrencia e rollback auditados em tests/project-lifecycle-admin.test.ts. Lint/typecheck/build e 8/8 testes focados PASS; revisao read-only /root/lifecycle_corrections_review. Nenhuma operacao em projeto real.
 - **Correcao da revisao F36/F45:** DNS sem conexao/lock durante resolver; revalidacao transacional antes de gravar. CTA PROCESSING nunca retomado por lease; callback continua dono do token, quedas ficam retidas para revisao sem acao administrativa.
 - **Gates da correcao:** lint/typecheck/build PASS, 11/11 focados PostgreSQL/SMTP PASS (inclui corrida DNS/SMTP e project-pause-delivery). Commit/push na mesma branch; sem PR/merge/deploy ou exclusoes reais.
 - **F36/F01/F26/F45 pausa integrada:** manutencao multiprojeto e legada, coleta e despachos usam gate transacional; retencao por projeto preservada.

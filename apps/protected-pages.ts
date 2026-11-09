@@ -1,8 +1,15 @@
+import { isLifecycleAction, projectLifecycle } from './project-lifecycle.js';
 import { randomUUID } from 'node:crypto';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import { approvalConfiguration } from './page-policy-approval.js';
 
 export class PageConflict extends Error {}
+
+async function assertMutableProject(client:PoolClient, project:string) {
+  const row=(await client.query("SELECT to_jsonb(p)->>'deleted_at' AS deleted_at FROM projects p WHERE id=$1 FOR UPDATE",[project])).rows[0];
+  if (!row) throw new TypeError('unknown project');
+  if (row.deleted_at) throw new PageConflict('logically deleted project');
+}
 
 function address(value: unknown) {
   if (typeof value !== 'string' || value.length>2048 || /[\u0000-\u0020\\]/.test(value)) throw new TypeError('invalid URL');
@@ -17,6 +24,7 @@ export async function managePages(db: Pool, body: unknown) {
   const data=body as Record<string,unknown>;
   if (typeof data.project!=='string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(data.project) || typeof data.action!=='string') throw new TypeError('invalid request');
   const project=data.project, action=data.action;
+  if (isLifecycleAction(action)) return projectLifecycle(db,data);
   if (['project-state','pause-project','resume-project','pause-page','resume-page'].includes(action)) {
     const pageAction=action.endsWith('-page');
     if (Object.keys(data).sort().join(',') !== (pageAction ? 'action,page,project' : 'action,project') || (pageAction && (typeof data.page!=='string' || !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(data.page)))) throw new TypeError('invalid request');
@@ -47,6 +55,7 @@ export async function managePages(db: Pool, body: unknown) {
     const client=await db.connect();
     try {
       await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
+      await assertMutableProject(client,project);
       await client.query('LOCK TABLE projects, protected_pages, protected_page_urls, active_protection_policies, active_cta_surface_policies, page_entry_policy_bindings, page_cta_policy_bindings, cta_points, cta_mappings, cta_destinations, cta_commercial_references IN SHARE ROW EXCLUSIVE MODE');
       const page=await client.query('SELECT url_generation,config_generation,enabled FROM protected_pages WHERE id=$1 AND project_id=$2',[data.page,project]);
       if (!page.rowCount || !page.rows[0].enabled || page.rows[0].url_generation!==data.generation || page.rows[0].config_generation!==data.configGeneration) throw new PageConflict();
@@ -103,8 +112,7 @@ export async function managePages(db: Pool, body: unknown) {
     const url=address(data.url), page=randomUUID(), installation=randomUUID(), client=await db.connect();
     try {
       await client.query('BEGIN');
-      const p=await client.query('SELECT id FROM projects WHERE id=$1 FOR UPDATE',[project]);
-      if (!p.rowCount) throw new TypeError('unknown project');
+      await assertMutableProject(client,project);
       await client.query('INSERT INTO protected_pages(id,project_id,installation_id,name,url_review_required) VALUES($1,$2,$3,$4,true)',[page,project,installation,data.name.trim()]);
       await client.query('INSERT INTO protected_page_urls(page_id,origin,pathname) VALUES($1,$2,$3)',[page,url.origin,url.pathname]);
       await client.query('COMMIT'); return {page,installation};
@@ -114,6 +122,7 @@ export async function managePages(db: Pool, body: unknown) {
     const url=address(data.url), client=await db.connect();
     try {
       await client.query('BEGIN');
+      await assertMutableProject(client,project);
       const page=await client.query('SELECT id FROM protected_pages WHERE id=$1 AND project_id=$2 FOR UPDATE',[data.page,project]);
       if (!page.rowCount) throw new TypeError('unknown page');
       if (action==='add-url') await client.query('INSERT INTO protected_page_urls(page_id,origin,pathname) VALUES($1,$2,$3)',[data.page,url.origin,url.pathname]);
