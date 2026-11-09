@@ -36,6 +36,8 @@ test('scoped browser observations isolate projects on one origin and preserve co
     await db.query(await readFile('infra/038_page_url_review.sql','utf8'));
     await db.query(await readFile('infra/039_page_policy_bindings.sql','utf8'));
     await db.query(await readFile('infra/040_page_policy_approvals.sql','utf8'));
+    await db.query(await readFile('infra/041_page_entry_activation.sql','utf8'));
+    await db.query(await readFile('infra/042_page_installation_signals.sql','utf8'));
     await db.query('CREATE TABLE admin_totp_replay(factor_id text PRIMARY KEY,last_counter bigint NOT NULL)');
     await db.query('CREATE TABLE admin_totp_codes(factor_id text NOT NULL,digest text NOT NULL,valid_until bigint NOT NULL,PRIMARY KEY(factor_id,digest))');
     await db.query("INSERT INTO projects VALUES ('health','Health',$1),('finance','Finance',$1)",[origin]);

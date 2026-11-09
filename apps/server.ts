@@ -1,6 +1,7 @@
 import { authorizedHosts, collectInfrastructure, realResolver } from './infrastructure-dns.js';
 import http from 'node:http';
-import { checkoutWebhook } from './checkout-webhook.js';
+import { projectMaintenance } from './project-maintenance.js';
+import { checkoutWebhook, projectCheckoutWebhooks } from './checkout-webhook.js';
 import { readFileSync } from 'node:fs';
 import { Pool } from 'pg';
 import { configuredOrigin, hostFromUrl, cleanup, observe, observeCanary } from './detection.js';
@@ -61,7 +62,13 @@ const bootstrap = readFileSync('runtime/bootstrap.js');
 const core = readFileSync('runtime/core.js');
 const inventoryScript = readFileSync('runtime/cta-inventory.js');
 const fallback = readFileSync('runtime/fallback.js');
-const scoped = scopedGateway(pool, {'runtime.js':bootstrap,'core.js':core,'fallback.js':fallback});
+const maintainProjects = projectMaintenance(pool,process.env,project);
+const scoped = scopedGateway(pool, {'runtime.js':bootstrap,'core.js':core,'fallback.js':fallback},async(id,page,origin,source)=>{
+  const key='scoped_'+source;
+  if (id===project) claimPending.add(key);
+  try { const ok=await maintainProjects.collect(id,page,origin,source); if (id===project) observeFailure('installation_claim',!ok); return ok; }
+  finally { if (id===project) claimPending.delete(key); }
+});
 let windowStart = Date.now(), count = 0;
 let decisionWindowStart = Date.now(), decisionCount = 0;
 let refreshWindowStart = Date.now(), refreshCount = 0;
@@ -113,10 +120,12 @@ function recordClaim(origin: string, source: 'core' | 'fallback') {
   claimAfter.set(source,Date.now()+60_000);
   void optional.installation.run('claim', () => recordInstallationClaim(pool,activeProject,origin,source)).finally(()=>claimPending.delete(source));
 }
-const handleCheckout = checkoutWebhook(pool,activeProject,process.env);
+const handleCheckout = checkoutWebhook(pool,activeProject,project ? process.env : {...process.env,CHECKOUT_WEBHOOK_SECRET:undefined});
+const handleProjectCheckout = projectCheckoutWebhooks(pool,process.env);
 const server = http.createServer((req, res) => {
   if (!boundary(req, res)) return;
-  if (!project && scoped(req,res)) return;
+  if (handleProjectCheckout(req,res)) return;
+  if (scoped(req,res)) return;
   if (!project && req.url !== '/healthz') { res.writeHead(404).end(); return; }
   if (handleCheckout(req,res)) return;
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -317,5 +326,7 @@ async function infrastructureMaintenance() {
 if (project) void infrastructureMaintenance();
 const dnsTimer = setInterval(() => { if (project) void infrastructureMaintenance(); },60_000);
 dnsTimer.unref();
-if (project) void maintenance(); const timer = setInterval(() => { if (project) void maintenance(); }, 1000);
+if (project) void maintenance();
+void maintainProjects();
+const timer = setInterval(() => { if (project) void maintenance(); void maintainProjects(); }, 1000);
 process.on('SIGTERM', () => { clearInterval(timer); clearInterval(dnsTimer); server.close(() => { void pool.end().finally(() => process.exit()); }); });

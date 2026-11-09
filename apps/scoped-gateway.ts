@@ -8,12 +8,15 @@ import { entryDecision, approvedDestination } from './page-redirect.js';
 import { validateAllocation } from './allocation.js';
 import { assessObservation, recordRisk, safeEvaluateRisk, stealthEligible } from './risk.js';
 import { currentApproval } from './page-policy-approval.js';
+import { projectMaintenance } from './project-maintenance.js';
 
 // Identifiers in these routes are correlation handles, never credentials.
-export function scopedGateway(db: Pool, scripts: Record<string, Buffer>) {
+export function scopedGateway(db: Pool, scripts: Record<string, Buffer>, collect=projectMaintenance(db,{SMTP_PORT:'1'}).collect) {
   const fixtureId=process.env.SCOPED_LAB_INSTALLATION;
+  const fixtureIds=(process.env.SCOPED_LAB_INSTALLATIONS ?? fixtureId ?? "").split(",").filter(Boolean);
+  if (fixtureIds.length>100 || fixtureIds.some(id=>!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(id))) throw Error("invalid scoped lab installations");
   const fixtureOrigin=process.env.SCOPED_LAB_ORIGIN ? configuredOrigin(process.env.SCOPED_LAB_ORIGIN) : undefined;
-  if ((fixtureId || fixtureOrigin) && (!fixtureId || !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(fixtureId) || !fixtureOrigin || !['localhost','127.0.0.1'].includes(new URL(fixtureOrigin).hostname))) throw Error('invalid scoped lab fixture');
+  if ((fixtureIds.length || fixtureOrigin) && (!fixtureIds.length || !fixtureOrigin || !['localhost','127.0.0.1'].includes(new URL(fixtureOrigin).hostname))) throw Error('invalid scoped lab fixture');
   let start = Date.now(), count = 0;
   return (req: IncomingMessage, res: ServerResponse): boolean => {
     const match = /^\/i\/([0-9a-f-]{36})\/(runtime\.js|core\.js|fallback\.js|observe|observe\/fallback|entry-decision|cta-refresh)$/i.exec(req.url ?? '');
@@ -51,7 +54,7 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>) {
           if (!approval) { fallback(); return; }
           const original=context.urls[0];
           const evidence={source:'browser' as const,reliability:'uncorroborated' as const,trafficClass:traffic.trafficClass,kind:traffic.evidence};
-          const controlled=match[1].toLowerCase()===fixtureId?.toLowerCase() && origin===fixtureOrigin && ['localhost','127.0.0.1'].includes(new URL(original.origin).hostname) && origin!==original.origin;
+          const controlled=fixtureIds.some(id=>id.toLowerCase()===match[1].toLowerCase()) && origin===fixtureOrigin && ['localhost','127.0.0.1'].includes(new URL(original.origin).hostname) && origin!==original.origin;
           const assessment=safeEvaluateRisk(controlled,fixture=>assessObservation(evidence,fixture));
           if (!assessment) { fallback(); return; }
           const finish=async (result:unknown) => {
@@ -61,7 +64,7 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>) {
           };
           if (!stealthEligible(assessment,false)) { await finish({action:'OBSERVE_ONLY'}); return; }
           if (endpoint==='entry-decision' && approval.entryVersion!==null) {
-            const result=await client.query('SELECT v.version,v.enabled,v.approved_destination,v.allocation FROM active_protection_policies a JOIN protection_policy_versions v ON v.project_id=a.project_id AND v.version=a.version JOIN page_entry_policy_bindings b ON b.project_id=a.project_id AND b.version=a.version WHERE a.project_id=$1 AND b.page_id=$2 AND v.stealth=true',[context.project,context.page]);
+            const result=await client.query('SELECT v.version,v.enabled,v.approved_destination,v.allocation FROM page_entry_policy_bindings b JOIN protection_policy_versions v ON v.project_id=b.project_id AND v.version=b.version WHERE b.project_id=$1 AND b.page_id=$2 AND v.stealth=true',[context.project,context.page]);
             const policy=result.rows[0];
             if (policy?.enabled) { approvedDestination(policy.approved_destination,original.origin); validateAllocation(policy.allocation); }
             const entry=entryDecision(policy,original.origin,origin,fixtureOrigin,assessment.level,fields.session,traffic.trafficClass);
@@ -82,6 +85,7 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>) {
         if (!context) { res.writeHead(404).end(); return; }
         const authorized=context.urls.some(value => value.origin===origin && value.pathname===url.pathname);
         const result=await observe(db,context.project,authorized ? [origin] : [],origin,core ? 'core' : 'fallback',core ? fields.signals : undefined);
+        if (authorized) await collect(context.project,context.page,origin,core ? 'core':'fallback');
         res.writeHead(result==='capacity' ? 429 : 204).end();
       })().catch((error:unknown) => decision ? res.writeHead(200,{'Content-Type':'application/json'}).end('{"action":"OBSERVE_ONLY"}') : res.writeHead(error instanceof TypeError || error instanceof SyntaxError ? 400 : 503).end());
     });

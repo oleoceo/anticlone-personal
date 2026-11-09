@@ -51,7 +51,7 @@ export async function managePages(db: Pool, body: unknown) {
       const page=await client.query('SELECT id,project_id,installation_id,name,enabled,url_generation,config_generation,url_review_required FROM protected_pages WHERE id=$1 AND project_id=$2',[data.page,project]);
       if (!page.rowCount) throw new TypeError('unknown page');
       const urls=await client.query('SELECT origin,pathname FROM protected_page_urls WHERE page_id=$1 ORDER BY origin,pathname',[data.page]);
-      const entries=await client.query(`SELECT v.version,v.enabled,v.approved_destination,v.stealth,v.allocation,(a.version=v.version) AS active,(b.version=v.version) AS bound
+      const entries=await client.query(`SELECT v.version,v.enabled,v.approved_destination,v.stealth,v.allocation,true AS active,(b.version=v.version) AS bound
         FROM protection_policy_versions v LEFT JOIN active_protection_policies a ON a.project_id=v.project_id
         LEFT JOIN page_entry_policy_bindings b ON b.project_id=v.project_id AND b.page_id=$2 WHERE v.project_id=$1 ORDER BY v.version DESC LIMIT 100`,[project,data.page]);
       const ctas=await client.query(`SELECT v.version,v.surface,v.pathname,v.enabled,v.allocation,(a.version=v.version) AS active,(b.page_id=$2 AND b.version=v.version) AS bound,b.page_id AS bound_page
@@ -61,8 +61,10 @@ export async function managePages(db: Pool, body: unknown) {
         FROM cta_points p LEFT JOIN cta_mappings m ON m.project_id=p.project_id AND m.point_id=p.id
         LEFT JOIN cta_destinations d ON d.project_id=m.project_id AND d.offer=m.offer AND d.id=m.destination_id
         LEFT JOIN cta_commercial_references r ON r.project_id=p.project_id AND r.point_id=p.id WHERE p.project_id=$1 ORDER BY p.surface,p.id LIMIT 1000`,[project]);
+      const installed=await client.query("SELECT to_regclass('page_installation_signals') IS NOT NULL AS installed");
+      const signals=installed.rows[0].installed ? await client.query("SELECT source,last_observed_at FROM page_installation_signals WHERE project_id=$1 AND page_id=$2 AND last_observed_at>=now()-interval '7 days' ORDER BY source",[project,data.page]) : {rows:[]};
       await client.query('COMMIT');
-      return {page:page.rows[0],urls:urls.rows,entryPolicies:entries.rows,ctaPolicies:ctas.rows,points:points.rows,installationStatus:'NOT_VERIFIED',reviewAvailable:true};
+      return {signals:signals.rows,signalConfidence:'UNAUTHENTICATED_CLAIM',page:page.rows[0],urls:urls.rows,entryPolicies:entries.rows,ctaPolicies:ctas.rows,points:points.rows,installationStatus:'NOT_VERIFIED',reviewAvailable:true};
     } catch(error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
   }
   if (action==='list' && Object.keys(data).sort().join(',')==='action,project') {

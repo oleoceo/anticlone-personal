@@ -7,7 +7,7 @@ export async function approvalConfiguration(client: PoolClient, project: string,
   const urls=await client.query('SELECT origin,pathname FROM protected_page_urls WHERE page_id=$1 ORDER BY origin,pathname',[page]);
   if (urls.rowCount!==1) throw new Error('ambiguous page URLs');
   const original=urls.rows[0];
-  const entries=entry===null ? {rows:[]} : await client.query(`SELECT v.version,v.enabled,v.stealth,v.approved_destination,v.allocation FROM protection_policy_versions v JOIN active_protection_policies a ON a.project_id=v.project_id AND a.version=v.version WHERE v.project_id=$1 AND v.version=$2`,[project,entry]);
+  const entries=entry===null ? {rows:[]} : await client.query(`SELECT v.version,v.enabled,v.stealth,v.approved_destination,v.allocation FROM protection_policy_versions v WHERE v.project_id=$1 AND v.version=$2`,[project,entry]);
   if (entry!==null && (entries.rows.length!==1 || !entries.rows[0].enabled || !entries.rows[0].stealth)) throw new Error('inactive page policy');
   for (const row of entries.rows) { approvedDestination(row.approved_destination,original.origin); validateAllocation(row.allocation); }
   const policies=await client.query(`SELECT v.version,v.enabled,v.surface,v.pathname,v.allocation,b.page_id AS bound_page FROM cta_policy_versions v JOIN active_cta_surface_policies a ON a.project_id=v.project_id AND a.surface=v.surface AND a.version=v.version LEFT JOIN page_cta_policy_bindings b ON b.project_id=v.project_id AND b.surface=v.surface WHERE v.project_id=$1 AND v.version=ANY($2::int[]) ORDER BY v.surface`,[project,versions]);
