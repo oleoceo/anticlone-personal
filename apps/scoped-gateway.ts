@@ -1,3 +1,4 @@
+import { issueObservedReceipt } from './observed-receipts.js';
 import { withAttribution } from './attribution.js';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Pool } from 'pg';
@@ -71,10 +72,10 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>, collect
             const policy=result.rows[0];
             if (policy?.enabled) { approvedDestination(policy.approved_destination,original.origin); validateAllocation(policy.allocation); }
             const entry=entryDecision(policy,original.origin,origin,fixtureOrigin,assessment.level,fields.session,traffic.trafficClass);
-            if (entry.action==='PAGE_REDIRECT') { await finish(withAttribution(entry,context.project,context.page,original.origin)); return; }
+            if (entry.action==='PAGE_REDIRECT') { await finish(await issueObservedReceipt(db,context.project,context.page,origin,fields.session,traffic.trafficClass,withAttribution(entry,context.project,context.page,original.origin))); return; }
           }
           const result=await ctaDecision(db,context.project,original.origin,origin,fixtureOrigin,assessment.level,fields.session,traffic.trafficClass,original.pathname,fields.pathname,context.page,client);
-          await finish(withAttribution(result,context.project,context.page,original.origin)); return;
+          await finish(await issueObservedReceipt(db,context.project,context.page,origin,fields.session,traffic.trafficClass,withAttribution(result,context.project,context.page,original.origin))); return;
           } finally { if (!released) { try { await client.query('ROLLBACK'); client.release(); } catch { client.release(true); } } }
         }
         const core = endpoint === 'observe';

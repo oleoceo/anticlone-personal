@@ -1,3 +1,4 @@
+- **Consolidacao pre-VPS em andamento:** F42 laboratorial preservado em f77564d; F29/F30 com fatos idempotentes por pagina/projeto, recibos de decisao, coleta passiva, painel e premissas versionadas. Testes focados PostgreSQL/Chromium/SMTP em observed-metrics e scoped-gateway passaram; lint/build aprovados. Decisoes, cliques e tentativa de redirect separados; receita comprovada indisponivel. Matriz integral, classes/percentuais/drift scoped, HTTPS, regressao final e revisao consolidada pendentes; sem push/deploy. LOW apenas LAB.
 # STATUS — AntiClone Personal
 - **PR #60 CI corrigida:** limpeza antes do envio e falha reconciliavel; gate pre-projects explicito; aprovacao incompativel PageConflict; F44 assincrono com lock proprio e registro de lacunas.
 - **Regressoes adicionais:** admissao HTTP limitada preserva conexoes para escritas; fixture de retencao transacional, asserts/TTLs mantidos. Causas e provas: docs/PR60-CI-FIXES.md.

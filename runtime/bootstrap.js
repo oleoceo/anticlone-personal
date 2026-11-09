@@ -60,6 +60,10 @@
       }
       return target.href;
     };
+    const reportAction = (receipt, marker, surface) => {
+      if (typeof receipt !== 'string') return;
+      try { const hex=Array.from(crypto.getRandomValues(new Uint8Array(16)),x=>x.toString(16).padStart(2,'0')).join(''); const event=[hex.slice(0,8),hex.slice(8,12),hex.slice(12,16),hex.slice(16,20),hex.slice(20)].join('-'); navigator.sendBeacon(endpoint('observed-action'), new Blob([JSON.stringify({receipt,event,marker,surface})],{type:'text/plain'})); } catch (_) { /* Observation never gates navigation. */ }
+    };
     const prepareCtas = (decision, startedWall, startedMono) => {
       try {
         if (!Number.isSafeInteger(decision.version) || decision.version < 1 || decision.version < latestCtaVersion || location.pathname !== decision.pathname || !Array.isArray(decision.mappings) || decision.mappings.length > 100) return;
@@ -79,7 +83,7 @@
         }
         if (!validContext() || Date.now() < startedWall || Date.now() - startedWall > 5000 || performance.now() - startedMono > 5000) return;
         latestCtaVersion = decision.version;
-        activeCtas = {mappings, pathname:decision.pathname, startedWall, startedMono};
+        activeCtas = {receipt:decision.observationReceipt,mappings, pathname:decision.pathname, startedWall, startedMono};
         if (!listenerInstalled) { listenerInstalled = true; install(); }
       } catch (_) { /* Keep original links. */ }
     };
@@ -106,6 +110,7 @@
                   const previous = node.getAttribute('href');
                   const replacement = entry.destination;
                   node.setAttribute('href', replacement);
+                  reportAction(snapshot.receipt, marker, entry.surface ?? null);
                   setTimeout(() => { if (node.getAttribute('href') === replacement) node.setAttribute('href', previous); }, 0);
                 } catch (_) { /* Preserve the page on incompatible DOM implementations. */ }
               };
@@ -179,6 +184,7 @@
             if (decision.action !== 'PAGE_REDIRECT' || !Number.isSafeInteger(decision.version) || decision.version < 1 || typeof decision.destination !== 'string') return;
             const target = new URL(decision.destination);
             if (!['http:', 'https:'].includes(target.protocol) || target.username || target.password || target.hash || target.href === location.href || target.origin === location.origin) return;
+            reportAction(decision.observationReceipt, null, null);
             location.replace(attributed(target.href, decision.attribution));
           }).catch(cancelRedirect);
       } catch (_) { cancelRedirect(); }

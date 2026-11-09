@@ -32,9 +32,11 @@ export async function observedMetrics(db:Pool, project:string, page:string, from
   const start=Date.parse(from),end=Date.parse(until);
   if(!Number.isFinite(start)||!Number.isFinite(end)||end<=start||end-start>7*86400000)throw new TypeError('invalid period');
   const result=await db.query(`SELECT traffic_class,action,evidence,policy_version,count(*)::int events,count(DISTINCT session_id)::int sessions FROM observed_action_facts WHERE project_id=$1 AND page_id=$2 AND received_at >= $3 AND received_at < $4 AND received_at >= clock_timestamp()-interval '7 days' GROUP BY traffic_class,action,evidence,policy_version ORDER BY traffic_class,action,policy_version`,[project,page,from,until]);
+  const receiptsInstalled=(await db.query("SELECT to_regclass('observed_decision_receipts') IS NOT NULL installed")).rows[0].installed;
+  const prepared=receiptsInstalled?(await db.query(`SELECT traffic_class,action,policy_version,count(*)::int decisions FROM observed_decision_receipts WHERE project_id=$1 AND page_id=$2 AND prepared_at >= $3 AND prepared_at < $4 AND prepared_at >= clock_timestamp()-interval '7 days' GROUP BY traffic_class,action,policy_version ORDER BY action,policy_version`,[project,page,from,until])).rows:null;
   const assumptions=(await db.query('SELECT version,ticket_minor,conversion_basis_points,currency,configured_at FROM estimate_assumptions WHERE project_id=$1 ORDER BY version DESC LIMIT 1',[project])).rows[0]??null;
   const clicks=result.rows.filter(row=>row.action==='CTA_CLICK_OBSERVED').reduce((sum,row)=>sum+row.events,0);
-  return {source:'OBSERVED_CLAIMS',people:null,external_load_confirmed:null,recovered_revenue:null,rows:result.rows,assumptions,estimate:assumptions&&clicks>0?{label:'ESTIMATE',eligible_observed_clicks:clicks,amount_minor_numerator:(BigInt(clicks)*BigInt(assumptions.ticket_minor)*BigInt(assumptions.conversion_basis_points)).toString(),denominator:10000,currency:assumptions.currency}:null};
+  return {prepared_decisions:prepared,source:'OBSERVED_CLAIMS',people:null,external_load_confirmed:null,recovered_revenue:null,rows:result.rows,assumptions,estimate:assumptions&&clicks>0?{label:'ESTIMATE',eligible_observed_clicks:clicks,amount_minor_numerator:(BigInt(clicks)*BigInt(assumptions.ticket_minor)*BigInt(assumptions.conversion_basis_points)).toString(),denominator:10000,currency:assumptions.currency}:null};
 }
 export async function metricsAdmin(db:Pool, body:unknown) {
  if(!body||typeof body!=='object'||Array.isArray(body))throw new TypeError('invalid metrics request');

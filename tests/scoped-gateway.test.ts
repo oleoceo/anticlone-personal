@@ -1,3 +1,6 @@
+import {SMTPServer} from 'smtp-server';
+import {deliverOne} from '../apps/alerts.js';
+import {configureEstimate,observedMetrics} from '../apps/observed-metrics.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
@@ -30,6 +33,9 @@ test('scoped browser observations isolate projects on one origin and preserve co
   await once(fixture,'listening');
   const address=fixture.address(); assert.ok(address && typeof address!=='string');
   const origin=`http://127.0.0.1:${address.port}`;
+  const messages:string[]=[];
+  const smtp=new SMTPServer({authOptional:true,disabledCommands:['AUTH','STARTTLS'],onData(stream,_session,callback){let message='';stream.on('data',chunk=>{message+=String(chunk);});stream.on('end',()=>{messages.push(message);callback();});}});
+  await new Promise<void>(resolve=>smtp.listen(0,'127.0.0.1',resolve));const smtpAddress=smtp.server.address();assert.ok(smtpAddress&&typeof smtpAddress!=='string');
   let child: ReturnType<typeof spawn> | undefined;
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
   let admin: ReturnType<typeof createAdminServer> | undefined;
@@ -42,6 +48,8 @@ test('scoped browser observations isolate projects on one origin and preserve co
     await db.query(await readFile('infra/041_page_entry_activation.sql','utf8'));
     await db.query(await readFile('infra/042_page_installation_signals.sql','utf8'));
     await db.query(await readFile('infra/047_observed_metrics.sql','utf8'));
+    await db.query(await readFile('infra/048_observed_receipts.sql','utf8'));
+    await db.query(await readFile('infra/033_clone_delivery_attempts.sql','utf8'));
     await db.query('CREATE TABLE admin_totp_replay(factor_id text PRIMARY KEY,last_counter bigint NOT NULL)');
     await db.query('CREATE TABLE admin_totp_codes(factor_id text NOT NULL,digest text NOT NULL,valid_until bigint NOT NULL,PRIMARY KEY(factor_id,digest))');
     await db.query("INSERT INTO projects VALUES ('health','Health',$1),('finance','Finance',$1)",[origin]);
@@ -75,7 +83,7 @@ test('scoped browser observations isolate projects on one origin and preserve co
     const financeState=await db.query('SELECT config_generation FROM protected_pages WHERE id=$1',[fp]);
     await managePages(db,{action:'approve',project:'finance',page:fp,generation:'1',configGeneration:financeState.rows[0].config_generation,entryVersion:null,ctaVersions:[1]});
     const financeSnapshot=await db.query(`SELECT p.url_generation,p.config_generation,p.url_review_required,b.surface,b.version,a.id AS approval FROM protected_pages p JOIN page_cta_policy_bindings b ON b.page_id=p.id AND b.project_id=p.project_id JOIN page_policy_approvals a ON a.page_id=p.id AND a.project_id=p.project_id WHERE p.id=$1`,[fp]);
-    const env: NodeJS.ProcessEnv={...process.env,PGOPTIONS:options,DATABASE_URL:process.env.TEST_DATABASE_URL,SMTP_PORT:'1',PORT:'3000',SCOPED_LAB_INSTALLATIONS:[health,entryOne,entryTwo].join(','),ATTRIBUTION_ALLOWLIST:JSON.stringify({health:{[pageOne]:{[shared]:{utm_source:['ads'],utm_campaign:['one']}},[pageTwo]:{[shared]:{utm_source:['ads'],utm_campaign:['two']}},[hp]:{[origin+'/health-checkout?utm_source=offer']:{utm_source:['ads'],utm_campaign:['spring']}}},finance:{[fp]:{[origin+'/finance-checkout']:{utm_campaign:['finance']}}}}),SCOPED_LAB_ORIGIN:`http://localhost:${address.port}`};
+    const env: NodeJS.ProcessEnv={...process.env,PGOPTIONS:options,DATABASE_URL:process.env.TEST_DATABASE_URL,SMTP_PORT:String(smtpAddress.port),PORT:'3000',SCOPED_LAB_INSTALLATIONS:[health,entryOne,entryTwo].join(','),ATTRIBUTION_ALLOWLIST:JSON.stringify({health:{[pageOne]:{[shared]:{utm_source:['ads'],utm_campaign:['one']}},[pageTwo]:{[shared]:{utm_source:['ads'],utm_campaign:['two']}},[hp]:{[origin+'/health-checkout?utm_source=offer']:{utm_source:['ads'],utm_campaign:['spring']}}},finance:{[fp]:{[origin+'/finance-checkout']:{utm_campaign:['finance']}}}}),SCOPED_LAB_ORIGIN:`http://localhost:${address.port}`};
     delete env.PROJECT_ID; delete env.ALLOWED_ORIGIN;
     child=spawn(process.execPath,['dist/apps/server.js'],{env,stdio:'ignore'});
     for (let i=0;i<100;i++) { try { if ((await fetch('http://127.0.0.1:3000/healthz')).ok) break; } catch { /* starting */ } await new Promise(r=>setTimeout(r,50)); }
@@ -94,10 +102,14 @@ test('scoped browser observations isolate projects on one origin and preserve co
     for (const [path,label] of [['/entry-one','one'],['/entry-two','two']]) {
       const controlled:Page=await browser.newPage();
       await controlled.clock.install({time:0}); await controlled.clock.pauseAt(1000);
+      await controlled.route('**/entry-decision',async route=>{const result=await route.fetch();const payload=await result.json() as {observationReceipt?:string};assert.ok(payload.observationReceipt,'eligible scoped decision carries an observation receipt');await route.fulfill({response:result});},{times:1});
       let response:Promise<Response>=controlled.waitForResponse(r=>r.url().endsWith('/entry-decision'));
       await controlled.goto(`http://localhost:${address.port}${path}?utm_source=ads&utm_campaign=${label}&token=private`);
       assert.equal((await response).status(),200);
       await controlled.waitForURL(shared+'&utm_campaign='+label);
+      const observedPage=label==='one'?pageOne:pageTwo;let persisted=false;
+      for(let i=0;i<100;i++){const facts=await db.query("SELECT count(*)::int n FROM observed_action_facts WHERE page_id=$1 AND action='PAGE_REDIRECT_ATTEMPT'",[observedPage]);if(facts.rows[0].n===1){persisted=true;break;}await new Promise(r=>setTimeout(r,50));}
+      assert.ok(persisted,'browser redirect attempt persisted independently of navigation');
       response=controlled.waitForResponse(r=>r.url().endsWith('/entry-decision'));
       const other=label==='one'?'two':'one';
       await controlled.goto(`http://localhost:${address.port}${path}?utm_campaign=${other}`); await response;
@@ -120,6 +132,14 @@ test('scoped browser observations isolate projects on one origin and preserve co
     assert.equal(attributed,origin+'/health-checkout?utm_source=offer&utm_campaign=spring');
     const incidents=await db.query('SELECT project_id,host FROM incidents ORDER BY project_id');
     assert.deepEqual(incidents.rows,[{project_id:'health',host:'localhost'}]);
+    await deliverOne(db,'health',smtpAddress.port);
+    let accepted=false;for(let i=0;i<100;i++){const sent=await db.query("SELECT count(*)::int n FROM alert_outbox a JOIN incidents i ON i.id=a.incident_id WHERE i.project_id='health' AND a.sent_at IS NOT NULL");if(sent.rows[0].n===1){accepted=true;break;}await new Promise(r=>setTimeout(r,50));}
+    assert.ok(accepted);assert.equal(messages.length,1);await deliverOne(db,'health',smtpAddress.port);assert.equal(messages.length,1);
+    let clicks=0;for(let i=0;i<100;i++){clicks=(await db.query("SELECT count(*)::int n FROM observed_action_facts WHERE page_id=$1 AND action='CTA_CLICK_OBSERVED'",[hp])).rows[0].n;if(clicks===2)break;await new Promise(r=>setTimeout(r,50));}assert.equal(clicks,2);
+    await configureEstimate(db,'health',10000,250,'BRL');
+    const metrics=await observedMetrics(db,'health',hp,new Date(Date.now()-60000).toISOString(),new Date(Date.now()+60000).toISOString());assert.equal(metrics.estimate?.amount_minor_numerator,'5000000');assert.equal(metrics.recovered_revenue,null);assert.equal(metrics.external_load_confirmed,null);
+    assert.equal((await observedMetrics(db,'finance',fp,new Date(Date.now()-60000).toISOString(),new Date(Date.now()+60000).toISOString())).estimate,null);
+
     const decide=(id:string,source:string) => fetch(`http://127.0.0.1:3000/i/${id}/entry-decision`,{method:'POST',headers:{origin:source,'content-type':'text/plain'},body:JSON.stringify({pathname:'/outro-slug',session:'a'.repeat(32),signals:{}})});
     const decision=await decide(health,`http://localhost:${address.port}`);
     const selected=await decision.json() as {action:string;pathname:string;mappings:{destination:string}[]};
@@ -171,6 +191,7 @@ test('scoped browser observations isolate projects on one origin and preserve co
   } finally {
     if (browser) await browser.close(); if (admin) await new Promise<void>(resolve=>admin!.close(()=>resolve()));
     if (child && child.exitCode===null && child.signalCode===null) { child.kill('SIGTERM'); await once(child,'exit'); }
+    await new Promise<void>(resolve=>smtp.close(()=>resolve()));
     fixture.close(); await db.end(); await root.query(`DROP SCHEMA ${schema} CASCADE`); await root.end();
   }
 });

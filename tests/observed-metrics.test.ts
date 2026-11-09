@@ -1,3 +1,4 @@
+import {issueObservedReceipt} from '../apps/observed-receipts.js';
 import {createServer} from 'node:http';
 import {observedSessionGateway} from '../apps/observed-session-gateway.js';
 import {once} from 'node:events';
@@ -19,6 +20,7 @@ test('observed metrics persist idempotently, isolate pages and separate estimate
  try{
   await db.query('CREATE TABLE projects(id text PRIMARY KEY); CREATE TABLE protected_pages(id uuid,project_id text REFERENCES projects(id),enabled boolean NOT NULL DEFAULT true,PRIMARY KEY(id,project_id))');
   await db.query(await readFile('infra/047_observed_metrics.sql','utf8'));
+  await db.query(await readFile('infra/048_observed_receipts.sql','utf8'));
   await db.query('ALTER TABLE protected_pages ADD COLUMN installation_id uuid; CREATE TABLE protected_page_urls(page_id uuid,origin text,pathname text)');
   const page=crypto.randomUUID(),other=crypto.randomUUID();
   await db.query("INSERT INTO projects VALUES('one'),('two');");
@@ -53,6 +55,15 @@ test('observed metrics persist idempotently, isolate pages and separate estimate
    assert.equal((await post(session)).status,204);assert.equal((await post(session)).status,204);
    assert.equal((await post({...session,project:'one'})).status,400);
    const facts=await db.query("SELECT count(*)::int n FROM observed_action_facts WHERE project_id='two' AND session_id=$1",[session.session]);assert.equal(facts.rows[0].n,1);
+   const decision=await issueObservedReceipt(db,'two',other,'http://localhost:8080','d'.repeat(32),'REFERRAL',{action:'REPLACE_CONVERSION',version:2,mappings:[{marker:'point001',surface:'main'}]});assert.ok(decision.observationReceipt);
+   const action={receipt:decision.observationReceipt,event:crypto.randomUUID(),marker:'point001',surface:'main'};
+   const postAction=(body:object)=>fetch(`http://127.0.0.1:${ga.port}/i/${installation}/observed-action`,{method:'POST',headers:{origin:'http://localhost:8080','content-type':'text/plain'},body:JSON.stringify(body)});
+   assert.equal((await postAction({...action,marker:'wrong001'})).status,400);
+   const attempts=await Promise.all(Array.from({length:5},()=>postAction(action)));assert.ok(attempts.every(r=>r.status===204));
+   const clicked=await db.query("SELECT count(*)::int n FROM observed_action_facts WHERE project_id='two' AND action='CTA_CLICK_OBSERVED'");assert.equal(clicked.rows[0].n,1);
+   const prepared=await observedMetrics(db,'two',other,from,until);assert.equal(prepared.prepared_decisions?.[0].decisions,1);assert.equal(prepared.recovered_revenue,null);
+   const foreign=await issueObservedReceipt(db,'one',page,'http://localhost:8080','d'.repeat(32),'REFERRAL',{action:'PAGE_REDIRECT',version:2});assert.equal((await postAction({...action,receipt:foreign.observationReceipt,marker:null,surface:null})).status,400);
+   await db.query("UPDATE observed_decision_receipts SET expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",[decision.observationReceipt]);assert.equal((await postAction(action)).status,400);
    await db.query('UPDATE protected_pages SET enabled=false WHERE id=$1',[other]);assert.equal((await post({...session,session:'c'.repeat(32)})).status,404);
   }finally{await new Promise<void>(resolve=>gateway.close(()=>resolve()));}
 
