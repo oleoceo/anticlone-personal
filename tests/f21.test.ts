@@ -18,7 +18,7 @@ test('F21: approved static anchors, entry precedence and fail-open in Chromium',
   for(const f of ['001_initial','002_alerts','003_projects','004_observation_sources','005_canaries','006_page_redirect','007_protection_policy','008_traffic_observations','009_risk_assessments','024_risk_evidence','010_policy_allocation','018_notification_budget','019_alert_outbox_expiry','011_cta_inventory','022_cta_capture_selection','012_cta_policy','036_cta_surface_policies','013_cta_review','014_cta_drift_alerts','015_cta_alert_deliveries','023_cta_commercial']) await db.query(await readFile(`infra/${f}.sql`,'utf8'));
   const project='f21_'+crypto.randomUUID();
   const html=`<a data-anticlone-point="basic001" href="/clone-basic">Comprar</a><a data-anticlone-point="premium1" href="/clone-premium">Comprar</a><a data-anticlone-point="whatsapp" href="/whatsapp">WhatsApp</a><a data-anticlone-point="review01" href="/review">Review</a><a href="/unmarked">Comprar</a><script src="http://127.0.0.1:3000/runtime.js"></script>`;
-  const fixture=createServer((req,res)=>res.writeHead(200,{'content-type':'text/html'}).end(req.url === '/clone' ? html : '<h1>destination</h1>')).listen(0,'127.0.0.1'); await once(fixture,'listening');
+  const fixture=createServer((req,res)=>res.writeHead(200,{'content-type':'text/html'}).end(req.url?.split('?')[0] === '/clone' ? html : '<h1>destination</h1>')).listen(0,'127.0.0.1'); await once(fixture,'listening');
   const port=(fixture.address() as AddressInfo).port, original=`http://127.0.0.1:${port}`,clone=`http://localhost:${port}`;
   await db.query('INSERT INTO projects(id,name,origin) VALUES($1,$1,$2)',[project,original]);
   const candidates=['basic001','premium1','review01'].map((marker,i)=>({marker,kind:'a',parent:'body',ordinal:i+1,url:clone+'/x'}));
@@ -42,7 +42,7 @@ test('F21: approved static anchors, entry precedence and fail-open in Chromium',
   await db.query("UPDATE cta_destinations SET url=$2 WHERE project_id=$1 AND offer='basic'",[project,original+'/official-basic']);
   assert.equal((await ctaDecision(db,project,original,clone,clone,'HIGH','0'.repeat(32),'DIRECT_UNKNOWN')).action,'OBSERVE_ONLY');
   assert.equal((await ctaDecision(db,project,original,clone,clone,'UNCERTAIN','0'.repeat(32),'DIRECT_UNKNOWN')).action,'OBSERVE_ONLY');
-  const app=spawn(process.execPath,['dist/apps/server.js'],{env:{...process.env,DATABASE_URL:process.env.TEST_DATABASE_URL,PROJECT_ID:project,SMTP_PORT:'25252',PORT:'3000',LAB_CONTROLLED_ORIGIN:clone,LAB_CONTROLLED_RISK:'LOW'},stdio:['ignore','ignore','inherit']});
+  const app=spawn(process.execPath,['dist/apps/server.js'],{env:{...process.env,DATABASE_URL:process.env.TEST_DATABASE_URL,PROJECT_ID:project,SMTP_PORT:'25252',PORT:'3000',LAB_CONTROLLED_ORIGIN:clone,LAB_CONTROLLED_RISK:'LOW',ATTRIBUTION_ALLOWLIST:JSON.stringify({[project]:{legacy:{[original+'/official-basic']:{utm_campaign:['spring']}}}})},stdio:['ignore','ignore','inherit']});
   let browser:Awaited<ReturnType<typeof chromium.launch>>|undefined;
   try {
     let ready=false; for(let i=0;i<100;i++){try{if((await fetch('http://127.0.0.1:3000/runtime.js')).ok){ready=true;break;}}catch{} await new Promise(r=>setTimeout(r,100));} assert.ok(ready);
@@ -59,6 +59,8 @@ test('F21: approved static anchors, entry precedence and fail-open in Chromium',
     const decisions:string[]=[], backgroundRequests:string[]=[]; page.on('request',r=>{if(r.url().endsWith('/entry-decision')) decisions.push(r.url()); if(['fetch','xhr'].includes(r.resourceType())) backgroundRequests.push(r.url());});
     const check=async (selector:string,expected:string) => { await page.goto(clone+'/clone'); await page.waitForTimeout(300); const before=decisions.length; await page.locator(selector).click(); await page.waitForURL(expected); assert.equal(decisions.length,before); };
     await check('[data-anticlone-point="basic001"]',original+'/official-basic');
+    await page.goto(clone+'/clone?utm_campaign=spring&token=secret&utm_source=unapproved'); await page.waitForTimeout(300); const prior=decisions.length; await page.locator('[data-anticlone-point="basic001"]').click(); await page.waitForURL(original+'/official-basic?utm_campaign=spring'); assert.equal(decisions.length,prior);
+    await page.goto(clone+'/clone?utm_campaign=spring&utm_campaign=spring'); await page.waitForTimeout(300); await page.locator('[data-anticlone-point="basic001"]').click(); await page.waitForURL(original+'/official-basic');
     await check('[data-anticlone-point="premium1"]',original+'/official-premium');
     await check('[data-anticlone-point="whatsapp"]',clone+'/whatsapp');
     await check('[data-anticlone-point="review01"]',clone+'/review');

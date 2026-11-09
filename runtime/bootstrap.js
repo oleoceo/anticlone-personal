@@ -48,6 +48,18 @@
     const observeCtaVersion = decision => {
       if (decision && decision.action === 'OBSERVE_ONLY' && Number.isSafeInteger(decision.ctaVersion) && decision.ctaVersion > latestCtaVersion) latestCtaVersion = decision.ctaVersion;
     };
+    // Only explicitly configured public labels are copied; existing destination parameters win.
+    const attributed = (destination, rules) => {
+      const target = new URL(destination), permitted = rules && rules[destination];
+      if (!permitted || typeof permitted !== 'object' || Array.isArray(permitted) || location.search.length > 2048) return target.href;
+      const source = new URLSearchParams(location.search);
+      const protectedKeys = new Set(Array.from(target.searchParams.keys(), key => key.toLowerCase()));
+      for (const key of ['utm_source','utm_medium','utm_campaign','utm_content','utm_term']) {
+        const values = source.getAll(key), allow = permitted[key];
+        if (!protectedKeys.has(key) && values.length === 1 && Array.isArray(allow) && allow.includes(values[0])) target.searchParams.append(key, values[0]);
+      }
+      return target.href;
+    };
     const prepareCtas = (decision, startedWall, startedMono) => {
       try {
         if (!Number.isSafeInteger(decision.version) || decision.version < 1 || decision.version < latestCtaVersion || location.pathname !== decision.pathname || !Array.isArray(decision.mappings) || decision.mappings.length > 100) return;
@@ -63,7 +75,7 @@
           const entries = mappings.get(row.marker) || [];
           if (entries.some(item => item.surface === row.surface)) return;
           if (row.requiresSurface !== undefined && typeof row.requiresSurface !== 'boolean') return;
-          entries.push({surface:row.surface, requiresSurface:row.requiresSurface, kind:row.kind, destination:target.href}); mappings.set(row.marker, entries);
+          entries.push({surface:row.surface, requiresSurface:row.requiresSurface, kind:row.kind, destination:attributed(target.href, decision.attribution)}); mappings.set(row.marker, entries);
         }
         if (!validContext() || Date.now() < startedWall || Date.now() - startedWall > 5000 || performance.now() - startedMono > 5000) return;
         latestCtaVersion = decision.version;
@@ -166,7 +178,7 @@
             if (decision.action !== 'PAGE_REDIRECT' || !Number.isSafeInteger(decision.version) || decision.version < 1 || typeof decision.destination !== 'string') return;
             const target = new URL(decision.destination);
             if (!['http:', 'https:'].includes(target.protocol) || target.username || target.password || target.hash || target.href === location.href || target.origin === location.origin) return;
-            location.replace(target.href);
+            location.replace(attributed(target.href, decision.attribution));
           }).catch(cancelRedirect);
       } catch (_) { cancelRedirect(); }
     };

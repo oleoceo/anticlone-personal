@@ -51,7 +51,7 @@ test('scoped browser observations isolate projects on one origin and preserve co
       await db.query("INSERT INTO active_cta_surface_policies VALUES($1,'main',1)",[project]);
       await db.query("INSERT INTO page_cta_policy_bindings(project_id,page_id,surface,version) VALUES($1,$2,'main',1)",[project,project==='health' ? hp : fp]);
       await db.query("INSERT INTO cta_points(project_id,id,surface,marker,kind,offer) VALUES($1,$2,'main','shared01','a','offer')",[project,point]);
-      await db.query("INSERT INTO cta_destinations(project_id,offer,id,url) VALUES($1,'offer',$2,$3)",[project,destination,origin+'/'+project+'-checkout']);
+      await db.query("INSERT INTO cta_destinations(project_id,offer,id,url) VALUES($1,'offer',$2,$3)",[project,destination,origin+'/'+project+'-checkout'+(project==='health'?'?utm_source=offer':'')]);
       await db.query("INSERT INTO cta_mappings VALUES($1,$2,'offer',$3)",[project,point,destination]);
     }
     const state=await db.query('SELECT config_generation FROM protected_pages WHERE id=$1',[hp]);
@@ -63,7 +63,7 @@ test('scoped browser observations isolate projects on one origin and preserve co
     const financeState=await db.query('SELECT config_generation FROM protected_pages WHERE id=$1',[fp]);
     await managePages(db,{action:'approve',project:'finance',page:fp,generation:'1',configGeneration:financeState.rows[0].config_generation,entryVersion:null,ctaVersions:[1]});
     const financeSnapshot=await db.query(`SELECT p.url_generation,p.config_generation,p.url_review_required,b.surface,b.version,a.id AS approval FROM protected_pages p JOIN page_cta_policy_bindings b ON b.page_id=p.id AND b.project_id=p.project_id JOIN page_policy_approvals a ON a.page_id=p.id AND a.project_id=p.project_id WHERE p.id=$1`,[fp]);
-    const env: NodeJS.ProcessEnv={...process.env,PGOPTIONS:options,DATABASE_URL:process.env.TEST_DATABASE_URL,SMTP_PORT:'1',PORT:'3000',SCOPED_LAB_INSTALLATION:health,SCOPED_LAB_ORIGIN:`http://localhost:${address.port}`};
+    const env: NodeJS.ProcessEnv={...process.env,PGOPTIONS:options,DATABASE_URL:process.env.TEST_DATABASE_URL,SMTP_PORT:'1',PORT:'3000',SCOPED_LAB_INSTALLATION:health,ATTRIBUTION_ALLOWLIST:JSON.stringify({health:{[hp]:{[origin+'/health-checkout?utm_source=offer']:{utm_source:['ads'],utm_campaign:['spring']}}},finance:{[fp]:{[origin+'/finance-checkout']:{utm_campaign:['finance']}}}}),SCOPED_LAB_ORIGIN:`http://localhost:${address.port}`};
     delete env.PROJECT_ID; delete env.ALLOWED_ORIGIN;
     child=spawn(process.execPath,['dist/apps/server.js'],{env,stdio:'ignore'});
     for (let i=0;i<100;i++) { try { if ((await fetch('http://127.0.0.1:3000/healthz')).ok) break; } catch { /* starting */ } await new Promise(r=>setTimeout(r,50)); }
@@ -80,15 +80,22 @@ test('scoped browser observations isolate projects on one origin and preserve co
     await page.goto(`http://localhost:${address.port}/outro-slug`); assert.equal((await response).status(),204); await browserDecision;
     await page.waitForFunction(()=>document.documentElement.dataset.ctaReady==='yes');
     const clicked=await page.evaluate(()=>{const link=document.querySelector<HTMLAnchorElement>('a')!;let target='';window.addEventListener('click',event=>{target=link.href;event.preventDefault();},{once:true});link.click();return target;});
-    assert.equal(clicked,origin+'/health-checkout');
+    assert.equal(clicked,origin+'/health-checkout?utm_source=offer');
+    const attributedResponse=page.waitForResponse(r=>r.url().endsWith('/entry-decision'));
+    await page.goto(`http://localhost:${address.port}/outro-slug?utm_source=ads&utm_campaign=spring&token=private`); await attributedResponse;
+    await page.waitForFunction(()=>document.documentElement.dataset.ctaReady==='yes');
+    const attributed=await page.evaluate(()=>{const link=document.querySelector<HTMLAnchorElement>('a')!;let target='';window.addEventListener('click',event=>{target=link.href;event.preventDefault();},{once:true});link.click();return target;});
+    assert.equal(attributed,origin+'/health-checkout?utm_source=offer&utm_campaign=spring');
     const incidents=await db.query('SELECT project_id,host FROM incidents ORDER BY project_id');
     assert.deepEqual(incidents.rows,[{project_id:'health',host:'localhost'}]);
     const decide=(id:string,source:string) => fetch(`http://127.0.0.1:3000/i/${id}/entry-decision`,{method:'POST',headers:{origin:source,'content-type':'text/plain'},body:JSON.stringify({pathname:'/outro-slug',session:'a'.repeat(32),signals:{}})});
     const decision=await decide(health,`http://localhost:${address.port}`);
     const selected=await decision.json() as {action:string;pathname:string;mappings:{destination:string}[]};
     assert.equal(selected.action,'REPLACE_CONVERSION'); assert.equal(selected.pathname,'/outro-slug');
-    assert.equal(selected.mappings[0].destination,origin+'/health-checkout');
+    assert.equal(selected.mappings[0].destination,origin+'/health-checkout?utm_source=offer');
+    assert.deepEqual((selected as typeof selected & {attribution:unknown}).attribution,{[origin+'/health-checkout?utm_source=offer']:{utm_source:['ads'],utm_campaign:['spring']}});
     assert.deepEqual(await (await decide(finance,`http://localhost:${address.port}`)).json(),{action:'OBSERVE_ONLY'});
+    assert.deepEqual(await (await decide(finance,origin)).json(),{action:'OBSERVE_ONLY'});
     assert.deepEqual(await (await decide(health,origin)).json(),{action:'OBSERVE_ONLY'});
     await db.query("DELETE FROM page_cta_policy_bindings WHERE project_id='health'");
     assert.deepEqual(await (await decide(health,`http://localhost:${address.port}`)).json(),{action:'OBSERVE_ONLY'});
