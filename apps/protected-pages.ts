@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
+import { approvalConfiguration } from './page-policy-approval.js';
 
 export class PageConflict extends Error {}
 
@@ -16,6 +17,31 @@ export async function managePages(db: Pool, body: unknown) {
   const data=body as Record<string,unknown>;
   if (typeof data.project!=='string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(data.project) || typeof data.action!=='string') throw new TypeError('invalid request');
   const project=data.project, action=data.action;
+  if (action==='approve' && Object.keys(data).sort().join(',')==='action,ctaVersions,entryVersion,generation,page,project' && typeof data.page==='string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(data.page) && typeof data.generation==='string' && /^(0|[1-9][0-9]{0,18})$/.test(data.generation) && BigInt(data.generation)<=9223372036854775807n && (data.entryVersion===null || (Number.isSafeInteger(data.entryVersion) && (data.entryVersion as number)>0)) && Array.isArray(data.ctaVersions) && data.ctaVersions.length<=100 && data.ctaVersions.every(v=>Number.isSafeInteger(v) && v>0) && new Set(data.ctaVersions).size===data.ctaVersions.length && (data.entryVersion!==null || data.ctaVersions.length>0)) {
+    const client=await db.connect();
+    try {
+      await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
+      await client.query('LOCK TABLE projects, protected_pages, protected_page_urls, active_protection_policies, active_cta_surface_policies, page_entry_policy_bindings, page_cta_policy_bindings, cta_points, cta_mappings, cta_destinations, cta_commercial_references IN SHARE ROW EXCLUSIVE MODE');
+      const page=await client.query('SELECT url_generation,enabled FROM protected_pages WHERE id=$1 AND project_id=$2',[data.page,project]);
+      if (!page.rowCount || !page.rows[0].enabled || page.rows[0].url_generation!==data.generation) throw new PageConflict();
+      let configuration;
+      try { configuration=await approvalConfiguration(client,project,data.page,data.entryVersion as number|null,data.ctaVersions as number[]); } catch { throw new PageConflict(); }
+      await client.query('DELETE FROM page_entry_policy_bindings WHERE project_id=$1 AND page_id=$2',[project,data.page]);
+      await client.query('DELETE FROM page_cta_policy_bindings WHERE project_id=$1 AND page_id=$2',[project,data.page]);
+      const approval=await client.query('INSERT INTO page_policy_approvals(project_id,page_id,url_generation,configuration) VALUES($1,$2,$3,$4) RETURNING id',[project,data.page,data.generation,JSON.stringify(configuration)]);
+      const id=approval.rows[0].id;
+      if (data.entryVersion!==null) {
+        await client.query('INSERT INTO page_entry_policy_bindings(project_id,page_id,version) VALUES($1,$2,$3)',[project,data.page,data.entryVersion]);
+        await client.query('INSERT INTO page_policy_approval_entries(approval_id,project_id,version) VALUES($1,$2,$3)',[id,project,data.entryVersion]);
+      }
+      for (const policy of configuration.ctas) {
+        await client.query('INSERT INTO page_cta_policy_bindings(project_id,page_id,surface,version) VALUES($1,$2,$3,$4)',[project,data.page,policy.surface,policy.version]);
+        await client.query('INSERT INTO page_policy_approval_ctas(approval_id,project_id,surface,version) VALUES($1,$2,$3,$4)',[id,project,policy.surface,policy.version]);
+      }
+      await client.query('UPDATE protected_pages SET url_review_required=false WHERE id=$1 AND project_id=$2',[data.page,project]);
+      await client.query('COMMIT'); return {page:data.page,generation:data.generation,approval:id,reviewRequired:false};
+    } catch(error) { await client.query('ROLLBACK'); if (['23505','40001','40P01'].includes((error as {code?:string}).code ?? '')) throw new PageConflict(); throw error; } finally { client.release(); }
+  }
   if (action==='inspect' && Object.keys(data).sort().join(',')==='action,page,project' && typeof data.page==='string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(data.page)) {
     const client=await db.connect();
     try {
@@ -34,8 +60,7 @@ export async function managePages(db: Pool, body: unknown) {
         LEFT JOIN cta_destinations d ON d.project_id=m.project_id AND d.offer=m.offer AND d.id=m.destination_id
         LEFT JOIN cta_commercial_references r ON r.project_id=p.project_id AND r.point_id=p.id WHERE p.project_id=$1 ORDER BY p.surface,p.id LIMIT 1000`,[project]);
       await client.query('COMMIT');
-      return {page:page.rows[0],urls:urls.rows,entryPolicies:entries.rows,ctaPolicies:ctas.rows,points:points.rows,installationStatus:'NOT_VERIFIED',reviewAvailable:false,
-        limitation:'Revisão de destinos e aprovação ainda indisponíveis; nenhuma decisão é reativada por esta consulta.'};
+      return {page:page.rows[0],urls:urls.rows,entryPolicies:entries.rows,ctaPolicies:ctas.rows,points:points.rows,installationStatus:'NOT_VERIFIED',reviewAvailable:true};
     } catch(error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
   }
   if (action==='list' && Object.keys(data).sort().join(',')==='action,project') {
