@@ -1,6 +1,7 @@
 ﻿import type { Pool, PoolClient } from 'pg';
 import { makeMailer } from './alerts.js';
 import { budgetMayBeAvailable, lockBudget, recordBudget } from './notification-budget.js';
+import { operationallyEligible } from './operational-eligibility.js';
 
 // Claims are unauthenticated; inactivity describes only a lack of observed claims.
 export async function configureHealth(db: Pool, project: string, enabled: boolean, seconds: number, operationalEnabled: boolean) {
@@ -89,6 +90,7 @@ export async function evaluateInactivity(db: Pool, project: string, isCurrent: (
   const client = await db.connect();
   try {
     await client.query('BEGIN');
+    if (!await operationallyEligible(client,project,undefined,true)) { await client.query('ROLLBACK'); return; }
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1), 45)',[project]);
     const result = await client.query(`SELECT i.enabled AND i.origin=p.origin AND coalesce(s.enabled,false) AS eligible,
       l.last_observed_at, l.last_activity_at >= clock_timestamp()-interval '5 minutes' AND l.last_activity_at > l.last_observed_at AS recent_activity, EXISTS (SELECT 1 FROM health_episodes e WHERE e.project_id=i.project_id AND e.kind='INACTIVE' AND e.source='installation' AND e.recovered_at IS NULL AND e.invalidated_at IS NULL AND l.last_observed_at > e.opened_at) AS resumed, l.first_observed_at <= l.last_observed_at-interval '1 minute' AS baseline, l.last_observed_at < clock_timestamp()-make_interval(secs=>s.inactivity_seconds) AS inactive
@@ -109,6 +111,7 @@ export async function recordOperationalState(db: Pool, project: string, source: 
   const client = await db.connect();
   try {
     await client.query('BEGIN');
+    if (!await operationallyEligible(client,project,undefined,true)) { await client.query('ROLLBACK'); return; }
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1), 45)',[project]);
     await transition(client,project,'OPERATIONAL',source,nature,active,observedAt);
     await client.query('COMMIT');
@@ -121,6 +124,7 @@ export async function reconcileOperationalEpisode(db: Pool, project: string, sou
   const client=await db.connect();
   try {
     await client.query('BEGIN');
+    if (!await operationallyEligible(client,project,undefined,true)) throw new Error('project inactive');
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1), 45)',[project]);
     let result=await client.query('SELECT episode_id AS id FROM health_operational_keys WHERE observation_key=$1',[key]);
     if (!result.rowCount) {
@@ -146,6 +150,7 @@ export async function recoverOperationalSource(db: Pool, project: string, source
   const client=await db.connect();
   try {
     await client.query('BEGIN');
+    if (!await operationallyEligible(client,project,undefined,true)) throw new Error('project inactive');
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1), 45)',[project]);
     const closed=await client.query(`UPDATE health_episodes SET recovered_at=$3 WHERE project_id=$1 AND kind='OPERATIONAL'
       AND source=$2 AND recovered_at IS NULL AND opened_at<=$3 RETURNING id`,[project,source,observedAt]);

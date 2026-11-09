@@ -23,6 +23,7 @@ test('health episodes, deduplication, retries and recovery', {timeout:30000}, as
   const port=(smtp.server.address() as AddressInfo).port;
   try {
     for (const f of ['003_projects','018_notification_budget','025_installation_signals','028_health_alerts','029_health_settings_history']) await db.query(await readFile(`infra/${f}.sql`,'utf8'));
+    await db.query("ALTER TABLE projects ADD COLUMN lifecycle_state text NOT NULL DEFAULT 'ACTIVE'");
     await db.query("INSERT INTO projects VALUES('one','One','http://owner.test'),('two','Two','http://two.test')");
     await enableInstallation(db,'one'); await enableInstallation(db,'two');
     await configureHealth(db,'one',true,60,true); await configureHealth(db,'two',false,60,false);
@@ -42,6 +43,13 @@ test('health episodes, deduplication, retries and recovery', {timeout:30000}, as
     await evaluateInactivity(db,'one');
     assert.equal((await db.query('SELECT count(*)::int n FROM health_episodes')).rows[0].n,0,'no alert from absence of traffic');
     await recordInstallationActivity(db,'one','http://owner.test');
+    await db.query("UPDATE projects SET lifecycle_state='PAUSED' WHERE id='one'");
+    await evaluateInactivity(db,'one');
+    await recordOperationalState(db,'one','test_source','TEST_FAILURE',true);
+    await assert.rejects(reconcileOperationalEpisode(db,'one','test_source',crypto.randomUUID(),new Date()),/project inactive/);
+    await assert.rejects(recoverOperationalSource(db,'one','test_source',new Date()),/project inactive/);
+    assert.equal((await db.query('SELECT count(*)::int n FROM health_episodes')).rows[0].n,0);
+    await db.query("UPDATE projects SET lifecycle_state='ACTIVE' WHERE id='one'");
 
     const blocker=await db.connect();
     try {
@@ -60,6 +68,29 @@ test('health episodes, deduplication, retries and recovery', {timeout:30000}, as
       assert.equal((await db.query('SELECT count(*)::int n FROM health_episodes')).rows[0].n,0);
       await db.query('DROP TRIGGER hold_health_episode ON health_episodes; DROP FUNCTION hold_health_episode()');
     } finally { blocker.release(); }
+    const barrier=await db.connect(), pause=await db.connect();
+    try {
+      const key=(await barrier.query('SELECT pg_backend_pid() AS pid')).rows[0].pid as number;
+      await barrier.query('SELECT pg_advisory_lock(45002,$1)',[key]);
+      await db.query(`CREATE FUNCTION hold_health_pause() RETURNS trigger LANGUAGE plpgsql AS $body$
+        BEGIN PERFORM pg_advisory_xact_lock(45002,${key}); RETURN NEW; END $body$;
+        CREATE TRIGGER hold_health_pause BEFORE INSERT ON health_episodes FOR EACH ROW EXECUTE FUNCTION hold_health_pause()`);
+      const evaluation=evaluateInactivity(db,'one');
+      let waiting=false;
+      for(let n=0;n<1000 && !waiting;n++) waiting=(await db.query("SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' AND classid=45002 AND objid=$1 AND NOT granted) AS waiting",[key])).rows[0].waiting;
+      assert.ok(waiting,'real health evaluation reached the write barrier');
+      const pid=(await pause.query('SELECT pg_backend_pid() AS pid')).rows[0].pid;
+      const pausing=pause.query("UPDATE projects SET lifecycle_state='PAUSED' WHERE id='one'");
+      let blocked=false;
+      for(let n=0;n<1000 && !blocked;n++) blocked=(await db.query('SELECT cardinality(pg_blocking_pids($1))>0 AS blocked',[pid])).rows[0].blocked;
+      assert.ok(blocked,'pause waits for the in-flight health transaction');
+      await barrier.query('SELECT pg_advisory_unlock(45002,$1)',[key]);
+      await evaluation; await pausing;
+      await recordOperationalState(db,'one','paused_test','TEST_FAILURE',true);
+      assert.equal((await db.query("SELECT count(*)::int n FROM health_episodes WHERE project_id='one'")).rows[0].n,1);
+      await db.query("UPDATE projects SET lifecycle_state='ACTIVE' WHERE id='one'");
+      await db.query('DROP TRIGGER hold_health_pause ON health_episodes; DROP FUNCTION hold_health_pause()');
+    } finally { barrier.release(); pause.release(); }
     await Promise.all([evaluateInactivity(db,'one'),evaluateInactivity(db,'one')]);
     assert.equal((await db.query('SELECT count(*)::int AS n FROM health_episodes')).rows[0].n,1);
     // Hold the shared budget row while a known collection gap invalidates this attempt.
