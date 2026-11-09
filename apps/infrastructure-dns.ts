@@ -52,20 +52,25 @@ async function resolveType(resolver:DnsResolver, host:string, type:RecordType): 
 // Authorization is independent of the incident claim. Never follows CNAMEs or connects to the host.
 export async function collectInfrastructure(pool:Pool, project:string, host:string, authorized:readonly string[], resolver:DnsResolver, source:string): Promise<boolean> {
   if (!validDnsHost(host) || !authorized.includes(host) || !/^configured-dns:[0-9.]{7,15}$/.test(source) && source !== 'controlled-test-resolver') return false;
+  // Cheap preflight only: no transaction, checked-out client or state lock in DNS I/O.
+  if (!await operationallyEligible(pool,project)) return false;
+  const incident = await pool.query("SELECT id FROM incidents WHERE project_id=$1 AND host=$2 AND last_seen>=now()-interval '30 days'",[project,host]);
+  if (!incident.rowCount) return false;
+  const recent = await pool.query("SELECT 1 FROM infrastructure_dns_observations WHERE project_id=$1 AND host=$2 AND observed_at>now()-interval '6 hours' LIMIT 1",[project,host]);
+  if (recent.rowCount) return false;
+  const results = await Promise.all(types.map(type => resolveType(resolver,host,type)));
+  if (results[2].state === 'INVALID') for (const i of [0,1]) { results[i] = {state:'INVALID',result:[]}; }
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     if (!await operationallyEligible(client,project,undefined,true)) { await client.query('ROLLBACK'); return false; }
     await client.query("SELECT pg_advisory_xact_lock(hashtext('infrastructure-dns'),hashtext($1))",[project]);
-    const incident = await client.query("SELECT id FROM incidents WHERE project_id=$1 AND host=$2 AND last_seen>=now()-interval '30 days'",[project,host]);
-    if (!incident.rowCount) { await client.query('ROLLBACK'); return false; }
-    const recent = await client.query("SELECT 1 FROM infrastructure_dns_observations WHERE project_id=$1 AND host=$2 AND observed_at>now()-interval '6 hours' LIMIT 1",[project,host]);
-    if (recent.rowCount) { await client.query('ROLLBACK'); return false; }
-    const results = await Promise.all(types.map(type => resolveType(resolver,host,type)));
-    if (results[2].state === 'INVALID') for (const i of [0,1]) { results[i] = {state:'INVALID',result:[]}; }
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1))',[project]);
     const stillExists = await client.query("SELECT 1 FROM incidents WHERE id=$1 AND project_id=$2 AND host=$3 AND last_seen>=now()-interval '30 days'",[incident.rows[0].id,project,host]);
     if (!stillExists.rowCount) { await client.query('ROLLBACK'); return false; }
+    // Another collector may have persisted while this resolver was running.
+    const collected=await client.query("SELECT 1 FROM infrastructure_dns_observations WHERE project_id=$1 AND host=$2 AND observed_at>now()-interval '6 hours' LIMIT 1",[project,host]);
+    if (collected.rowCount) {await client.query('ROLLBACK');return false;}
     for (let i=0;i<types.length;i++) {
       const prior=await client.query('SELECT state,result,source FROM infrastructure_dns_observations WHERE project_id=$1 AND host=$2 AND record_type=$3 ORDER BY observed_at DESC,id DESC LIMIT 1',[project,host,types[i]]);
       const saved=await client.query(`INSERT INTO infrastructure_dns_observations(incident_id,project_id,host,record_type,result,source,state,valid_until,limitations) VALUES($1,$2,$3,$4,$5,$6,$7,clock_timestamp(),$8) RETURNING id`,[incident.rows[0].id,project,host,types[i],JSON.stringify(results[i].result),source,results[i].state,'DNS response is not proof of identity or operator; TTL unavailable; current validity unknown. CNAME chains are not followed or verified.']);

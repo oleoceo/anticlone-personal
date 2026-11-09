@@ -1,4 +1,6 @@
 # STATUS — AntiClone Personal
+- **Correcao da revisao F36/F45:** DNS sem conexao/lock durante resolver; revalidacao transacional antes de gravar. CTA PROCESSING nunca retomado por lease; callback continua dono do token, quedas ficam retidas para revisao sem acao administrativa.
+- **Gates da correcao:** lint/typecheck/build PASS, 11/11 focados PostgreSQL/SMTP PASS (inclui corrida DNS/SMTP e project-pause-delivery). Commit/push na mesma branch; sem PR/merge/deploy ou exclusoes reais.
 - **F36/F01/F26/F45 pausa integrada:** manutencao multiprojeto e legada, coleta e despachos usam gate transacional; retencao por projeto preservada.
 - **Fila:** migration aditiva 044; SUSPENDED na pausa, REVIEW_REQUIRED para backlog anterior a retomada, sem replay automatico. Payload e tentativas preservados; admissoes anteriores podem concluir sem locks PostgreSQL em SMTP.
 - **Provas locais:** lint/typecheck/build PASS; 21/21 testes focados PostgreSQL/Chromium/SMTP PASS; teste integrado real cobre A-J e processo legado PROJECT_ID=health. Detalhes: docs/PROJECT-PAUSE-NOTIFICATIONS.md.

@@ -6,6 +6,7 @@ import { reconcileF27 } from './notification-intents.js';
 
 export type LocalSender = (alertId: string) => Promise<void>;
 
+const maintenanceAfter=new WeakMap<Pool,Map<string,number>>();
 const reconciliationAfter=new WeakMap<Pool,Map<string,number>>();
 
 export async function deliverCtaAlert(db: Pool, send: LocalSender): Promise<boolean> {
@@ -24,19 +25,24 @@ export async function deliverCtaAlert(db: Pool, send: LocalSender): Promise<bool
         deadlines.set(row.project_id,Date.now()+60_000);
         await reconcileF27(client,row.project_id);
       }
+      let sweeps=maintenanceAfter.get(db);
+      if (!sweeps) {sweeps=new Map();maintenanceAfter.set(db,sweeps);}
+      if (Date.now()>=(sweeps.get(row.project_id) ?? 0)) {
       await client.query(`UPDATE cta_alert_deliveries d SET state='EXPIRED',lease_token=NULL,lease_until=NULL
         FROM cta_drift_alerts a WHERE a.id=d.alert_id AND a.project_id=$1 AND d.delivery_mode='SMTP_LOCAL'
         AND ($2::timestamptz IS NULL OR a.created_at>$2) AND a.created_at<=clock_timestamp()-interval '24 hours'
-        AND (d.state='PENDING' OR (d.state='PROCESSING' AND d.lease_until<=clock_timestamp()))`,[row.project_id,cutoff]);
-      await client.query(`UPDATE cta_alert_deliveries d SET state='FAILED',lease_token=NULL,lease_until=NULL
-        FROM cta_drift_alerts a WHERE a.id=d.alert_id AND a.project_id=$1 AND d.delivery_mode='SMTP_LOCAL'
-        AND ($2::timestamptz IS NULL OR a.created_at>$2) AND d.state='PROCESSING' AND d.lease_until<=now() AND d.attempts=3`,[row.project_id,cutoff]);
+        AND d.state='PENDING'`,[row.project_id,cutoff]);
+      sweeps.set(row.project_id,Date.now()+60_000);
+      }
+      // Lease expiry cannot prove the transport stopped. PROCESSING keeps its
+      // owner token until that callback settles; crash/unknown outcomes require
+      // review, never an automatic takeover, expiry or concurrent retry.
       if (budgetMayBeAvailable(db) && await lockBudget(client,db)) {
         const result=await client.query(`WITH next AS (
           SELECT d.alert_id FROM cta_alert_deliveries d JOIN cta_drift_alerts a ON a.id=d.alert_id
           WHERE a.project_id=$2 AND ($3::timestamptz IS NULL OR a.created_at>$3)
           AND a.created_at>clock_timestamp()-interval '24 hours' AND d.delivery_mode='SMTP_LOCAL' AND d.attempts<3
-          AND ((d.state='PENDING' AND d.next_attempt<=now()) OR (d.state='PROCESSING' AND d.lease_until<=now()))
+          AND d.state='PENDING' AND d.next_attempt<=now()
           ORDER BY d.alert_id FOR UPDATE OF d SKIP LOCKED LIMIT 1
         ) UPDATE cta_alert_deliveries d SET state='PROCESSING',attempts=d.attempts+1,lease_token=$1,
           lease_until=now()+interval '1 minute' FROM next WHERE d.alert_id=next.alert_id RETURNING d.alert_id`,[token,row.project_id,cutoff]);

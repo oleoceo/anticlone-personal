@@ -24,7 +24,7 @@ async function fixture() {
   return {db, close:async()=>{await db.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end();}};
 }
 
-test('exhausted CTA leases are maintained during saturated budget backoff, with bounded polling', async t => {
+test('exhausted CTA leases retain unknown transport outcomes during saturated budget backoff, with bounded polling', async t => {
   const {db,close}=await fixture();
   let now=Date.now();
   t.mock.method(Date,'now',()=>now);
@@ -37,8 +37,8 @@ test('exhausted CTA leases are maintained during saturated budget backoff, with 
     await db.query("UPDATE cta_alert_deliveries SET lease_until=now()+interval '1 minute' WHERE alert_id=$1",[ids[2]]);
     let sends=0;
     assert.equal(await deliverCtaAlert(db,async()=>{sends++;}),false);
-    assert.deepEqual((await db.query('SELECT state,attempts,lease_token,lease_until FROM cta_alert_deliveries WHERE alert_id=$1',[ids[0]])).rows[0],
-      {state:'FAILED',attempts:3,lease_token:null,lease_until:null});
+    const unknown=(await db.query('SELECT state,attempts,lease_token,lease_until FROM cta_alert_deliveries WHERE alert_id=$1',[ids[0]])).rows[0];
+    assert.equal(unknown.state,'PROCESSING');assert.equal(unknown.attempts,3);assert.ok(unknown.lease_token);assert.ok(unknown.lease_until);
     await db.query("UPDATE cta_alert_deliveries SET lease_until=now()-interval '1 second' WHERE alert_id=$1",[ids[2]]);
     // Detect any maintenance query during rapid polling: budget is already cached as blocked.
     await db.query(`CREATE FUNCTION reject_sweep() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'excessive sweep'; END $$`);
@@ -47,7 +47,7 @@ test('exhausted CTA leases are maintained during saturated budget backoff, with 
     await db.query('DROP TRIGGER reject_sweep ON cta_alert_deliveries');
     now+=60_001;
     assert.equal(await deliverCtaAlert(db,async()=>{sends++;}),false);
-    assert.equal((await db.query('SELECT state FROM cta_alert_deliveries WHERE alert_id=$1',[ids[2]])).rows[0].state,'FAILED');
+    assert.equal((await db.query('SELECT state FROM cta_alert_deliveries WHERE alert_id=$1',[ids[2]])).rows[0].state,'PROCESSING');
     assert.equal((await db.query('SELECT state FROM cta_alert_deliveries WHERE alert_id=$1',[ids[1]])).rows[0].state,'PROCESSING');
     assert.equal((await db.query('SELECT attempts FROM cta_alert_deliveries WHERE alert_id=$1',[ids[3]])).rows[0].attempts,0);
     assert.equal((await db.query('SELECT count(*)::int AS n FROM notification_attempt_budget')).rows[0].n,10);

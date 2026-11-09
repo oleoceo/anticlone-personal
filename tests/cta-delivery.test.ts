@@ -12,7 +12,7 @@ import { sendLocalCtaAlert } from '../apps/cta-local-smtp.js';
 import { cleanupCta } from '../apps/cta-inventory.js';
 import { createServer, type Socket } from 'node:net';
 
-test('CTA delivery is atomic, exclusive, bounded and recovers interrupted work', async () => {
+test('CTA delivery is atomic, exclusive and retains interrupted work for review', async () => {
   assert.ok(process.env.TEST_DATABASE_URL);
   const schema=`test_${randomUUID().replaceAll('-','')}`;
   const admin=new Pool({connectionString:process.env.TEST_DATABASE_URL});
@@ -83,14 +83,9 @@ test('CTA delivery is atomic, exclusive, bounded and recovers interrupted work',
     const oldAttempt=deliverCtaAlert(db,async()=>{startedStale(); await staleGate;});
     await staleStarted;
     await db.query("UPDATE cta_alert_deliveries SET lease_until=now()-interval '1 second' WHERE alert_id=$1",[stale]);
-    let releaseNew!:()=>void, startedNew!:()=>void;
-    const newGate=new Promise<void>(r=>{releaseNew=r;});
-    const newStarted=new Promise<void>(r=>{startedNew=r;});
-    const newAttempt=deliverCtaAlert(db,async()=>{startedNew(); await newGate;});
-    await newStarted; releaseStale(); await oldAttempt;
-    assert.deepEqual(await state(stale),{state:'PROCESSING',attempts:2});
-    releaseNew(); await newAttempt;
-    assert.deepEqual(await state(stale),{state:'DELIVERED',attempts:2});
+    assert.equal(await deliverCtaAlert(db,async()=>{assert.fail('live callback must keep exclusive ownership');}),false);
+    releaseStale(); await oldAttempt;
+    assert.deepEqual(await state(stale),{state:'DELIVERED',attempts:1});
     const interrupted=await insert();
     const env={...process.env,PGOPTIONS:options};
     const held=spawn(process.execPath,['dist/tests/fixtures/cta-delivery-hold.js'],{env,stdio:['ignore','pipe','inherit']});
@@ -98,6 +93,9 @@ test('CTA delivery is atomic, exclusive, bounded and recovers interrupted work',
     assert.deepEqual(await state(interrupted),{state:'PROCESSING',attempts:1});
     held.kill(); await once(held,'exit');
     await db.query("UPDATE cta_alert_deliveries SET lease_until=now()-interval '1 second' WHERE alert_id=$1",[interrupted]);
+    assert.equal(await deliverCtaAlert(db,async()=>{assert.fail('crashed transport needs review');}),false);
+    assert.deepEqual(await state(interrupted),{state:'PROCESSING',attempts:1});
+    const fresh=await insert();
     const messages:string[]=[];
     const smtp = new SMTPServer({authOptional:true, disabledCommands:['AUTH','STARTTLS'], onData(stream, _session, callback) { let message=''; stream.on('data',chunk=>{message+=String(chunk);}); stream.on('end',()=>{messages.push(message); callback();}); }});
     await new Promise<void>(resolve=>smtp.listen(0,'127.0.0.1',resolve));
@@ -105,10 +103,11 @@ test('CTA delivery is atomic, exclusive, bounded and recovers interrupted work',
     assert.ok(address && typeof address !== 'string');
     const worker=spawn(process.execPath,['dist/apps/cta-delivery-worker.js'],{env:{...env,DATABASE_URL:process.env.TEST_DATABASE_URL,CTA_SMTP_LAB:'1',CTA_SMTP_LAB_PORT:String(address.port),SMTP_HOST:'external.invalid',SMTP_USER:'synthetic',SMTP_PASSWORD:'synthetic',HTTP_PROXY:'http://external.invalid:1'},stdio:'ignore'});
     try {
-      for (let i=0;i<50 && (await state(interrupted)).state!=='DELIVERED';i++) await delay(100);
-      assert.deepEqual(await state(interrupted),{state:'DELIVERED',attempts:2});
+      for (let i=0;i<50 && (await state(fresh)).state!=='DELIVERED';i++) await delay(100);
+      assert.deepEqual(await state(fresh),{state:'DELIVERED',attempts:1});
+      assert.deepEqual(await state(interrupted),{state:'PROCESSING',attempts:1});
     } finally { worker.kill(); await once(worker,'exit'); }
-    assert.equal((await db.query('SELECT result_kind FROM cta_alert_deliveries WHERE alert_id=$1',[interrupted])).rows[0].result_kind,'SMTP_LOCAL_ACCEPTED');
+    assert.equal((await db.query('SELECT result_kind FROM cta_alert_deliveries WHERE alert_id=$1',[fresh])).rows[0].result_kind,'SMTP_LOCAL_ACCEPTED');
     await db.query("UPDATE notification_attempt_budget SET reserved_at=now()-interval '61 minutes'");
     const duplicate=await insert();
     await deliverCtaAlert(db,async id=>{await sendLocalCtaAlert(id,address.port); throw Error('interrupted after acceptance');});
