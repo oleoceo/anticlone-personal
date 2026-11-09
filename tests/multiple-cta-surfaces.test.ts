@@ -104,6 +104,8 @@ test('seven scoped conversion points coexist and SPA refreshes safely', {timeout
     const refresh=page.waitForResponse(r=>r.url().endsWith('/cta-refresh'));await page.clock.fastForward(5000);await refresh;await page.clock.runFor(1);
     assert.equal(await click('plus0001'),clone+'/native-plus');
     assert.equal(await click('route001','other'),original+'/official-route');
+    const routeWithoutScope=await page.evaluate(()=>{const root=document.querySelector('[data-anticlone-surface=other]')!;root.removeAttribute('data-anticlone-surface');const node=root.querySelector<HTMLAnchorElement>('a')!;let href='';window.addEventListener('click',event=>{href=node.href;event.preventDefault();},{once:true});node.click();root.setAttribute('data-anticlone-surface','other');return href;});
+    assert.equal(routeWithoutScope,clone+'/native-route');await page.clock.runFor(1);
     let release!:()=>void, seen!:()=>void;
     const hold=new Promise<void>(resolve=>{release=resolve;}), received=new Promise<void>(resolve=>{seen=resolve;});
     await page.route('**/cta-refresh',async route=>{try {const response=await route.fetch();seen();await hold;await route.fulfill({response});} catch { /* Aborted requests must not reactivate the old route. */ }});

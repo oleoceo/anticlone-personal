@@ -108,12 +108,16 @@ test('protection admin: real PostgreSQL/Chromium policies, classes, mappings, ap
     const captureFrame=page.frames().find(frame=>frame.url()===clone+'/clone');assert.ok(captureFrame);
     await captureFrame.evaluate(()=>addEventListener('message',event=>{if(event.data?.type==='anticlone-inventory-request') window.name=event.data.nonce;}));
     const priorCaptures=(await db.query('SELECT count(*)::int AS n FROM cta_captures WHERE project_id=$1',[project])).rows[0].n;
-    const rejectedDialog=new Promise<void>(resolve=>page.once('dialog',dialog=>{void dialog.dismiss().then(()=>resolve());}));
-    await page.locator('#cta-capture-now').click();await rejectedDialog;
-    assert.equal((await db.query('SELECT count(*)::int AS n FROM cta_captures WHERE project_id=$1',[project])).rows[0].n,priorCaptures);
-    const pendingNonce=await captureFrame.evaluate(()=>window.name);assert.match(pendingNonce,/^[a-f0-9]{32}$/);
-    await page.evaluate(({origin,nonce})=>{const source=(document.querySelector('#cta-capture-frame') as HTMLIFrameElement).contentWindow;const data={type:'anticlone-inventory-result',nonce,surface:'landing',pathname:'/clone',candidates:[]};window.dispatchEvent(new MessageEvent('message',{origin,source:window,data}));window.dispatchEvent(new MessageEvent('message',{origin:'http://localhost:1',source,data}));window.dispatchEvent(new MessageEvent('message',{origin,source,data:{...data,nonce:'0'.repeat(32)}}));},{origin:clone,nonce:pendingNonce});
-    await page.waitForTimeout(100);
+    for(const invalid of ['source','origin','nonce'] as const) {
+      const denied=new Promise<void>(resolve=>page.once('dialog',dialog=>{void dialog.dismiss().then(()=>resolve());}));
+      await page.locator('#cta-capture-now').click();await denied;
+      const nonce=await captureFrame.evaluate(()=>window.name);assert.match(nonce,/^[a-f0-9]{32}$/);
+      let unexpected=false;const onDialog=(dialog:import('playwright').Dialog)=>{unexpected=true;void dialog.dismiss();};page.on('dialog',onDialog);
+      await page.evaluate(({origin,nonce,invalid})=>{const source=(document.querySelector('#cta-capture-frame') as HTMLIFrameElement).contentWindow;const data={type:'anticlone-inventory-result',nonce:invalid==='nonce'?'0'.repeat(32):nonce,surface:'landing',pathname:'/clone',candidates:[]};window.dispatchEvent(new MessageEvent('message',{origin:invalid==='origin'?'http://localhost:1':origin,source:invalid==='source'?window:source,data}));},{origin:clone,nonce,invalid});
+      await page.waitForTimeout(100);page.off('dialog',onDialog);assert.equal(unexpected,false,invalid);
+      const validDialog=new Promise<void>(resolve=>page.once('dialog',dialog=>{void dialog.dismiss().then(()=>resolve());}));
+      await page.evaluate(({origin,nonce})=>{const source=(document.querySelector('#cta-capture-frame') as HTMLIFrameElement).contentWindow;window.dispatchEvent(new MessageEvent('message',{origin,source,data:{type:'anticlone-inventory-result',nonce,surface:'landing',pathname:'/clone',candidates:[]}}));},{origin:clone,nonce});await validDialog;
+    }
     assert.equal((await db.query('SELECT count(*)::int AS n FROM cta_captures WHERE project_id=$1',[project])).rows[0].n,priorCaptures);
     assert.equal((await fetch(base+'/admin/ui/cta-import',{method:'POST',headers:{origin:base,'sec-fetch-site':'same-origin','content-type':'application/json',cookie:'admin_session='+cookie.value,'x-csrf-token':csrf},body:JSON.stringify({project,surface:'landing',pathname:'/different',candidates:[]})})).status,400);
     page.on('dialog',dialog=>{void dialog.accept();});await page.locator('#cta-capture-now').click();

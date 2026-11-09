@@ -43,7 +43,7 @@ export async function ctaDecision(db:Pool, project:string, original:string, orig
     if (rows.rows.length>100) return {action:'OBSERVE_ONLY',ctaVersion:version};
     const collisions=await client.query(`SELECT marker FROM cta_points WHERE project_id=$1 AND surface=ANY($2::text[]) AND marker IS NOT NULL GROUP BY marker HAVING count(*)>1`,[project,all.filter(p=>p.pathname===path).map(p=>p.surface)]);
     const ambiguous=new Set(collisions.rows.map((row:{marker:string})=>row.marker));
-    const multipleSurfaces=all.filter(p=>p.pathname===path).length>1;
+    const multipleSurfaces=all.length>1;
     const mappings: {surface:string;marker:string;kind:string;destination:string;requiresSurface:boolean}[]=[];
     for (const row of rows.rows as {surface:string;marker:string;kind:string;url:string}[]) {
       try { mappings.push({surface:row.surface,marker:row.marker,kind:row.kind,destination:approvedDestination(row.url,original),requiresSurface:multipleSurfaces || ambiguous.has(row.marker)}); }
