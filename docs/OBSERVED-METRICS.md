@@ -1,8 +1,8 @@
-﻿# F29/F30: base persistente em desenvolvimento
+# F29/F30: base persistente em desenvolvimento
 
 A migration 047 adiciona fatos por projeto/pagina/evento, com sessao efemera declarada, classe, acao, versao e evidencia. `recordObservedFact` e uma API interna; nao existe endpoint publico de ingestao neste checkpoint. A coleta do runtime e a validacao de elegibilidade ainda precisam ser integradas antes de usar estes dados operacionalmente. Nao interpretar uma decisao como execucao. Browser nao autentica venda nem comprova carregamento externo.
 
-Fatos sao consultados por intervalo de no maximo sete dias; admissao serializada limita a 10000 fatos retidos por projeto e remove fatos anteriores a sete dias na proxima admissao. Reenvio identico e idempotente enquanto retido; conflito nao altera o registro. Identidade de sessao nao identifica pessoa. Nao armazenar URL, parametros, IP, nome ou payload livre. As consultas administrativas passam pela sessao e CSRF existentes do painel. A interface nova ainda precisa de prova Chromium autenticada.
+Fatos sao consultados por intervalo de no maximo sete dias; admissao serializada limita a 10000 fatos retidos por projeto e remove fatos anteriores a sete dias na proxima admissao. Reenvio identico e idempotente enquanto retido; conflito nao altera o registro. Identidade de sessao nao identifica pessoa. Nao armazenar URL, parametros, IP, nome ou payload livre. As consultas administrativas passam pela sessao e CSRF existentes do painel. Teste Chromium autenticado comprova gravacao de premissas e consulta da estimativa no painel existente.
 
 Premissas sao versionadas com hora do servidor: ticket em unidades menores, taxa em pontos-base, moeda explicita. A consulta apresenta a versao usada e calcula cliques observados vezes ticket vezes taxa, como numerador inteiro sobre 10000. Ausencia de fatos ou premissas retorna estimativa null. A alteracao das premissas recalcula o periodo consultado com a versao atual explicitamente exibida; nao reescreve versoes anteriores. Receita recuperada comprovada e carregamento externo permanecem null. Ledger de vendas HMAC permanece separado.
 
