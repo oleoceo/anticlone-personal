@@ -136,10 +136,17 @@ test('F44 canaries through real gateway and browser: bounded temporal claims rem
     assert.equal((await fetch(gateway+'/canary/html.gif',{headers:{referer:origin}})).status,200);
     await wait(async()=>await count('html_canary')===1);
     assert.equal(await state(),'UNKNOWN');
-    await db.query("INSERT INTO degradation_events(project_id,host,source,bucket,observed_at,origin) VALUES('lab','expired','html_canary',now()-interval '2 days',now()-interval '2 days',$1),('other','expired','html_canary',now()-interval '2 days',now()-interval '2 days',$1)",[origin]);
-    await db.query("INSERT INTO degradation_audit(project_id,host,state,window_start,observed_at) VALUES('lab','expired','UNKNOWN',now()-interval '8 days',now()-interval '8 days'),('other','expired','UNKNOWN',now()-interval '8 days',now()-interval '8 days')");
+    // Commit the complete TTL fixture before periodic cleanup can observe it.
+    const retentionFixture=await db.connect();
+    try {
+      await retentionFixture.query('BEGIN');
+      await retentionFixture.query("INSERT INTO degradation_events(project_id,host,source,bucket,observed_at,origin) VALUES('lab','expired','html_canary',now()-interval '2 days',now()-interval '2 days',$1),('other','expired','html_canary',now()-interval '2 days',now()-interval '2 days',$1)",[origin]);
+      await retentionFixture.query("INSERT INTO degradation_audit(project_id,host,state,window_start,observed_at) VALUES('lab','expired','UNKNOWN',now()-interval '8 days',now()-interval '8 days'),('other','expired','UNKNOWN',now()-interval '8 days',now()-interval '8 days')");
+      await retentionFixture.query('COMMIT');
+    } catch(error) { await retentionFixture.query('ROLLBACK');throw error; } finally {retentionFixture.release();}
     await wait(async()=> (await db.query("SELECT count(*)::int n FROM degradation_events WHERE project_id='lab' AND host='expired'")).rows[0].n===0);
     await wait(async()=> (await db.query("SELECT count(*)::int n FROM degradation_events WHERE project_id='other' AND host='expired'")).rows[0].n===0);
+    await wait(async()=> (await db.query("SELECT count(*)::int n FROM degradation_audit WHERE project_id=ANY($1::text[]) AND host='expired'",[['lab','other']])).rows[0].n===0);
     assert.equal((await db.query("SELECT count(*)::int n FROM degradation_events WHERE project_id='other' AND host='expired'")).rows[0].n,0);
     assert.equal((await db.query("SELECT count(*)::int n FROM degradation_audit WHERE project_id='lab' AND host='expired'")).rows[0].n,0);
     assert.equal((await db.query("SELECT count(*)::int n FROM degradation_audit WHERE project_id='other' AND host='expired'")).rows[0].n,0);
