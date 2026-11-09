@@ -46,7 +46,14 @@ test('scoped browser observations isolate projects on one origin and preserve co
       await db.query("INSERT INTO cta_destinations(project_id,offer,id,url) VALUES($1,'offer',$2,$3)",[project,destination,origin+'/'+project+'-checkout']);
       await db.query("INSERT INTO cta_mappings VALUES($1,$2,'offer',$3)",[project,point,destination]);
     }
-    for (const [project,page] of [['health',hp],['finance',fp]]) { const state=await db.query('SELECT config_generation FROM protected_pages WHERE id=$1',[page]); await managePages(db,{action:'approve',project,page,generation:'1',configGeneration:state.rows[0].config_generation,entryVersion:null,ctaVersions:[1]}); }
+    const state=await db.query('SELECT config_generation FROM protected_pages WHERE id=$1',[hp]);
+    const request={action:'approve',project:'health',page:hp,generation:'1',configGeneration:state.rows[0].config_generation,entryVersion:null,ctaVersions:[1]};
+    await assert.rejects(managePages(db,{...request,project:'finance'}),PageConflict);
+    const concurrent=await Promise.allSettled([managePages(db,request),managePages(db,request)]);
+    assert.equal(concurrent.filter(result=>result.status==='fulfilled').length,1);
+    assert.equal(concurrent.filter(result=>result.status==='rejected').length,1);
+    const financeState=await db.query('SELECT config_generation FROM protected_pages WHERE id=$1',[fp]);
+    await managePages(db,{action:'approve',project:'finance',page:fp,generation:'1',configGeneration:financeState.rows[0].config_generation,entryVersion:null,ctaVersions:[1]});
     const env: NodeJS.ProcessEnv={...process.env,PGOPTIONS:options,DATABASE_URL:process.env.TEST_DATABASE_URL,SMTP_PORT:'1',PORT:'3000',SCOPED_LAB_INSTALLATION:health,SCOPED_LAB_ORIGIN:`http://localhost:${address.port}`};
     delete env.PROJECT_ID; delete env.ALLOWED_ORIGIN;
     child=spawn(process.execPath,['dist/apps/server.js'],{env,stdio:'ignore'});
