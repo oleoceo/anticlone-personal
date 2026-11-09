@@ -9,6 +9,7 @@ import { checkoutMetrics } from './checkout-webhook.js';
 import { classifyIncident, IncidentConflict } from './incident-triage.js';
 import { protectionAdmin } from './protection-admin.js';
 import { protectionScript } from './protection-ui.js';
+import { managePages, PageConflict } from './protected-pages.js';
 
 type Session = { expiry: number; kind: 'bearer' | 'web'; csrf: string };
 
@@ -47,7 +48,7 @@ export function handleAdminUi(req: IncomingMessage, res: ServerResponse, db: Poo
     }
     res.writeHead(404).end(); return false;
   }
-  if (req.method !== 'POST' || !['/admin/ui/checkout-metrics','/admin/ui/protection','/admin/ui/incidents','/admin/ui/incident-status','/admin/ui/login','/admin/ui/logout','/admin/ui/settings','/admin/ui/preference','/admin/ui/cta-inventory','/admin/ui/cta-import','/admin/ui/cta-selection','/admin/ui/cta-commercial','/admin/ui/installation','/admin/ui/installation-enable','/admin/ui/installation-disable'].includes(req.url ?? '')) { res.writeHead(404).end(); return false; }
+  if (req.method !== 'POST' || !['/admin/ui/pages','/admin/ui/checkout-metrics','/admin/ui/protection','/admin/ui/incidents','/admin/ui/incident-status','/admin/ui/login','/admin/ui/logout','/admin/ui/settings','/admin/ui/preference','/admin/ui/cta-inventory','/admin/ui/cta-import','/admin/ui/cta-selection','/admin/ui/cta-commercial','/admin/ui/installation','/admin/ui/installation-enable','/admin/ui/installation-disable'].includes(req.url ?? '')) { res.writeHead(404).end(); return false; }
   if (req.headers.origin !== origin || site !== 'same-origin' || req.headers['content-type'] !== 'application/json') { res.writeHead(403).end(); return false; }
   const expected = login ? cookie('admin_login_csrf') : valid ? session.csrf : undefined;
   if (!expected || !/^[a-f0-9]{64}$/.test(expected) || req.headers['x-csrf-token'] !== expected) { res.writeHead(403).end(); return false; }
@@ -59,8 +60,8 @@ export function handleAdminUi(req: IncomingMessage, res: ServerResponse, db: Poo
   req.on('end',()=>{
     if(rejected) return;
     let body:unknown; try { body=JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { res.writeHead(400).end(); return; }
-    const operation=req.url === '/admin/ui/checkout-metrics' ? checkoutSummary(db,body) : req.url === '/admin/ui/protection' ? protectionAdmin(db,body) : req.url === '/admin/ui/incidents' ? incidentList(db,body) : req.url === '/admin/ui/incident-status' ? classifyIncident(db,body) : req.url === '/admin/ui/settings' ? saveNotificationSettings(db,body) : req.url === '/admin/ui/preference' ? setNotificationPreference(db,body) : req.url === '/admin/ui/cta-inventory' ? inventory(db,body) : req.url === '/admin/ui/cta-import' ? importUiInventory(db,body) : req.url?.startsWith('/admin/ui/installation') ? installation(db,body,req.url) : req.url === '/admin/ui/cta-commercial' ? approveCommercial(db,body).then(()=>({state:'APPROVED'})) : selectObservation(db,body).then(()=>({state:'PENDING'}));
-    void operation.then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error:unknown)=>res.writeHead(error instanceof IncidentConflict || error instanceof Conflict || error instanceof SelectionConflict || error instanceof InstallationOriginConflict ? 409 : error instanceof TypeError ? 400 : 503).end());
+    const operation=req.url === '/admin/ui/pages' ? managePages(db,body) : req.url === '/admin/ui/checkout-metrics' ? checkoutSummary(db,body) : req.url === '/admin/ui/protection' ? protectionAdmin(db,body) : req.url === '/admin/ui/incidents' ? incidentList(db,body) : req.url === '/admin/ui/incident-status' ? classifyIncident(db,body) : req.url === '/admin/ui/settings' ? saveNotificationSettings(db,body) : req.url === '/admin/ui/preference' ? setNotificationPreference(db,body) : req.url === '/admin/ui/cta-inventory' ? inventory(db,body) : req.url === '/admin/ui/cta-import' ? importUiInventory(db,body) : req.url?.startsWith('/admin/ui/installation') ? installation(db,body,req.url) : req.url === '/admin/ui/cta-commercial' ? approveCommercial(db,body).then(()=>({state:'APPROVED'})) : selectObservation(db,body).then(()=>({state:'PENDING'}));
+    void operation.then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error:unknown)=>res.writeHead(error instanceof PageConflict || error instanceof IncidentConflict || error instanceof Conflict || error instanceof SelectionConflict || error instanceof InstallationOriginConflict ? 409 : error instanceof TypeError ? 400 : 503).end());
   }); return false;
 }
 
@@ -133,6 +134,10 @@ function hasUnsavedChanges() {return snapshotOf(Object.fromEntries(names.map(nam
 function updateEnablement() {const dirty=hasUnsavedChanges(); el('unsaved').textContent='Salve as alterações antes de solicitar habilitação.'; el('unsaved').hidden=!dirty; el('enable').disabled=dirty||status!=='configured_disabled'}
 const el=id=>document.getElementById(id), login=el('login'), config=el('config'), section=el('settings'), message=el('message');
 const say=text=>{message.textContent=text};
+const pagesSection=document.createElement('section');
+pagesSection.innerHTML='<h2>Páginas protegidas</h2><p>Inclua o mesmo script na página migrada. A instalação permanece não verificada; políticas afetadas exigem revisão.</p><form id="pages-form"><label>Projeto <input name="project" required></label><label>Nome da página <input name="name"></label><label>ID da página <input name="page"></label><label>URL <input name="url" type="url"></label><button name="action" value="list">Consultar</button><button name="action" value="create">Cadastrar</button><button name="action" value="add-url">Autorizar URL</button><button name="action" value="remove-url">Remover URL</button></form><pre id="pages-result" role="status"></pre>';
+section.append(pagesSection);
+el('pages-form').addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget,action=event.submitter.value,body={project:form.elements.project.value,action};if(action==='create'){body.name=form.elements.name.value;body.url=form.elements.url.value}else if(action==='add-url'||action==='remove-url'){body.page=form.elements.page.value;body.url=form.elements.url.value}try{el('pages-result').textContent=JSON.stringify(await request('pages',body),null,2)}catch(error){el('pages-result').textContent=error.status===409?'URL em conflito ou última URL autorizada.':'Operação recusada ou indisponível.'}});
 const installationSection=document.createElement('section');
 installationSection.innerHTML='<h2>Instalação — diagnóstico limitado</h2><p>Informe o ID do projeto. As alegações de navegador podem ser forjadas. Não há verificação controlada; elas não validam integridade nem proteção ativa.</p><form id="installation-form"><label>ID <input name="project" required></label><button>Consultar instalação</button><button type="button" id="installation-enable">Habilitar coleta da origem principal</button><button type="button" id="installation-disable">Desabilitar coleta</button></form><pre id="installation-result"></pre>';
 section.append(installationSection);

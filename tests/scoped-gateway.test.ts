@@ -28,6 +28,7 @@ test('scoped browser observations isolate projects on one origin and preserve co
   try {
     for (const file of ['001_initial','002_alerts','003_projects','004_observation_sources','005_canaries','006_page_redirect','007_protection_policy','008_traffic_observations','009_risk_assessments','024_risk_evidence','010_policy_allocation','011_cta_inventory','022_cta_capture_selection','012_cta_policy','013_cta_review','014_cta_drift_alerts','023_cta_commercial','018_notification_budget','019_alert_outbox_expiry','025_installation_signals','036_cta_surface_policies']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
     await db.query(await readFile('infra/037_protected_pages.sql','utf8'));
+    await db.query(await readFile('infra/038_page_url_review.sql','utf8'));
     await db.query("INSERT INTO projects VALUES ('health','Health',$1),('finance','Finance',$1)",[origin]);
     const hp=randomUUID(), fp=randomUUID();
     await db.query("INSERT INTO protected_pages(id,project_id,installation_id,name) VALUES ($1,'health',$2,'Health'),($3,'finance',$4,'Finance')",[hp,health,fp,finance]);

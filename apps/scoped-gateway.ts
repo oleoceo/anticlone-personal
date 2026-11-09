@@ -42,6 +42,8 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>) {
           const traffic=classifyTraffic(fields.signals,origin);
           const context=await resolvePageContext(db,match[1]);
           if (!context || context.urls.length!==1) { fallback(); return; }
+          const review=await db.query('SELECT url_review_required FROM protected_pages WHERE id=$1',[context.page]);
+          if (!review.rowCount || review.rows[0].url_review_required) { fallback(); return; }
           const original=context.urls[0];
           // Legacy surface policies are keyed by path, not page identity.
           // Ambiguous paths in one project must never share a policy.

@@ -1,0 +1,50 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { randomUUID, scryptSync } from 'node:crypto';
+import { once } from 'node:events';
+import { Pool } from 'pg';
+import { chromium } from 'playwright';
+import { TOTP, Secret } from 'otpauth';
+import { createAdminServer } from '../apps/admin-auth.js';
+
+test('authenticated page administration preserves identities across URL transition', {timeout:60000}, async()=>{
+  assert.ok(process.env.TEST_DATABASE_URL);
+  const root=new Pool({connectionString:process.env.TEST_DATABASE_URL}), schema='pages_ui_'+randomUUID().replaceAll('-','');
+  await root.query(`CREATE SCHEMA ${schema}`);
+  const db=new Pool({connectionString:process.env.TEST_DATABASE_URL,options:`-c search_path=${schema}`});
+  let browser:Awaited<ReturnType<typeof chromium.launch>>|undefined;
+  let server:ReturnType<typeof createAdminServer>|undefined;
+  try {
+    for(const file of ['003_projects','025_installation_signals','037_protected_pages','038_page_url_review']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
+    await db.query('CREATE TABLE admin_totp_replay(factor_id text PRIMARY KEY,last_counter bigint NOT NULL)');
+    await db.query('CREATE TABLE admin_totp_codes(factor_id text NOT NULL,digest text NOT NULL,valid_until bigint NOT NULL,PRIMARY KEY(factor_id,digest))');
+    await db.query("INSERT INTO projects VALUES('health','Health','https://solucao.digital'),('finance','Finance','https://solucao.digital')");
+    const salt='0123456789abcdef0123456789abcdef',secret='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+    server=createAdminServer(`scrypt$${salt}$${scryptSync('password',Buffer.from(salt,'hex'),64).toString('hex')}`,secret,db).listen(0,'127.0.0.1'); await once(server,'listening');
+    const address=server.address(); assert.ok(address && typeof address!=='string'); const base=`http://127.0.0.1:${address.port}`;
+    assert.equal((await fetch(base+'/admin/ui/pages',{method:'POST',headers:{origin:base,'sec-fetch-site':'same-origin','content-type':'application/json'},body:'{}'})).status,403);
+    browser=await chromium.launch(); const page=await browser.newPage(); await page.goto(base+'/admin/ui/');
+    await page.getByLabel('Senha administrativa').fill('password'); await page.getByLabel('Código TOTP').fill(new TOTP({secret:Secret.fromBase32(secret)}).generate()); await page.getByRole('button',{name:'Entrar',exact:true}).click();
+    await page.locator('#pages-form').waitFor({state:'visible'});
+    const form=page.locator('#pages-form');
+    await form.locator('[name=project]').fill('health'); await form.locator('[name=name]').fill('Saúde'); await form.locator('[name=url]').fill('https://solucao.digital/saude');
+    await form.getByRole('button',{name:'Cadastrar'}).click();
+    await page.waitForFunction(()=>document.querySelector('#pages-result')?.textContent?.includes('installation'));
+    const created=JSON.parse((await page.locator('#pages-result').textContent())!) as {page:string;installation:string};
+    await form.locator('[name=page]').fill(created.page); await form.locator('[name=url]').fill('https://saudeoficial.com/oferta');
+    await form.getByRole('button',{name:'Autorizar URL'}).click(); await page.waitForFunction(()=>document.querySelector('#pages-result')?.textContent?.includes('reviewRequired'));
+    const rows=await db.query('SELECT p.id,p.installation_id,p.url_review_required,count(u.*)::int n FROM protected_pages p JOIN protected_page_urls u ON u.page_id=p.id WHERE p.id=$1 GROUP BY p.id',[created.page]);
+    assert.deepEqual(rows.rows[0],{id:created.page,installation_id:created.installation,url_review_required:true,n:2});
+    await form.locator('[name=url]').fill('https://solucao.digital/saude'); const removed=page.waitForResponse(r=>r.url().endsWith('/admin/ui/pages')); await form.getByRole('button',{name:'Remover URL'}).click(); assert.equal((await removed).status(),200);
+    const remaining=await db.query('SELECT origin,pathname FROM protected_page_urls WHERE page_id=$1',[created.page]);
+    assert.deepEqual(remaining.rows,[{origin:'https://saudeoficial.com',pathname:'/oferta'}]);
+    await form.locator('[name=project]').fill('finance'); await form.locator('[name=name]').fill('Finance'); await form.locator('[name=url]').fill('https://saudeoficial.com/oferta'); await form.getByRole('button',{name:'Cadastrar'}).click();
+    await page.waitForFunction(()=>document.querySelector('#pages-result')?.textContent?.includes('conflito'));
+    const mismatch=await page.evaluate(async pageId=>{const b=await (await fetch('/admin/ui/bootstrap')).json(); return (await fetch('/admin/ui/pages',{method:'POST',headers:{'content-type':'application/json','x-csrf-token':b.csrf},body:JSON.stringify({project:'finance',page:pageId,action:'add-url',url:'https://finance.test/'})})).status;},created.page);
+    assert.equal(mismatch,400);
+  } finally {
+    if(browser) await browser.close(); if(server) await new Promise<void>(resolve=>server!.close(()=>resolve()));
+    await db.end(); await root.query(`DROP SCHEMA ${schema} CASCADE`); await root.end();
+  }
+});
