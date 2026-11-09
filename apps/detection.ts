@@ -1,3 +1,4 @@
+import { notificationRetention } from './notification-lifecycle.js';
 import { tryRecordTimeline } from './investigation-timeline.js';
 import type { Pool } from 'pg';
 import { tryIntent } from './notification-intents.js';
@@ -15,7 +16,11 @@ export function configuredOrigin(input: string): string {
   url.hostname = url.hostname.replace(/\.$/, '');
   return url.origin;
 }
-export async function cleanup(pool: Pool, project: string): Promise<void> {
+export async function cleanup(db: Pool, project: string): Promise<void> {
+  const pool=await db.connect();
+  try {
+  await pool.query('BEGIN');
+  const retention=await notificationRetention(pool,project);
   const timeline = await pool.query("SELECT to_regclass('investigation_timeline') IS NOT NULL AS installed");
   if (timeline.rows[0].installed) await pool.query("DELETE FROM investigation_timeline WHERE project_id=$1 AND recorded_at < clock_timestamp()-interval '30 days'",[project]);
   await pool.query("DELETE FROM risk_assessment_days WHERE project_id = $1 AND observed_at < now() - interval '7 days'", [project]);
@@ -24,8 +29,10 @@ export async function cleanup(pool: Pool, project: string): Promise<void> {
   await pool.query("DELETE FROM observations WHERE project_id = $1 AND observed_at < now() - interval '7 days'", [project]);
   await pool.query("DELETE FROM observation_source_days WHERE project_id = $1 AND day < (now() AT TIME ZONE 'UTC')::date - 7", [project]);
   await pool.query("DELETE FROM observation_days WHERE project_id = $1 AND day < (now() AT TIME ZONE 'UTC')::date - 7", [project]);
-  const expired = await pool.query(`DELETE FROM incidents WHERE project_id = $1 AND last_seen < now() - interval '30 days' RETURNING id`, [project]);
+  const expired = await pool.query(`DELETE FROM incidents i WHERE project_id = $1 AND last_seen < now() - interval '30 days' AND NOT EXISTS (SELECT 1 FROM alert_outbox a WHERE a.incident_id=i.id AND a.sent_at IS NULL AND a.expired_at IS NULL AND (NOT $2 OR ($3::timestamptz IS NOT NULL AND i.first_seen<=$3))) RETURNING id`, [project,retention.active,retention.cutoff]);
   if (expired.rowCount) process.stderr.write(`Expired ${expired.rowCount} inactive incident(s) and associated alerts under retention policy\n`);
+  await pool.query('COMMIT');
+  } catch(error) { await pool.query('ROLLBACK'); throw error; } finally {pool.release();}
 }
 export async function observe(pool: Pool, project: string, allowedOrigin: string | readonly string[], input: string, source: 'core' | 'fallback' = 'core', evidence?: unknown): Promise<'authorized' | 'observed' | 'capacity'> {
   const origin = configuredOrigin(input), host = hostFromUrl(origin);

@@ -1,6 +1,7 @@
 import { authorizedHosts, collectInfrastructure, realResolver } from './infrastructure-dns.js';
 import http from 'node:http';
 import { randomUUID } from 'node:crypto';
+import { operationallyEligible } from './operational-eligibility.js';
 import { projectMaintenance } from './project-maintenance.js';
 import { checkoutWebhook, projectCheckoutWebhooks } from './checkout-webhook.js';
 import { readFileSync } from 'node:fs';
@@ -282,10 +283,12 @@ async function maintenance() {
   if (busy) return;
   busy = true;
   try {
+    const active=await operationallyEligible(pool,activeProject);
     const temporalOrigin = !mode.pilot && optional.canaryDegradation.state !== 'NOT_INSTALLED' ? controlledOrigin : undefined;
     await degradationTask('maintenance', () => maintainDegradation(pool, activeProject, temporalOrigin, optional.canaryDegradation.state !== 'NOT_INSTALLED'));
+    if (active) {
     try {
-      await cleanup(pool, activeProject); await deliverOne(pool, activeProject, cloneSmtp ?? smtpPort);
+      await deliverOne(pool, activeProject, cloneSmtp ?? smtpPort);
       observeFailure('maintenance',false);
     } catch (error) {
       const code=(error as {code?:unknown} | null)?.code;
@@ -304,6 +307,10 @@ async function maintenance() {
       if (version === healthBaselinePersisted && claimPending.size === 0)
         await evaluateInactivity(pool, activeProject, () => version===healthBaselineVersion && claimPending.size===0);
       if (!cloneSmtp && version === healthBaselineVersion && version === healthBaselinePersisted) await deliverHealth(pool, activeProject, smtpPort, () => version===healthBaselineVersion);
+    });
+    }
+    await cleanup(pool,activeProject);
+    await optional.health.run('retention',async()=>{
       if (Date.now() >= healthCleanupAfter) {
         await maintainHealthHistory(pool, activeProject);
         healthCleanupAfter = Date.now() + 60 * 60_000;
@@ -332,7 +339,7 @@ async function infrastructureMaintenance() {
       await pool.query("DELETE FROM infrastructure_dns_observations WHERE project_id=$1 AND observed_at<now()-interval '30 days'",[activeProject]);
       dnsRetentionAfter=Date.now()+3600_000;
     }
-    if (dnsResolver) {
+    if (dnsResolver && await operationallyEligible(pool,activeProject)) {
       const host = dnsHosts[dnsIndex++ % dnsHosts.length];
       await collectInfrastructure(pool,activeProject,host,dnsHosts,dnsResolver,`configured-dns:${process.env.INFRASTRUCTURE_DNS_SERVER}`);
     }

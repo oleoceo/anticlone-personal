@@ -33,6 +33,8 @@ test('DNS history is incident-scoped, authorized, bounded, isolated and conserva
   http.request=(()=>{httpAttempts++; throw Error('unexpected HTTP');}) as typeof http.request;
   https.request=(()=>{httpAttempts++; throw Error('unexpected HTTPS');}) as typeof https.request;
   try {
+    await db.query(await readFile('infra/003_projects.sql','utf8'));
+    await db.query("INSERT INTO projects(id,name,origin) VALUES('a','A','http://a.test'),('b','B','http://b.test')");
     for (const f of ['001_initial','002_alerts','004_observation_sources','005_canaries','008_traffic_observations','009_risk_assessments','024_risk_evidence','018_notification_budget','019_alert_outbox_expiry','030_infrastructure_dns']) await db.query(await readFile(`infra/${f}.sql`,'utf8'));
     await db.query("INSERT INTO incidents(project_id,host) VALUES('a',$1),('b',$1)",[host]);
     let calls=0; const resolver=fixture(); const base=resolver.resolve4; resolver.resolve4=async h=>{calls++; return base(h);};

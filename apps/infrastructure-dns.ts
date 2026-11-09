@@ -1,3 +1,4 @@
+import { operationallyEligible } from './operational-eligibility.js';
 import { tryRecordTimeline } from './investigation-timeline.js';
 import { Resolver } from 'node:dns/promises';
 import { BlockList, isIP } from 'node:net';
@@ -54,6 +55,7 @@ export async function collectInfrastructure(pool:Pool, project:string, host:stri
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    if (!await operationallyEligible(client,project,undefined,true)) { await client.query('ROLLBACK'); return false; }
     await client.query("SELECT pg_advisory_xact_lock(hashtext('infrastructure-dns'),hashtext($1))",[project]);
     const incident = await client.query("SELECT id FROM incidents WHERE project_id=$1 AND host=$2 AND last_seen>=now()-interval '30 days'",[project,host]);
     if (!incident.rowCount) { await client.query('ROLLBACK'); return false; }

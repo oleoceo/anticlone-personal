@@ -1,3 +1,4 @@
+import { operationallyEligible } from './operational-eligibility.js';
 import type { Pool } from 'pg';
 import { recordInstallationClaim } from './installation.js';
 import { cleanup } from './detection.js';
@@ -10,7 +11,7 @@ import { authorizedHosts, realResolver, collectInfrastructure } from './infrastr
 import { smtpProvider } from './smtp-provider.js';
 
 // One serialized sweep, keyset batches, independent failure/backoff state per project.
-// Projects have no pause/archive lifecycle yet: every persisted project is eligible.
+// Paused projects retain cleanup, but cannot collect or reconcile operations.
 export function projectMaintenance(db: Pool, env: NodeJS.ProcessEnv, exclude?: string) {
   const states=new Map<string,Promise<Awaited<ReturnType<typeof createState>>>>();
   const hosts=authorizedHosts(env), resolver=hosts.length ? realResolver(env.INFRASTRUCTURE_DNS_SERVER!) : undefined;
@@ -48,8 +49,10 @@ export function projectMaintenance(db: Pool, env: NodeJS.ProcessEnv, exclude?: s
             if (id===exclude) continue;
             const state=await getState(id);
             const {optional,failures}=state;
+            const active=await operationallyEligible(db,id);
             await optional.degradation.run('maintenance',()=>maintainDegradation(db,id,undefined,optional.canaryDegradation.state!=='NOT_INSTALLED'));
-            try { await cleanup(db,id); await deliverOne(db,id,smtp ?? Number(env.SMTP_PORT)); failures.observe('maintenance',false); }
+            if (active) {
+            try { await deliverOne(db,id,smtp ?? Number(env.SMTP_PORT)); failures.observe('maintenance',false); }
             catch { failures.observe('maintenance',true,'UNKNOWN'); }
             await optional.health.run('maintenance',async()=>{
               if (state.persisted!==state.version) { const version=state.version; await invalidateInactivity(db,id,version>1); state.persisted=version; }
@@ -61,6 +64,10 @@ export function projectMaintenance(db: Pool, env: NodeJS.ProcessEnv, exclude?: s
               const current=()=>state.persisted===state.version && version===state.version && state.pending===0;
               if (current()) await evaluateInactivity(db,id,current);
               if (!smtp && current()) await deliverHealth(db,id,Number(env.SMTP_PORT),current);
+            });
+            }
+            await cleanup(db,id);
+            await optional.health.run('retention',async()=>{
               if (Date.now()>=state.healthRetention) { await maintainHealthHistory(db,id); state.healthRetention=Date.now()+3600_000; }
             });
             if (Date.now()>=state.retention) {
@@ -75,7 +82,7 @@ export function projectMaintenance(db: Pool, env: NodeJS.ProcessEnv, exclude?: s
                     await db.query("DELETE FROM infrastructure_dns_observations WHERE project_id=$1 AND observed_at<now()-interval '30 days'",[id]);
                     state.dnsRetention=Date.now()+3600_000;
                   }
-                  if (resolver) await collectInfrastructure(db,id,hosts[state.dnsIndex++ % hosts.length],hosts,resolver,'configured-dns:'+env.INFRASTRUCTURE_DNS_SERVER);
+                  if (active && resolver) await collectInfrastructure(db,id,hosts[state.dnsIndex++ % hosts.length],hosts,resolver,'configured-dns:'+env.INFRASTRUCTURE_DNS_SERVER);
                 }
                 failures.observe('infrastructure',false);
               } catch { failures.observe('infrastructure',true,'UNKNOWN'); }
@@ -92,8 +99,14 @@ export function projectMaintenance(db: Pool, env: NodeJS.ProcessEnv, exclude?: s
     state.pending++;
     let ownsClaim=false;
     try {
-      const installed=await db.query("SELECT to_regclass('page_installation_signals') IS NOT NULL AS installed");
-      if (installed.rows[0].installed) await db.query(`INSERT INTO page_installation_signals(project_id,page_id,source) VALUES($1,$2,$3) ON CONFLICT(project_id,page_id,source) DO UPDATE SET last_observed_at=clock_timestamp() WHERE page_installation_signals.last_observed_at<clock_timestamp()-interval '1 minute'`,[id,page,source]);
+      const client=await db.connect();
+      try {
+      await client.query('BEGIN');
+      if (!await operationallyEligible(client,id,page,true)) { await client.query('ROLLBACK'); return false; }
+      const installed=await client.query("SELECT to_regclass('page_installation_signals') IS NOT NULL AS installed");
+      if (installed.rows[0].installed) await client.query(`INSERT INTO page_installation_signals(project_id,page_id,source) VALUES($1,$2,$3) ON CONFLICT(project_id,page_id,source) DO UPDATE SET last_observed_at=clock_timestamp() WHERE page_installation_signals.last_observed_at<clock_timestamp()-interval '1 minute'`,[id,page,source]);
+      await client.query('COMMIT');
+      } catch(error) {await client.query('ROLLBACK');throw error;} finally {client.release();}
       if (state.claims.has(source) || Date.now()<(state.claimAfter.get(source) ?? 0)) return state.optional.installation.state!=='DATABASE_ERROR';
       state.claims.add(source); ownsClaim=true; state.claimAfter.set(source,Date.now()+60_000);
       const claimed=await state.optional.installation.run('claim',()=>recordInstallationClaim(db,id,origin,source));

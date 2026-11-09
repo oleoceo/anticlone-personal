@@ -1,6 +1,7 @@
-﻿import type { Pool, PoolClient } from 'pg';
-import { makeMailer } from './alerts.js';
+import type { Pool, PoolClient } from 'pg';
+import { sendLocalMail } from './alerts.js';
 import { budgetMayBeAvailable, lockBudget, recordBudget } from './notification-budget.js';
+import { notificationAdmission, notificationRetention } from './notification-lifecycle.js';
 import { operationallyEligible } from './operational-eligibility.js';
 
 // Claims are unauthenticated; inactivity describes only a lack of observed claims.
@@ -74,6 +75,7 @@ export async function invalidateInactivity(db: Pool, project: string, invalidate
   const client=await db.connect();
   try {
     await client.query('BEGIN');
+    if (!await operationallyEligible(client,project,undefined,true)) { await client.query('ROLLBACK'); return; }
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1), 45)',[project]);
     await client.query('UPDATE installation_last_signal SET first_observed_at=NULL WHERE project_id=$1',[project]);
     const affected=await client.query(`UPDATE health_episodes SET invalidated_at=clock_timestamp() WHERE $2 AND project_id=$1
@@ -161,20 +163,21 @@ export async function recoverOperationalSource(db: Pool, project: string, source
 
 export async function deliverHealth(db: Pool, project: string, port: number, isCurrent: () => boolean = () => true) {
   const client = await db.connect();
-  let locked = false;
   try {
-    locked = (await client.query('SELECT pg_try_advisory_lock(hashtext($1), 45) AS locked', [project])).rows[0].locked;
-    if (!locked || !budgetMayBeAvailable(db)) return;
     await client.query('BEGIN');
+    const cutoff=await notificationAdmission(client,project);
+    if (cutoff===false) return;
+    const locked = (await client.query('SELECT pg_try_advisory_xact_lock(hashtext($1), 45) AS locked', [project])).rows[0].locked;
+    if (!locked || !budgetMayBeAvailable(db)) return;
     let item: {episode_id:string;kind:string} | undefined;
     try {
       if (await lockBudget(client,db) && isCurrent()) {
         const result = await client.query(`SELECT d.episode_id,e.kind FROM health_delivery d JOIN health_episodes e ON e.id=d.episode_id
           JOIN installation_health_settings s ON s.project_id=e.project_id
           JOIN installations i ON i.project_id=e.project_id JOIN projects p ON p.id=i.project_id
-          WHERE ((e.kind='INACTIVE' AND s.enabled AND i.enabled AND i.origin=p.origin) OR (e.kind='OPERATIONAL' AND s.operational_enabled)) AND e.project_id=$1 AND e.recovered_at IS NULL AND e.invalidated_at IS NULL AND (e.kind='OPERATIONAL' OR NOT EXISTS (SELECT 1 FROM installation_last_signal l WHERE l.project_id=e.project_id AND l.last_observed_at>e.opened_at)) AND d.sent_at IS NULL AND d.expired_at IS NULL
+          WHERE ($2::timestamptz IS NULL OR e.opened_at>$2) AND ((e.kind='INACTIVE' AND s.enabled AND i.enabled AND i.origin=p.origin) OR (e.kind='OPERATIONAL' AND s.operational_enabled)) AND e.project_id=$1 AND e.recovered_at IS NULL AND e.invalidated_at IS NULL AND (e.kind='OPERATIONAL' OR NOT EXISTS (SELECT 1 FROM installation_last_signal l WHERE l.project_id=e.project_id AND l.last_observed_at>e.opened_at)) AND d.sent_at IS NULL AND d.expired_at IS NULL
           AND d.attempts<3 AND d.next_attempt<=clock_timestamp() AND e.opened_at>clock_timestamp()-interval '24 hours'
-          ORDER BY d.episode_id LIMIT 1 FOR UPDATE OF d SKIP LOCKED`, [project]);
+          ORDER BY d.episode_id LIMIT 1 FOR UPDATE OF d SKIP LOCKED`, [project,cutoff]);
         item = result.rows[0];
         if (item) {
           await client.query("UPDATE health_delivery SET attempts=attempts+1,next_attempt=clock_timestamp()+make_interval(secs=>60 * (1 << attempts)) WHERE episode_id=$1", [item.episode_id]);
@@ -196,7 +199,7 @@ export async function deliverHealth(db: Pool, project: string, port: number, isC
       return;
     }
     try {
-      await makeMailer(port).sendMail({from:'anticlone@example.test',to:'owner@example.test',subject:'AntiClone health observation',text:`Health episode ${item.episode_id}: ${item.kind}. This observation is not proof of tampering.`,messageId:`<anticlone-health-${item.episode_id}@example.test>`});
+      await sendLocalMail(port,{from:'anticlone@example.test',to:'owner@example.test',subject:'AntiClone health observation',text:`Health episode ${item.episode_id}: ${item.kind}. This observation is not proof of tampering.`,messageId:`<anticlone-health-${item.episode_id}@example.test>`});
       await client.query('BEGIN');
       await client.query('UPDATE health_delivery SET sent_at=clock_timestamp() WHERE episode_id=$1', [item.episode_id]);
       await client.query("INSERT INTO health_history(episode_id,event) VALUES($1,'SENT')", [item.episode_id]);
@@ -206,7 +209,7 @@ export async function deliverHealth(db: Pool, project: string, port: number, isC
       await client.query("INSERT INTO health_history(episode_id,event) VALUES($1,'FAILED_UNCERTAIN')", [item.episode_id]);
     }
   } finally {
-    if (locked) await client.query('SELECT pg_advisory_unlock(hashtext($1), 45)', [project]);
+    await client.query('ROLLBACK');
     client.release();
   }
 }
@@ -215,13 +218,15 @@ export async function maintainHealthHistory(db: Pool, project: string) {
   const client = await db.connect();
   try {
     await client.query('BEGIN');
+    const retention=await notificationRetention(client,project);
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1), 45)',[project]);
     const expired = await client.query(`UPDATE health_delivery d SET expired_at=clock_timestamp()
       FROM health_episodes e WHERE e.id=d.episode_id AND e.project_id=$1 AND d.sent_at IS NULL AND d.expired_at IS NULL
-      AND (e.opened_at<=clock_timestamp()-interval '24 hours' OR d.attempts>=3) RETURNING d.episode_id`,[project]);
+      AND $2 AND ($3::timestamptz IS NULL OR e.opened_at>$3)
+      AND (d.attempts=0 OR d.next_attempt<=clock_timestamp()) AND (e.opened_at<=clock_timestamp()-interval '24 hours' OR d.attempts>=3) RETURNING d.episode_id`,[project,retention.active,retention.cutoff]);
     for (const row of expired.rows) await client.query("INSERT INTO health_history(episode_id,event) VALUES($1,'EXPIRED')",[row.episode_id]);
     await client.query("DELETE FROM health_operational_keys k USING health_episodes e WHERE k.episode_id=e.id AND e.project_id=$1 AND k.created_at<clock_timestamp()-interval '30 days'",[project]);
-    await client.query("DELETE FROM health_episodes WHERE project_id=$1 AND coalesce(recovered_at,invalidated_at) < clock_timestamp()-interval '30 days'",[project]);
+    await client.query("DELETE FROM health_episodes WHERE project_id=$1 AND coalesce(recovered_at,invalidated_at) < clock_timestamp()-interval '30 days' AND NOT EXISTS (SELECT 1 FROM health_delivery d WHERE d.episode_id=health_episodes.id AND d.sent_at IS NULL AND d.expired_at IS NULL AND (NOT $2 OR ($3::timestamptz IS NOT NULL AND health_episodes.opened_at<=$3)))",[project,retention.active,retention.cutoff]);
     await client.query("DELETE FROM health_settings_history WHERE project_id=$1 AND occurred_at < clock_timestamp()-interval '30 days'",[project]);
     await client.query('COMMIT');
   } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }

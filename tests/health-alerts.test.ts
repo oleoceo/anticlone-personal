@@ -93,6 +93,7 @@ test('health episodes, deduplication, retries and recovery', {timeout:30000}, as
     } finally { barrier.release(); pause.release(); }
     await Promise.all([evaluateInactivity(db,'one'),evaluateInactivity(db,'one')]);
     assert.equal((await db.query('SELECT count(*)::int AS n FROM health_episodes')).rows[0].n,1);
+    await db.query(await readFile('infra/044_notification_lifecycle.sql','utf8'));
     // Hold the shared budget row while a known collection gap invalidates this attempt.
     const budgetBlocker=await db.connect();
     try {
@@ -150,6 +151,7 @@ test('health episodes, deduplication, retries and recovery', {timeout:30000}, as
     await maintainHealthHistory(db,'one');
     assert.equal((await db.query('SELECT count(*)::int n FROM health_operational_keys WHERE observation_key=$1',[first])).rows[0].n,0);
     assert.equal((await db.query("SELECT count(*)::int n FROM health_episodes WHERE source='restart_claim'")).rows[0].n,before.rows[0].n+2);
+    await db.query('DROP VIEW notification_lifecycle_queue');
     // Roll back the optional migration in dependency order; old claims still work.
     await db.query('DROP TRIGGER remember_installation_signal ON installation_signals; DROP FUNCTION remember_installation_signal(); DROP TRIGGER invalidate_health_baseline ON installations; DROP FUNCTION invalidate_health_baseline(); DROP TABLE health_settings_history,health_history,health_delivery,health_operational_keys,health_episodes,installation_last_signal,installation_health_settings');
     await recordInstallationClaim(db,'one','http://owner.test','fallback');

@@ -1,5 +1,7 @@
 # Matriz de Cobertura Funcional — AntiClone Personal
 
+Recorte F01/F26/F36/F45: pausa integrada a manutencao multiprojeto/legada e despachos reais; fila SUSPENDED/REVIEW_REQUIRED, sem replay automatico. Prova PostgreSQL/SMTP A-J em tests/project-pause-delivery.test.ts, politica e limites em PROJECT-PAUSE-NOTIFICATIONS.md. Isto nao conclui as capacidades integrais da matriz.
+
 Frente B, recorte laboratorial F17/F20/F21/F23/F24/F43: `tests/protection-admin-ui.test.ts` acrescenta configuração no painel, quatro classes declaradas e 0/50/100 por ação, destinos HTTPS externos autorizados por URL exata, múltiplas ofertas e revisão isolada de drift. Capacidade integral continua PARCIAL: LOW operacional, formulários (D07), destinos comerciais reais e cenários adversariais integrais permanecem pendentes. Detalhes em `PROTECTION-ADMIN.md`; gates finais no PR.
 
 Frente A / F26: `tests/smtp-provider.test.ts` demonstra transporte SMTP configurável por ambiente privado, TLS implícito/STARTTLS, retry com histórico 033 e consulta no painel, em PostgreSQL/Chromium/SMTP local. Configuração pública deve coincidir com ambiente privado; credenciais não chegam ao browser. Capacidade permanece PARCIAL: aceitação local não prova entrega externa, nem provedor real autorizado configurado. Limites em `CLONE-SMTP.md`; gates e revisão do SHA final no PR.

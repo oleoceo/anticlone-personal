@@ -1,3 +1,4 @@
+import { operationallyEligible } from './operational-eligibility.js';
 import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 
@@ -8,6 +9,7 @@ export async function recordInstallationClaim(db: Pool, project: string, origin:
   const client=await db.connect();
   try {
     await client.query('BEGIN');
+    if (!await operationallyEligible(client,project,undefined,true)) { await client.query('ROLLBACK'); return; }
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1), 45)',[project]);
     const allowed=await client.query(`SELECT i.project_id FROM installations i JOIN projects p ON p.id=i.project_id
       WHERE i.project_id=$1 AND i.origin=$2 AND p.origin=i.origin AND i.enabled FOR UPDATE OF i`,[project,origin]);
