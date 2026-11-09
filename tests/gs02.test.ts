@@ -205,6 +205,18 @@ test('GS02: browser visits, durable incident and test SMTP alert after restart',
       assert.equal((await reconnected.query('SELECT id FROM observations WHERE project_id=$1',[project])).rowCount,2);
       assert.deepEqual((await reconnected.query("SELECT t.id FROM investigation_timeline t JOIN observations o ON o.project_id=t.project_id AND t.original_ref='observation:'||o.id::text WHERE t.project_id=$1 AND t.host='localhost' AND t.event_type IN ('first_observation','source_observed') ORDER BY t.id",[project])).rows,timelineBefore.rows);
       const request = (body: string, origin = clone, contentType = 'text/plain') => fetch('http://127.0.0.1:3000/observe',{method:'POST',headers:{origin,'content-type':contentType},body});
+      // Five concurrent admissions must leave connections for their writes.
+      const admissionBlocker=await reconnected.connect();
+      let admissions:Promise<Response[]>|undefined;
+      try {
+        await admissionBlocker.query('SELECT pg_advisory_lock(hashtext($1))',[project]);
+        admissions=Promise.all(Array.from({length:5},()=>request(clone)));
+        void admissions.catch(()=>{});
+        await until(async()=>Number((await reconnected.query("SELECT count(*) n FROM pg_stat_activity WHERE datname=current_database() AND wait_event='advisory' AND query='SELECT pg_advisory_xact_lock(hashtext($1))'")).rows[0].n)>=2,'concurrent writes reach advisory barrier');
+      } finally {
+        await admissionBlocker.query('SELECT pg_advisory_unlock(hashtext($1))',[project]);admissionBlocker.release();
+      }
+      assert.deepEqual((await admissions!).map(response=>response.status),[204,204,204,204,204]);
       await page.goto(clone + '/clone?gclid=labToken123&unrelated=private');
       await until(async () => (await reconnected.query("SELECT * FROM traffic_observation_days WHERE project_id=$1 AND source='gclid'", [project])).rowCount === 1, 'declared attribution');
       for (const [query, referer, source] of [

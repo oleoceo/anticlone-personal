@@ -74,8 +74,16 @@ test('real gateway/Core/fallback: temporal uncertainty, expiration, recovery and
     assert.ok(audit.rows.every(r=>r.uncertainty==='UNAUTHENTICATED_CLAIMS'));
     assert.equal((await db.query('SELECT count(*)::int n FROM installation_signals')).rows[0].n,0);
     // No further requests: periodic gateway maintenance clears expired rows separately for both projects.
-    await db.query("INSERT INTO degradation_events(project_id,host,source,bucket,observed_at) VALUES('lab','expired.test','core',now()-interval '2 days',now()-interval '2 days'),('other','expired.test','core',now()-interval '2 days',now()-interval '2 days')");
-    await db.query("INSERT INTO degradation_audit(project_id,host,state,window_start,observed_at) VALUES('lab','expired.test','UNKNOWN',now()-interval '8 days',now()-interval '8 days'),('other','expired.test','UNKNOWN',now()-interval '8 days',now()-interval '8 days')");
+    // Publish the full expired fixture before maintenance can observe it.
+    const fixture=await db.connect();
+    try {
+    await fixture.query('BEGIN');
+    await fixture.query("INSERT INTO degradation_events(project_id,host,source,bucket,observed_at) VALUES('lab','expired.test','core',now()-interval '2 days',now()-interval '2 days'),('other','expired.test','core',now()-interval '2 days',now()-interval '2 days')");
+    await fixture.query("INSERT INTO degradation_audit(project_id,host,state,window_start,observed_at) VALUES('lab','expired.test','UNKNOWN',now()-interval '8 days',now()-interval '8 days'),('other','expired.test','UNKNOWN',now()-interval '8 days',now()-interval '8 days')");
+    await fixture.query('COMMIT');
+    } catch(error) {await fixture.query('ROLLBACK');throw error;} finally {fixture.release();}
+    // Event and audit retention are separate operations; await both outcomes.
+    for(const project of ['lab','other']) await wait(async()=> (await db.query("SELECT (SELECT count(*) FROM degradation_events WHERE project_id=$1 AND host='expired.test')+(SELECT count(*) FROM degradation_audit WHERE project_id=$1 AND host='expired.test') AS n",[project])).rows[0].n==='0');
     await wait(async()=> (await db.query("SELECT count(*)::int n FROM degradation_events WHERE project_id='lab' AND host='expired.test'")).rows[0].n===0);
     assert.equal((await db.query("SELECT count(*)::int n FROM degradation_audit WHERE project_id='lab' AND observed_at<now()-interval '7 days'")).rows[0].n,0);
     await wait(async()=> (await db.query("SELECT count(*)::int n FROM degradation_events WHERE project_id='other'")).rows[0].n===0);

@@ -123,13 +123,25 @@ function recordClaim(origin: string, source: 'core' | 'fallback') {
   claimAfter.set(source,Date.now()+60_000);
   return optional.installation.run('claim', () => recordInstallationClaim(pool,activeProject,origin,source)).then(()=>{}).finally(()=>claimPending.delete(source));
 }
-async function withLegacyEligibility<T>(action: () => Promise<T>): Promise<T | undefined> {
+// HTTP admission must leave pool capacity for the operations under its lock.
+// Queued correlation is serialized separately and uses the reserved headroom.
+let legacyAdmissions=0;
+const legacyWaiters:(()=>void)[]=[];
+async function withLegacyEligibility<T>(action: () => Promise<T>, reserve=true): Promise<T | undefined> {
+  if (reserve) {
+    if (legacyAdmissions>=2) await new Promise<void>(resolve=>legacyWaiters.push(resolve));
+    else legacyAdmissions++;
+  }
+  try {
   const client=await pool.connect();
   try {
     await client.query('BEGIN');
     if (!await legacyOperationallyEligible(client,activeProject)) return undefined;
     return await action();
   } finally { try { await client.query('ROLLBACK'); client.release(); } catch { client.release(true); } }
+  } finally {
+    if (reserve) { const next=legacyWaiters.shift(); if(next) next(); else legacyAdmissions--; }
+  }
 }
 const handleCheckout = checkoutWebhook(pool,activeProject,project ? process.env : {...process.env,CHECKOUT_WEBHOOK_SECRET:undefined});
 const handleProjectCheckout = projectCheckoutWebhooks(pool,process.env);
@@ -194,11 +206,7 @@ const server = http.createServer((req, res) => {
     if (rejected) return;
     let session: unknown; let trafficClass: string; let evidence: RiskEvidence; let pathname: string|undefined;
     try { const input: unknown = JSON.parse(body); if (!input || typeof input !== 'object' || Array.isArray(input) || !['session,signals','pathname,session,signals'].includes(Object.keys(input).sort().join(','))) throw Error('invalid'); const fields = input as Record<string, unknown>; if (fields.pathname !== undefined && (typeof fields.pathname !== 'string' || !/^\/[a-zA-Z0-9/_-]{0,200}$/.test(fields.pathname))) throw Error('invalid pathname'); pathname=fields.pathname as string|undefined; session = fields.session; const traffic = classifyTraffic(fields.signals, origin); trafficClass = traffic.trafficClass; evidence = {source:'browser',reliability:'uncorroborated',trafficClass,kind:traffic.evidence}; } catch { res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify({action:'OBSERVE_ONLY'})); return; }
-    void (async () => {
-      const gate=await pool.connect();
-      try {
-      await gate.query('BEGIN');
-      if (!await legacyOperationallyEligible(gate,activeProject)) return {action:'OBSERVE_ONLY'};
+    void withLegacyEligibility(async () => {
       const controlled = controlledOrigin === origin && origin !== normalizedOrigin;
       const assessment = safeEvaluateRisk(controlled && process.env.LAB_CONTROLLED_RISK === 'LOW', fixture => {
         // Test-only negative fixtures can only suppress mitigation.
@@ -222,8 +230,7 @@ const server = http.createServer((req, res) => {
       const entry = entryDecision(entryPolicy, normalizedOrigin, origin, controlledOrigin, assessment.level, session, trafficClass);
       if (entry.action === 'PAGE_REDIRECT') return entry;
       return await ctaDecision(pool, activeProject, normalizedOrigin, origin, controlledOrigin, assessment.level, session, trafficClass, pathname);
-      } finally { try { await gate.query('ROLLBACK'); gate.release(); } catch { gate.release(true); } }
-    })().then(decision => res.writeHead(200, {'Content-Type': 'application/json'}).end(JSON.stringify(decision)))
+    }).then(decision => res.writeHead(200, {'Content-Type': 'application/json'}).end(JSON.stringify(decision ?? {action:'OBSERVE_ONLY'})))
       .catch(() => res.writeHead(200, {'Content-Type': 'application/json'}).end(JSON.stringify({action:'OBSERVE_ONLY'}))); }); return;
   }
   if (req.method !== 'POST' || req.url !== '/observe' && req.url !== '/observe/fallback') { res.writeHead(404).end(); return; }
@@ -256,14 +263,24 @@ const server = http.createServer((req, res) => {
       const result=await observe(pool, activeProject, mode.origins, origin, source, evidence);
       if (result === 'authorized') await recordClaim(origin,source);
       if (!mode.pilot && controlledOrigin && origin === controlledOrigin && origin !== normalizedOrigin) {
-        await degradationTask('correlation', async () => {
+        const correlate=async()=>{
           const temporalOrigin = optional.canaryDegradation.state === 'NOT_INSTALLED' ? undefined : origin;
           await recordDegradationClaim(pool,activeProject,new URL(origin).hostname,source,temporalOrigin);
           await degradationState(pool,activeProject,new URL(origin).hostname,temporalOrigin);
-        });
+        };
+        if (optional.canaryDegradation.state==='NOT_INSTALLED') {
+          // Preserve the synchronous pre-F44 receipt contract under this lock.
+          await degradationTask('correlation',correlate);
+        } else {
+          // The F44 queue owns fresh eligibility while writing after passive 204.
+          void degradationTask('correlation',()=>withLegacyEligibility(correlate,false)).catch(()=>{});
+        }
       }
       return result;
-    }).then(result => res.writeHead(result === 'capacity' ? 429 : 204).end()).catch(() => res.writeHead(503).end());
+    }).then(result => res.writeHead(result === 'capacity' ? 429 : 204).end()).catch(() => {
+      void withLegacyEligibility(lostDegradationClaim).catch(()=>{});
+      res.writeHead(503).end();
+    });
   });
 });
 server.requestTimeout = 5000; server.headersTimeout = 6000;
@@ -286,9 +303,9 @@ async function maintenance() {
     const active=await operationallyEligible(pool,activeProject);
     const temporalOrigin = !mode.pilot && optional.canaryDegradation.state !== 'NOT_INSTALLED' ? controlledOrigin : undefined;
     await degradationTask('maintenance', () => maintainDegradation(pool, activeProject, temporalOrigin, optional.canaryDegradation.state !== 'NOT_INSTALLED'));
-    if (active) {
     try {
-      await deliverOne(pool, activeProject, cloneSmtp ?? smtpPort);
+      await cleanup(pool,activeProject);
+      if (active) await deliverOne(pool, activeProject, cloneSmtp ?? smtpPort);
       observeFailure('maintenance',false);
     } catch (error) {
       const code=(error as {code?:unknown} | null)?.code;
@@ -296,6 +313,7 @@ async function maintenance() {
       observeFailure('maintenance',true,safeCode);
       process.stderr.write('maintenance MAINTENANCE_ERROR; persistence pending\n');
     }
+    if (active) {
     await optional.health.run('maintenance', async () => {
       if (healthBaselineVersion !== healthBaselinePersisted) {
         const version=healthBaselineVersion;
@@ -309,7 +327,6 @@ async function maintenance() {
       if (!cloneSmtp && version === healthBaselineVersion && version === healthBaselinePersisted) await deliverHealth(pool, activeProject, smtpPort, () => version===healthBaselineVersion);
     });
     }
-    await cleanup(pool,activeProject);
     await optional.health.run('retention',async()=>{
       if (Date.now() >= healthCleanupAfter) {
         await maintainHealthHistory(pool, activeProject);

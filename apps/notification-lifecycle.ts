@@ -7,7 +7,7 @@ export async function notificationAdmission(client: PoolClient, project: string)
   if (!await operationallyEligible(client,project,undefined,true)) return false;
   const installed=await client.query("SELECT to_regclass('notification_pause_history') IS NOT NULL AS installed");
   if (!installed.rows[0].installed) {
-    const lifecycle=await client.query("SELECT EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid='projects'::regclass AND attname='lifecycle_state' AND NOT attisdropped) AS installed");
+    const lifecycle=await client.query("SELECT EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('projects') AND attname='lifecycle_state' AND NOT attisdropped) AS installed");
     if (lifecycle.rows[0].installed) throw new Error('notification lifecycle migration required');
     return null; // Pre-lifecycle installations have never supported pause.
   }

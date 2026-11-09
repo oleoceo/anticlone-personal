@@ -1,4 +1,8 @@
 # STATUS — AntiClone Personal
+- **PR #60 CI corrigida:** limpeza antes do envio e falha reconciliavel; gate pre-projects explicito; aprovacao incompativel PageConflict; F44 assincrono com lock proprio e registro de lacunas.
+- **Regressoes adicionais:** admissao HTTP limitada preserva conexoes para escritas; fixture de retencao transacional, asserts/TTLs mantidos. Causas e provas: docs/PR60-CI-FIXES.md.
+- **Gates locais finais:** seis falhas reproduzidas antes; 7/7 focados e 23/23 relacionados PASS; suite Linux Node22/PostgreSQL16/Chromium/HTTPS 96 PASS, 0 FAIL, 0 SKIP; lint/typecheck/build e 9 testes Python PASS.
+- **Revisao:** /root/ci_six_review aprovada; deltas 927ec4b2599a19ce1a9d225687d137afa9d55bf9 e 363d21b3e402946137f4b1ca64628fc27af94b03; teste novo 9d8255c08f8e208d06f779b972f8e3ad698cd356. Commit unico; PR #60 draft ate CI verde no SHA final; purga fisica BLOCKED, sem merge/deploy/exclusoes reais.
 - **Ajustes finais F36/GS15:** pause/resume-page verificam deleted_at sob lock transacional; purge-project retorna HTTP 409, previa HTTP 200 com bloqueadores.
 - **Validacao final local:** lint/typecheck/build PASS; safe-deletion e project-lifecycle-admin PostgreSQL/Chromium 2/2 PASS. Regressao adicional multiproject-contract falhou em attempts de manutencao (Finance 1, esperado 0); sem mudanca fora do escopo.
 - **Revisao do delta:** /root/final_delta_review aprovada sem bloqueios sobre 76b652a, diff 5aeaa0e684ff028cfced049b44ef97992e80715a. PR unico para CI/revisao do SHA final; exclusao fisica BLOCKED, sem executor, merge/deploy/exclusoes reais.

@@ -61,10 +61,10 @@ export async function managePages(db: Pool, body: unknown) {
     try {
       await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
       await assertMutableProject(client,project);
-      await assertPageAdministrativeWrite(client,project,data.page as string);
       await client.query('LOCK TABLE projects, protected_pages, protected_page_urls, active_protection_policies, active_cta_surface_policies, page_entry_policy_bindings, page_cta_policy_bindings, cta_points, cta_mappings, cta_destinations, cta_commercial_references IN SHARE ROW EXCLUSIVE MODE');
       const page=await client.query('SELECT url_generation,config_generation,enabled FROM protected_pages WHERE id=$1 AND project_id=$2',[data.page,project]);
       if (!page.rowCount || !page.rows[0].enabled || page.rows[0].url_generation!==data.generation || page.rows[0].config_generation!==data.configGeneration) throw new PageConflict();
+      await assertPageAdministrativeWrite(client,project,data.page as string);
       let configuration;
       try { configuration=await approvalConfiguration(client,project,data.page,data.entryVersion as number|null,data.ctaVersions as number[]); } catch { throw new PageConflict(); }
       await client.query('DELETE FROM page_entry_policy_bindings WHERE project_id=$1 AND page_id=$2',[project,data.page]);

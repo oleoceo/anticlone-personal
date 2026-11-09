@@ -51,9 +51,9 @@ export function projectMaintenance(db: Pool, env: NodeJS.ProcessEnv, exclude?: s
             const {optional,failures}=state;
             const active=await operationallyEligible(db,id);
             await optional.degradation.run('maintenance',()=>maintainDegradation(db,id,undefined,optional.canaryDegradation.state!=='NOT_INSTALLED'));
-            if (active) {
-            try { await deliverOne(db,id,smtp ?? Number(env.SMTP_PORT)); failures.observe('maintenance',false); }
+            try { await cleanup(db,id); if (active) await deliverOne(db,id,smtp ?? Number(env.SMTP_PORT)); failures.observe('maintenance',false); }
             catch { failures.observe('maintenance',true,'UNKNOWN'); }
+            if (active) {
             await optional.health.run('maintenance',async()=>{
               if (state.persisted!==state.version) { const version=state.version; await invalidateInactivity(db,id,version>1); state.persisted=version; }
               await failures.reconcile(async pending=>{
@@ -66,7 +66,6 @@ export function projectMaintenance(db: Pool, env: NodeJS.ProcessEnv, exclude?: s
               if (!smtp && current()) await deliverHealth(db,id,Number(env.SMTP_PORT),current);
             });
             }
-            await cleanup(db,id);
             await optional.health.run('retention',async()=>{
               if (Date.now()>=state.healthRetention) { await maintainHealthHistory(db,id); state.healthRetention=Date.now()+3600_000; }
             });
