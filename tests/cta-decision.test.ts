@@ -8,7 +8,7 @@ test('D07: stored forms do not consume the active anchor mapping limit', async (
   assert.ok(process.env.TEST_DATABASE_URL);
   const db = new Pool({connectionString:process.env.TEST_DATABASE_URL});
   try {
-    for (const file of ['003_projects','007_protection_policy','011_cta_inventory','022_cta_capture_selection','012_cta_policy','014_cta_drift_alerts','023_cta_commercial']) {
+    for (const file of ['003_projects','007_protection_policy','011_cta_inventory','022_cta_capture_selection','012_cta_policy','036_cta_surface_policies','014_cta_drift_alerts','023_cta_commercial']) {
       await db.query(await readFile(`infra/${file}.sql`,'utf8'));
     }
     const project = 'd07_' + crypto.randomUUID();
@@ -30,7 +30,7 @@ test('D07: stored forms do not consume the active anchor mapping limit', async (
     const decision = () => ctaDecision(db,project,original,clone,clone,'LOW','0'.repeat(32),'DIRECT_UNKNOWN');
     const baseline = await decision();
     assert.equal(baseline.action,'REPLACE_CONVERSION');
-    assert.deepEqual(baseline.mappings,[{marker:'anchor0000',kind:'a',destination:original+'/approved'}]);
+    assert.deepEqual(baseline.mappings,[{surface:'landing',marker:'anchor0000',kind:'a',destination:original+'/approved',requiresSurface:false}]);
     await addPoints('form',101,'form');
     assert.deepEqual(await decision(),baseline);
     const stored = await db.query(`SELECT count(*)::int AS n FROM cta_mappings m JOIN cta_points p
@@ -42,7 +42,7 @@ test('D07: stored forms do not consume the active anchor mapping limit', async (
     assert.equal(atLimit.mappings?.length,100);
     assert.ok(atLimit.mappings?.every(row=>row.kind==='a'));
     await addPoints('a',1,'overflow');
-    assert.deepEqual(await decision(),{action:'OBSERVE_ONLY'});
+    assert.deepEqual(await decision(),{action:'OBSERVE_ONLY',ctaVersion:1});
     // Hold the mapping read after the policy snapshot, then publish a new version.
     await db.query("UPDATE cta_points SET review_required=true WHERE project_id=$1 AND marker<>'anchor0000'",[project]);
     const blocker=await db.connect();
@@ -52,7 +52,7 @@ test('D07: stored forms do not consume the active anchor mapping limit', async (
       const pending=decision();
       let waiting=false;
       for (let n=0;n<100;n++) {
-        const state=await db.query("SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT p.marker,p.kind,d.url FROM cta_points%' LIMIT 1");
+        const state=await db.query("SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT p.surface,p.marker,p.kind,d.url FROM cta_points%' LIMIT 1");
         if (state.rowCount) { waiting=true; break; }
         await new Promise(resolve=>setTimeout(resolve,20));
       }

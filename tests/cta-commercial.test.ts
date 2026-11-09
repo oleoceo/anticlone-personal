@@ -13,7 +13,7 @@ test('commercial drift is isolated, deduplicated and approved against current ev
   await admin.query(`CREATE SCHEMA ${schema}`);
   const db=new Pool({connectionString:process.env.TEST_DATABASE_URL,options:`-c search_path=${schema}`});
   try {
-    for(const file of ['001_initial','002_alerts','003_projects','007_protection_policy','011_cta_inventory','022_cta_capture_selection','012_cta_policy','013_cta_review','014_cta_drift_alerts','015_cta_alert_deliveries','023_cta_commercial']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
+    for(const file of ['001_initial','002_alerts','003_projects','007_protection_policy','011_cta_inventory','022_cta_capture_selection','012_cta_policy','036_cta_surface_policies','013_cta_review','014_cta_drift_alerts','015_cta_alert_deliveries','023_cta_commercial']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
     const project='commercial_lab', origin='http://127.0.0.1:1234', clone='http://localhost:1234';
     await db.query('INSERT INTO projects(id,name,origin) VALUES($1,$1,$2)',[project,origin]);
     const rows=(a:number|null,b=9700)=>[{marker:'basic001',kind:'a',parent:'body',ordinal:1,url:clone+'/a',commercial:a===null?null:{amount:a,currency:'BRL'}},{marker:'premium1',kind:'a',parent:'body',ordinal:2,url:clone+'/b',commercial:{amount:b,currency:'BRL'}}];

@@ -31,12 +31,12 @@ test('pilot browser: multiple exact origins, untrusted copy, uncertain decisions
   const db = new Pool({connectionString:process.env.TEST_DATABASE_URL,options});
   for (const file of ['001_initial','002_alerts','003_projects','004_observation_sources','005_canaries','008_traffic_observations','009_risk_assessments','024_risk_evidence','018_notification_budget','019_alert_outbox_expiry','030_infrastructure_dns','031_investigation_timeline','032_incident_status_audit']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
   await db.query("INSERT INTO projects VALUES('pilot','Pilot','https://owner.test')");
-  for (const file of ['007_protection_policy','010_policy_allocation','012_cta_policy']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
+  for (const file of ['007_protection_policy','010_policy_allocation','012_cta_policy','036_cta_surface_policies']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
   const allocation = {PAID_ATTRIBUTED:100,ORGANIC:100,REFERRAL:100,DIRECT_UNKNOWN:100};
   await db.query("INSERT INTO protection_policy_versions(project_id,version,enabled,approved_destination,stealth,allocation) VALUES('pilot',1,true,'https://owner.test/approved',true,$1)",[allocation]);
   await db.query("INSERT INTO active_protection_policies VALUES('pilot',1)");
   await db.query("INSERT INTO cta_policy_versions(project_id,version,enabled,surface,pathname,allocation) VALUES('pilot',1,true,'checkout','/',$1)",[allocation]);
-  await db.query("INSERT INTO active_cta_policies VALUES('pilot',1)");
+  await db.query("INSERT INTO active_cta_surface_policies VALUES('pilot','checkout',1)");
   const reserve = createServer().listen(0,'127.0.0.1'); await once(reserve,'listening');
   const address = reserve.address(); assert.ok(address && typeof address !== 'string');
   const port = address.port; await new Promise<void>(resolve => reserve.close(() => resolve()));

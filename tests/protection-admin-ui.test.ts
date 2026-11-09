@@ -39,13 +39,13 @@ test('protection admin: real PostgreSQL/Chromium policies, classes, mappings, ap
   let commercial:ReturnType<typeof createTlsServer>|undefined;
   const tlsDirectory=await mkdtemp(join(tmpdir(),'anticlone-protection-tls-'));
   try {
-    for(const file of (await readdir('infra')).filter(name=>/^\d{3}_.*\.sql$/.test(name) && Number(name.slice(0,3))<=32).sort()) await db.query((await readFile('infra/'+file,'utf8')).replace(/^\uFEFF/,''));
+    for(const file of (await readdir('infra')).filter(name=>/^\d{3}_.*\.sql$/.test(name) && Number(name.slice(0,3))<=36).sort()) await db.query((await readFile('infra/'+file,'utf8')).replace(/^\uFEFF/,''));
     await db.query('CREATE TABLE admin_totp_replay(factor_id text PRIMARY KEY,last_counter bigint NOT NULL)');
     await db.query('CREATE TABLE admin_totp_codes(factor_id text NOT NULL,digest text NOT NULL,valid_until bigint NOT NULL,PRIMARY KEY(factor_id,digest))');
     const portServer=createPortServer().listen(0,'127.0.0.1');await once(portServer,'listening');const gatewayPort=(portServer.address() as AddressInfo).port;await new Promise<void>(resolve=>portServer.close(()=>resolve()));
     const gateway='http://127.0.0.1:'+gatewayPort;
     let basicHref='/native-basic';
-    fixture=createServer((req,res)=>res.writeHead(200,{'content-type':'text/html'}).end(req.url?.startsWith('/clone')?'<a data-anticlone-point="basic001" href="'+basicHref+'">Comprar</a><a data-anticlone-point="premium1" href="/native-premium">Comprar</a><script src="'+gateway+'/runtime.js"></script>':'<h1>official or native fixture</h1>')).listen(0,'127.0.0.1');
+    fixture=createServer((req,res)=>res.writeHead(200,{'content-type':'text/html'}).end(req.url?.startsWith('/clone')?'<div data-anticlone-surface="landing"><a data-anticlone-point="basic001" href="'+basicHref+'">Comprar</a><a data-anticlone-point="premium1" href="/native-premium">Comprar</a></div><script src="'+gateway+'/runtime.js"></script>':'<h1>official or native fixture</h1>')).listen(0,'127.0.0.1');
     await once(fixture,'listening');const fixturePort=(fixture.address() as AddressInfo).port;
     const original='http://127.0.0.1:'+fixturePort,clone='http://localhost:'+fixturePort,project='protection',other='other';
     const gitOpenSsl='C:/Program Files/Git/usr/bin/openssl.exe';
@@ -102,6 +102,22 @@ test('protection admin: real PostgreSQL/Chromium policies, classes, mappings, ap
     await page.getByLabel('Habilitar PAGE_REDIRECT laboratorial').uncheck();await page.getByRole('button',{name:'Publicar PAGE_REDIRECT',exact:true}).click();await page.getByText('PAGE_REDIRECT publicado. Versão 2.',{exact:true}).waitFor();
     const run=()=>spawn(process.execPath,['dist/apps/server.js'],{env:{...process.env,PGOPTIONS:options,DATABASE_URL:process.env.TEST_DATABASE_URL,PROJECT_ID:project,PORT:String(gatewayPort),SMTP_PORT:'1',LAB_CONTROLLED_ORIGIN:clone,LAB_CONTROLLED_RISK:'LOW'},stdio:['ignore','ignore','inherit']});
     app=run();let ready=false;for(let i=0;i<100;i++){try{if((await fetch(gateway+'/runtime.js')).ok){ready=true;break}}catch{}await new Promise(resolve=>setTimeout(resolve,100))}assert.ok(ready);
+    await page.locator('#cta-query [name=project]').fill(project);await page.locator('#cta-query [name=surface]').fill('landing');
+    await page.locator('#cta-capture-url').fill(clone+'/clone');await page.locator('#cta-open-capture').click();
+    await page.frameLocator('#cta-capture-frame').locator('[data-anticlone-point=basic001]').waitFor();
+    const captureFrame=page.frames().find(frame=>frame.url()===clone+'/clone');assert.ok(captureFrame);
+    await captureFrame.evaluate(()=>addEventListener('message',event=>{if(event.data?.type==='anticlone-inventory-request') window.name=event.data.nonce;}));
+    const priorCaptures=(await db.query('SELECT count(*)::int AS n FROM cta_captures WHERE project_id=$1',[project])).rows[0].n;
+    const rejectedDialog=new Promise<void>(resolve=>page.once('dialog',dialog=>{void dialog.dismiss().then(()=>resolve());}));
+    await page.locator('#cta-capture-now').click();await rejectedDialog;
+    assert.equal((await db.query('SELECT count(*)::int AS n FROM cta_captures WHERE project_id=$1',[project])).rows[0].n,priorCaptures);
+    const pendingNonce=await captureFrame.evaluate(()=>window.name);assert.match(pendingNonce,/^[a-f0-9]{32}$/);
+    await page.evaluate(({origin,nonce})=>{const source=(document.querySelector('#cta-capture-frame') as HTMLIFrameElement).contentWindow;const data={type:'anticlone-inventory-result',nonce,surface:'landing',pathname:'/clone',candidates:[]};window.dispatchEvent(new MessageEvent('message',{origin,source:window,data}));window.dispatchEvent(new MessageEvent('message',{origin:'http://localhost:1',source,data}));window.dispatchEvent(new MessageEvent('message',{origin,source,data:{...data,nonce:'0'.repeat(32)}}));},{origin:clone,nonce:pendingNonce});
+    await page.waitForTimeout(100);
+    assert.equal((await db.query('SELECT count(*)::int AS n FROM cta_captures WHERE project_id=$1',[project])).rows[0].n,priorCaptures);
+    assert.equal((await fetch(base+'/admin/ui/cta-import',{method:'POST',headers:{origin:base,'sec-fetch-site':'same-origin','content-type':'application/json',cookie:'admin_session='+cookie.value,'x-csrf-token':csrf},body:JSON.stringify({project,surface:'landing',pathname:'/different',candidates:[]})})).status,400);
+    page.on('dialog',dialog=>{void dialog.accept();});await page.locator('#cta-capture-now').click();
+    await page.getByText('Captura importada. Consulte os pontos e revise antes de mapear.').waitFor();page.removeAllListeners('dialog');
     const click=async(kind:typeof classes[number],id:string,marker:string,expected:string)=>{
       const browsing=await browser!.newContext({ignoreHTTPSErrors:true});
       const signals=signalsFor(kind);
@@ -136,7 +152,7 @@ test('protection admin: real PostgreSQL/Chromium policies, classes, mappings, ap
     assert.equal((await db.query('SELECT count(*)::int AS n FROM cta_review_audit WHERE project_id=$1',[project])).rows[0].n,1);
     await click('DIRECT_UNKNOWN',session(1),'basic001',original+'/official-basic');
     // Revoking the private exact approval preserves the local original without removing mappings.
-    delete process.env.PROTECTION_APPROVED_EXTERNAL_URLS;assert.equal((await ctaDecision(db,project,original,clone,clone,'LOW',session(1),'DIRECT_UNKNOWN')).action,'OBSERVE_ONLY');
+    delete process.env.PROTECTION_APPROVED_EXTERNAL_URLS;assert.deepEqual((await ctaDecision(db,project,original,clone,clone,'LOW',session(1),'DIRECT_UNKNOWN')).mappings?.map(row=>row.marker),['basic001']);
     process.env.PROTECTION_APPROVED_EXTERNAL_URLS=JSON.stringify({[original]:[external]});
     for(const risk of ['HIGH','UNCERTAIN']) assert.equal((await ctaDecision(db,project,original,clone,clone,risk,session(1),'DIRECT_UNKNOWN')).action,'OBSERVE_ONLY');
     for(const percentage of [0,50,100]) for(const kind of classes) {
