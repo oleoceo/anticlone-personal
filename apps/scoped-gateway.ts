@@ -14,6 +14,7 @@ import { projectMaintenance } from './project-maintenance.js';
 export function scopedGateway(db: Pool, scripts: Record<string, Buffer>, collect=projectMaintenance(db,{SMTP_PORT:'1'}).collect) {
   const fixtureId=process.env.SCOPED_LAB_INSTALLATION;
   const fixtureIds=(process.env.SCOPED_LAB_INSTALLATIONS ?? fixtureId ?? "").split(",").filter(Boolean);
+  if (process.env.GATEWAY_MODE==='PILOT_OBSERVE' && fixtureIds.length) throw Error('scoped laboratory fixtures forbidden in pilot');
   if (fixtureIds.length>100 || fixtureIds.some(id=>!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(id))) throw Error("invalid scoped lab installations");
   const fixtureOrigin=process.env.SCOPED_LAB_ORIGIN ? configuredOrigin(process.env.SCOPED_LAB_ORIGIN) : undefined;
   if ((fixtureIds.length || fixtureOrigin) && (!fixtureIds.length || !fixtureOrigin || !['localhost','127.0.0.1'].includes(new URL(fixtureOrigin).hostname))) throw Error('invalid scoped lab fixture');

@@ -45,3 +45,5 @@ com `TEST_DATABASE_URL` de laboratório. Cobre PostgreSQL real, concorrência,
 reinício, assinatura, expiração, conflitos, isolamento e consulta autenticada.
 `tests/https-gateway.test.ts` também envia eventos sintéticos pelo Nginx HTTPS
 na CI Linux obrigatória. Não habilitar provedor real sem autorização e teste.
+
+Gateway multiprojeto: rotas autenticadas com segredos distintos e transicao do endpoint legado em [MULTIPROJECT-TRANSITION.md](MULTIPROJECT-TRANSITION.md).

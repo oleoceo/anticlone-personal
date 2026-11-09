@@ -51,7 +51,7 @@ export async function managePages(db: Pool, body: unknown) {
       const page=await client.query('SELECT id,project_id,installation_id,name,enabled,url_generation,config_generation,url_review_required FROM protected_pages WHERE id=$1 AND project_id=$2',[data.page,project]);
       if (!page.rowCount) throw new TypeError('unknown page');
       const urls=await client.query('SELECT origin,pathname FROM protected_page_urls WHERE page_id=$1 ORDER BY origin,pathname',[data.page]);
-      const entries=await client.query(`SELECT v.version,v.enabled,v.approved_destination,v.stealth,v.allocation,true AS active,(b.version=v.version) AS bound
+      const entries=await client.query(`SELECT v.version,v.enabled,v.approved_destination,v.stealth,v.allocation,true AS available,(b.version=v.version) AS active,(b.version=v.version) AS bound
         FROM protection_policy_versions v LEFT JOIN active_protection_policies a ON a.project_id=v.project_id
         LEFT JOIN page_entry_policy_bindings b ON b.project_id=v.project_id AND b.page_id=$2 WHERE v.project_id=$1 ORDER BY v.version DESC LIMIT 100`,[project,data.page]);
       const ctas=await client.query(`SELECT v.version,v.surface,v.pathname,v.enabled,v.allocation,(a.version=v.version) AS active,(b.page_id=$2 AND b.version=v.version) AS bound,b.page_id AS bound_page

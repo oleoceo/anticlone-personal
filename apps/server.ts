@@ -1,5 +1,6 @@
 import { authorizedHosts, collectInfrastructure, realResolver } from './infrastructure-dns.js';
 import http from 'node:http';
+import { randomUUID } from 'node:crypto';
 import { projectMaintenance } from './project-maintenance.js';
 import { checkoutWebhook, projectCheckoutWebhooks } from './checkout-webhook.js';
 import { readFileSync } from 'node:fs';
@@ -64,7 +65,7 @@ const inventoryScript = readFileSync('runtime/cta-inventory.js');
 const fallback = readFileSync('runtime/fallback.js');
 const maintainProjects = projectMaintenance(pool,process.env,project);
 const scoped = scopedGateway(pool, {'runtime.js':bootstrap,'core.js':core,'fallback.js':fallback},async(id,page,origin,source)=>{
-  const key='scoped_'+source;
+  const key='scoped_'+randomUUID();
   if (id===project) claimPending.add(key);
   try { const ok=await maintainProjects.collect(id,page,origin,source); if (id===project) observeFailure('installation_claim',!ok); return ok; }
   finally { if (id===project) claimPending.delete(key); }

@@ -29,4 +29,4 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npm run build
-      - run: node --test --test-concurrency=1 dist/tests/pages-admin.test.js dist/tests/scoped-gateway.test.js dist/tests/multiple-cta-surfaces.test.js
+      - run: node --test --test-concurrency=1 dist/tests/pages-admin.test.js dist/tests/scoped-gateway.test.js dist/tests/multiple-cta-surfaces.test.js dist/tests/multiproject-contract.test.js

@@ -65,12 +65,14 @@ for(const migrations of [[],['025_installation_signals'],['026_degradation'],['0
       await until(async()=>(await db.query("SELECT count(*)::int n FROM observations WHERE host='expired.test'")).rows[0].n===0);
       if(installed){
         await until(async()=>(await db.query("SELECT count(*)::int n FROM installation_signals WHERE project_id='one'")).rows[0].n===0);
-        assert.equal((await db.query("SELECT count(*)::int n FROM installation_signals WHERE project_id='two'")).rows[0].n,1);
+        await until(async()=>(await db.query("SELECT count(*)::int n FROM installation_signals WHERE project_id='two'")).rows[0].n===0);
+        assert.equal((await db.query("SELECT count(*)::int n FROM installation_signals WHERE project_id='two'")).rows[0].n,0);
       }
       if(degradation){
         assert.equal((await db.query("SELECT count(*)::int n FROM degradation_events WHERE project_id='one'")).rows[0].n,0);
         assert.equal((await db.query("SELECT count(*)::int n FROM degradation_audit WHERE project_id='one'")).rows[0].n,0);
-        assert.equal((await db.query("SELECT count(*)::int n FROM degradation_events WHERE project_id='two'")).rows[0].n,1);
+        await until(async()=>(await db.query("SELECT count(*)::int n FROM degradation_events WHERE project_id='two'")).rows[0].n===0);
+        assert.equal((await db.query("SELECT count(*)::int n FROM degradation_events WHERE project_id='two'")).rows[0].n,0);
       }
       for(let i=0;i<3;i++) {
         for(const origin of [primary,copy]) for(const endpoint of ['/observe','/observe/fallback']){
@@ -84,8 +86,8 @@ for(const migrations of [[],['025_installation_signals'],['026_degradation'],['0
         // for the asynchronous journal, so wait for both persisted sources.
         await until(async()=>(await db.query("SELECT count(DISTINCT source)::int n FROM degradation_events WHERE project_id='one'")).rows[0].n===2);
       }
-      assert.equal(logs.split('installation NOT_INSTALLED').length-1,installed?0:1);
-      assert.equal(logs.split('degradation NOT_INSTALLED').length-1,degradation?0:1);
+      assert.equal(logs.split('installation NOT_INSTALLED').length-1,installed?0:2);
+      assert.equal(logs.split('degradation NOT_INSTALLED').length-1,degradation?0:2);
       assert.doesNotMatch(logs,/unavailable|DATABASE_ERROR|maintenance failed/);
       if(degradation){
         // Unexpected schema loss after discovery is a real DB fault, not NOT_INSTALLED.
@@ -93,7 +95,7 @@ for(const migrations of [[],['025_installation_signals'],['026_degradation'],['0
         await until(async()=>logs.includes('DATABASE_ERROR code=42P01'));
         for(let i=0;i<3;i++)assert.equal((await fetch(base+'/observe/fallback',{method:'POST',headers:{origin:copy,'content-type':'text/plain'},body:copy})).status,204);
         await new Promise(r=>setTimeout(r,2200));
-        assert.equal(logs.split('DATABASE_ERROR').length-1,1,'one fault report, no retry every second');
+        assert.equal(logs.split('DATABASE_ERROR').length-1,2,'one fault report per project, no retry every second');
         assert.match(logs,/degradation maintenance DATABASE_ERROR code=42P01/);
         assert.doesNotMatch(logs,/maintenance failed/);
         assert.equal((await fetch(base+'/healthz')).status,200,'previous capabilities remain operational');
