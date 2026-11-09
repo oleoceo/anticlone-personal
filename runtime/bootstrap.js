@@ -138,6 +138,7 @@
         const stored = sessionStorage.getItem('anticlone.lab.attribution');
         if (stored === null) sessionStorage.setItem('anticlone.lab.attribution', JSON.stringify(signals));
         else { const initial = JSON.parse(stored); if (!initial || typeof initial !== 'object' || Array.isArray(initial)) return; Object.keys(signals).forEach(key => delete signals[key]); Object.assign(signals, initial); }
+        if (/\/i\/[a-f0-9-]{36}\/runtime\.js$/.test(new URL(source).pathname)) { try { navigator.sendBeacon(endpoint('observed-session'), new Blob([JSON.stringify({session,signals})],{type:'text/plain'})); } catch (_) { /* Passive metrics never block navigation. */ } }
         let inFlight = false, sequence = 0, lastAttempt = Date.now(), backoff = refreshIntervalMs, failed = false, controller, returnTimer;
         const expired = () => !activeCtas || Date.now() < activeCtas.startedWall || Date.now() - activeCtas.startedWall >= ctaTtlMs || performance.now() - activeCtas.startedMono >= ctaTtlMs;
         const refresh = (onReturn = false, afterEntry = false) => {

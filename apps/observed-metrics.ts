@@ -1,3 +1,4 @@
+import { operationallyEligible } from './operational-eligibility.js';
 import type { Pool } from 'pg';
 import { withProjectAdministrativeWrite } from './admin-project-write.js';
 
@@ -7,6 +8,7 @@ export async function recordObservedFact(db:Pool, project:string, fact:ObservedF
   if (!/^[a-f0-9]{32}$/.test(fact.session) || !['SESSION_OBSERVED','DECISION_PREPARED','PAGE_REDIRECT_ATTEMPT','CTA_CLICK_OBSERVED','CHECKOUT_HANDOFF_ATTEMPT'].includes(fact.action) || !['PAID_ATTRIBUTED','ORGANIC','REFERRAL','DIRECT_UNKNOWN'].includes(fact.traffic) || !['BROWSER_UNVERIFIED','GATEWAY_PREPARED'].includes(fact.evidence) || (fact.action==='DECISION_PREPARED') !== (fact.evidence==='GATEWAY_PREPARED') || (fact.version!==null && (!Number.isSafeInteger(fact.version) || fact.version<1))) throw new TypeError('invalid fact');
   return withProjectAdministrativeWrite(db,project,async client=>{
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1),47)',[project]);
+    if(!await operationallyEligible(client,project,fact.page,true))throw new Error('inactive context');
     const prior=await client.query('SELECT page_id,session_id,action,traffic_class,policy_version,evidence FROM observed_action_facts WHERE project_id=$1 AND event_id=$2',[project,fact.event]);
     if(prior.rowCount){const row=prior.rows[0];if(row.page_id!==fact.page || row.session_id!==fact.session || row.action!==fact.action || row.traffic_class!==fact.traffic || row.policy_version!==fact.version || row.evidence!==fact.evidence)throw new TypeError('event conflict');return {duplicate:true};}
     await client.query("DELETE FROM observed_action_facts WHERE project_id=$1 AND received_at < clock_timestamp()-interval '7 days'",[project]);

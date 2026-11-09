@@ -1,3 +1,5 @@
+import {createServer} from 'node:http';
+import {observedSessionGateway} from '../apps/observed-session-gateway.js';
 import {once} from 'node:events';
 import {scryptSync} from 'node:crypto';
 import {chromium} from 'playwright';
@@ -15,11 +17,12 @@ test('observed metrics persist idempotently, isolate pages and separate estimate
  const schema='metrics_'+crypto.randomUUID().replaceAll('-','');await root.query(`CREATE SCHEMA ${schema}`);
  let db=new Pool({connectionString:process.env.TEST_DATABASE_URL,options:`-c search_path=${schema}`});
  try{
-  await db.query('CREATE TABLE projects(id text PRIMARY KEY); CREATE TABLE protected_pages(id uuid,project_id text REFERENCES projects(id),PRIMARY KEY(id,project_id))');
+  await db.query('CREATE TABLE projects(id text PRIMARY KEY); CREATE TABLE protected_pages(id uuid,project_id text REFERENCES projects(id),enabled boolean NOT NULL DEFAULT true,PRIMARY KEY(id,project_id))');
   await db.query(await readFile('infra/047_observed_metrics.sql','utf8'));
+  await db.query('ALTER TABLE protected_pages ADD COLUMN installation_id uuid; CREATE TABLE protected_page_urls(page_id uuid,origin text,pathname text)');
   const page=crypto.randomUUID(),other=crypto.randomUUID();
   await db.query("INSERT INTO projects VALUES('one'),('two');");
-  await db.query("INSERT INTO protected_pages VALUES($1,'one'),($2,'two')",[page,other]);
+  await db.query("INSERT INTO protected_pages(id,project_id) VALUES($1,'one'),($2,'two')",[page,other]);
   const from=new Date(Date.now()-60000).toISOString(),until=new Date(Date.now()+60000).toISOString();
   assert.equal((await observedMetrics(db,'one',page,from,until)).estimate,null);
   const fact:ObservedFact={page,event:crypto.randomUUID(),session:'a'.repeat(32),action:'CTA_CLICK_OBSERVED',traffic:'PAID_ATTRIBUTED',version:1,evidence:'BROWSER_UNVERIFIED'};
@@ -40,6 +43,19 @@ test('observed metrics persist idempotently, isolate pages and separate estimate
   await configureEstimate(db,'one',20000,500,'USD');summary=await observedMetrics(db,'one',page,from,until);
   assert.equal(summary.assumptions.version,2);assert.equal(summary.estimate?.currency,'USD');
   assert.equal(summary.estimate?.amount_minor_numerator,'10000000');
+  const installation=crypto.randomUUID();await db.query('UPDATE protected_pages SET installation_id=$1 WHERE id=$2',[installation,other]);
+  await db.query("INSERT INTO protected_page_urls VALUES($1,'http://127.0.0.1:8080','/')",[other]);
+  const handle=observedSessionGateway(db);const gateway=createServer((req,res)=>{if(!handle(req,res))res.writeHead(404).end();}).listen(0,'127.0.0.1');await once(gateway,'listening');
+  const ga=gateway.address();assert.ok(ga&&typeof ga!=='string');
+  try{
+   const post=(body:object)=>fetch(`http://127.0.0.1:${ga.port}/i/${installation}/observed-session`,{method:'POST',headers:{origin:'http://localhost:8080','content-type':'text/plain'},body:JSON.stringify(body)});
+   const session={session:'b'.repeat(32),signals:{}};
+   assert.equal((await post(session)).status,204);assert.equal((await post(session)).status,204);
+   assert.equal((await post({...session,project:'one'})).status,400);
+   const facts=await db.query("SELECT count(*)::int n FROM observed_action_facts WHERE project_id='two' AND session_id=$1",[session.session]);assert.equal(facts.rows[0].n,1);
+   await db.query('UPDATE protected_pages SET enabled=false WHERE id=$1',[other]);assert.equal((await post({...session,session:'c'.repeat(32)})).status,404);
+  }finally{await new Promise<void>(resolve=>gateway.close(()=>resolve()));}
+
   await db.query((await readFile('infra/017_notification_settings.sql','utf8')).replace(/^\uFEFF/,''));
   await db.query('CREATE TABLE admin_totp_replay(factor_id text PRIMARY KEY,last_counter bigint NOT NULL); CREATE TABLE admin_totp_codes(factor_id text,digest text,valid_until bigint,PRIMARY KEY(factor_id,digest))');
   const salt='0123456789abcdef0123456789abcdef',secret='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';

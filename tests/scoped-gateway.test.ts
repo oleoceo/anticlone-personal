@@ -41,6 +41,7 @@ test('scoped browser observations isolate projects on one origin and preserve co
     await db.query(await readFile('infra/040_page_policy_approvals.sql','utf8'));
     await db.query(await readFile('infra/041_page_entry_activation.sql','utf8'));
     await db.query(await readFile('infra/042_page_installation_signals.sql','utf8'));
+    await db.query(await readFile('infra/047_observed_metrics.sql','utf8'));
     await db.query('CREATE TABLE admin_totp_replay(factor_id text PRIMARY KEY,last_counter bigint NOT NULL)');
     await db.query('CREATE TABLE admin_totp_codes(factor_id text NOT NULL,digest text NOT NULL,valid_until bigint NOT NULL,PRIMARY KEY(factor_id,digest))');
     await db.query("INSERT INTO projects VALUES ('health','Health',$1),('finance','Finance',$1)",[origin]);
@@ -82,10 +83,13 @@ test('scoped browser observations isolate projects on one origin and preserve co
     const page=await browser.newPage();
     await page.addInitScript(()=>{const add=document.addEventListener.bind(document);document.addEventListener=((type:string,listener:EventListenerOrEventListenerObject,options?:boolean|AddEventListenerOptions)=>{add(type,listener,options);if(type==='click')document.documentElement.dataset.ctaReady='yes';}) as typeof document.addEventListener;});
     for (const path of ['/saude','/financas']) {
+      const sessionResponse=page.waitForResponse(r=>r.url().endsWith('/observed-session'));
       const response=page.waitForResponse(r=>r.url().includes('/observe/fallback'));
-      await page.goto(origin+path); assert.equal((await response).status(),204);
+      await page.goto(origin+path); assert.equal((await response).status(),204);assert.equal((await sessionResponse).status(),204);
     }
     assert.equal((await db.query('SELECT count(*)::int n FROM incidents')).rows[0].n,0);
+    const sessions=await db.query("SELECT project_id,page_id,action,evidence FROM observed_action_facts ORDER BY project_id");
+    assert.deepEqual(sessions.rows,[{project_id:'finance',page_id:fp,action:'SESSION_OBSERVED',evidence:'BROWSER_UNVERIFIED'},{project_id:'health',page_id:hp,action:'SESSION_OBSERVED',evidence:'BROWSER_UNVERIFIED'}]);
     // Real scoped decisions and PostgreSQL approvals; virtual time only holds the entry deadline.
     for (const [path,label] of [['/entry-one','one'],['/entry-two','two']]) {
       const controlled:Page=await browser.newPage();
