@@ -1,6 +1,7 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Pool } from 'pg';
+import { operationallyEligible } from './operational-eligibility.js';
 
 export class CheckoutConflict extends Error {}
 type Sale = {event_id: string; sale_id: string; amount_minor: number; currency: string; occurred_at: string};
@@ -23,6 +24,9 @@ export async function recordCheckout(db: Pool, project: string, raw: Buffer) {
   const client = await db.connect();
   try {
     await client.query('BEGIN');
+    // Hold the project lock through commit. A paused project rejects the event
+    // with a retryable response and does not create a receipt.
+    if (!await operationallyEligible(client,project,undefined,true)) throw new Error('project unavailable');
     // Serialize the project so event and sale identities cannot race independently.
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1),35)', [project]);
     const prior = await client.query('SELECT payload_digest FROM checkout_receipts WHERE project_id=$1 AND event_id=$2', [project,sale.event_id]);
