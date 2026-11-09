@@ -42,6 +42,7 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>) {
           const origin=configuredOrigin(req.headers.origin ?? '');
           const traffic=classifyTraffic(fields.signals,origin);
           const client=await db.connect();
+          let released=false;
           try {
           await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
           const context=await resolvePageContext(client,match[1]);
@@ -53,18 +54,22 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>) {
           const controlled=match[1].toLowerCase()===fixtureId?.toLowerCase() && origin===fixtureOrigin && ['localhost','127.0.0.1'].includes(new URL(original.origin).hostname) && origin!==original.origin;
           const assessment=safeEvaluateRisk(controlled,fixture=>assessObservation(evidence,fixture));
           if (!assessment) { fallback(); return; }
-          void recordRisk(db,context.project,new URL(origin).hostname,assessment,evidence).catch(()=>{});
+          const finish=async (result:unknown) => {
+            await client.query('ROLLBACK'); client.release(); released=true;
+            await recordRisk(db,context.project,new URL(origin).hostname,assessment,evidence);
+            res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result));
+          };
           if (!stealthEligible(assessment,false)) { fallback(); return; }
           if (endpoint==='entry-decision' && approval.entryVersion!==null) {
             const result=await client.query('SELECT v.version,v.enabled,v.approved_destination,v.allocation FROM active_protection_policies a JOIN protection_policy_versions v ON v.project_id=a.project_id AND v.version=a.version JOIN page_entry_policy_bindings b ON b.project_id=a.project_id AND b.version=a.version WHERE a.project_id=$1 AND b.page_id=$2 AND v.stealth=true',[context.project,context.page]);
             const policy=result.rows[0];
             if (policy?.enabled) { approvedDestination(policy.approved_destination,original.origin); validateAllocation(policy.allocation); }
             const entry=entryDecision(policy,original.origin,origin,fixtureOrigin,assessment.level,fields.session,traffic.trafficClass);
-            if (entry.action==='PAGE_REDIRECT') { res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(entry)); return; }
+            if (entry.action==='PAGE_REDIRECT') { await finish(entry); return; }
           }
           const result=await ctaDecision(db,context.project,original.origin,origin,fixtureOrigin,assessment.level,fields.session,traffic.trafficClass,original.pathname,fields.pathname,context.page,client);
-          res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result)); return;
-          } finally { try { await client.query('ROLLBACK'); client.release(); } catch { client.release(true); } }
+          await finish(result); return;
+          } finally { if (!released) { try { await client.query('ROLLBACK'); client.release(); } catch { client.release(true); } } }
         }
         const core = endpoint === 'observe';
         if (Object.keys(fields).sort().join(',') !== (core ? 'origin,pathname,signals' : 'origin,pathname') || typeof fields.origin !== 'string' || typeof fields.pathname !== 'string' || fields.pathname.length>1024) throw new TypeError('invalid');

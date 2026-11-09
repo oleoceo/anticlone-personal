@@ -1,6 +1,15 @@
 -- Approvals are append-only evidence for a specific page configuration.
 -- No legacy policy is implicitly approved by this migration.
 ALTER TABLE protected_pages ADD COLUMN config_generation bigint NOT NULL DEFAULT 0;
+CREATE FUNCTION invalidate_page_identity_configuration() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF OLD.enabled IS DISTINCT FROM NEW.enabled OR OLD.installation_id IS DISTINCT FROM NEW.installation_id THEN
+    NEW.config_generation := OLD.config_generation + 1;
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER page_identity_configuration_invalidation BEFORE UPDATE OF enabled, installation_id ON protected_pages
+  FOR EACH ROW EXECUTE FUNCTION invalidate_page_identity_configuration();
 CREATE TABLE page_policy_approvals (
   id bigserial PRIMARY KEY,
   project_id text NOT NULL,
