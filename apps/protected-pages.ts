@@ -17,6 +17,32 @@ export async function managePages(db: Pool, body: unknown) {
   const data=body as Record<string,unknown>;
   if (typeof data.project!=='string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(data.project) || typeof data.action!=='string') throw new TypeError('invalid request');
   const project=data.project, action=data.action;
+  if (['project-state','pause-project','resume-project','pause-page','resume-page'].includes(action)) {
+    const pageAction=action.endsWith('-page');
+    if (Object.keys(data).sort().join(',') !== (pageAction ? 'action,page,project' : 'action,project') || (pageAction && (typeof data.page!=='string' || !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(data.page)))) throw new TypeError('invalid request');
+    const client=await db.connect();
+    try {
+      await client.query('BEGIN');
+      const p=await client.query('SELECT lifecycle_state FROM projects WHERE id=$1 FOR UPDATE',[project]);
+      if (!p.rowCount) throw new TypeError('unknown project');
+      if (action==='project-state') {
+        const pages=await client.query('SELECT id,installation_id,name,enabled,lifecycle_state FROM protected_pages WHERE project_id=$1 ORDER BY name,id',[project]);
+        await client.query('COMMIT'); return {project,state:p.rows[0].lifecycle_state,pages:pages.rows};
+      }
+      if (pageAction) {
+        const page=await client.query('SELECT lifecycle_state,enabled FROM protected_pages WHERE project_id=$1 AND id=$2 FOR UPDATE',[project,data.page]);
+        if (!page.rowCount) throw new TypeError('unknown page');
+        const next=action==='pause-page' ? 'PAUSED' : 'ACTIVE';
+        if (page.rows[0].lifecycle_state===next || (next==='ACTIVE' && !page.rows[0].enabled) || p.rows[0].lifecycle_state==='ARCHIVED') throw new PageConflict();
+        await client.query('UPDATE protected_pages SET lifecycle_state=$3 WHERE project_id=$1 AND id=$2',[project,data.page,next]);
+        await client.query('COMMIT'); return {project,page:data.page,state:next,installationStatus:'NOT_VERIFIED'};
+      }
+      const next=action==='pause-project' ? 'PAUSED' : 'ACTIVE';
+      if (p.rows[0].lifecycle_state!==(next==='ACTIVE' ? 'PAUSED' : 'ACTIVE')) throw new PageConflict();
+      await client.query('UPDATE projects SET lifecycle_state=$2 WHERE id=$1',[project,next]);
+      await client.query('COMMIT'); return {project,state:next,installationStatus:'NOT_VERIFIED'};
+    } catch(error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+  }
   if (action==='approve' && Object.keys(data).sort().join(',')==='action,configGeneration,ctaVersions,entryVersion,generation,page,project' && typeof data.page==='string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(data.page) && typeof data.generation==='string' && /^(0|[1-9][0-9]{0,18})$/.test(data.generation) && BigInt(data.generation)<=9223372036854775807n && typeof data.configGeneration==='string' && /^(0|[1-9][0-9]{0,18})$/.test(data.configGeneration) && BigInt(data.configGeneration)<=9223372036854775807n && (data.entryVersion===null || (Number.isSafeInteger(data.entryVersion) && (data.entryVersion as number)>0)) && Array.isArray(data.ctaVersions) && data.ctaVersions.length<=100 && data.ctaVersions.every(v=>Number.isSafeInteger(v) && v>0) && new Set(data.ctaVersions).size===data.ctaVersions.length && (data.entryVersion!==null || data.ctaVersions.length>0)) {
     const client=await db.connect();
     try {

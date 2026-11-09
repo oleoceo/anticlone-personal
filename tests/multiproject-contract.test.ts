@@ -77,6 +77,23 @@ test('multiproject contract: independent entry pages, authenticated checkout and
     assert.equal((await decide(1)).destination,original+'/destination-b');
     assert.equal((await decide(1)).action,'PAGE_REDIRECT','entry redirect takes precedence over the approved CTA');
     assert.deepEqual(await decide(2),{action:'OBSERVE_ONLY'});
+    const observePage=async(i:number)=>tab.evaluate(async({url,origin})=>{
+      const response=await fetch(url,{method:'POST',headers:{'content-type':'text/plain'},body:JSON.stringify({origin,pathname:'/copy',signals:{}})}); return response.status;
+    },{url:base+'/i/'+ids[i]+'/observe',origin:clone});
+    await managePages(db,{project:'health',action:'pause-project'});
+    const before=(await db.query("SELECT count(*)::int n FROM incidents WHERE project_id='health'")).rows[0].n;
+    assert.deepEqual(await decide(0),{action:'OBSERVE_ONLY'});
+    assert.equal(await observePage(0),204);
+    assert.equal((await db.query("SELECT count(*)::int n FROM incidents WHERE project_id='health'")).rows[0].n,before);
+    assert.equal(await observePage(2),204);
+    assert.equal((await db.query("SELECT count(*)::int n FROM incidents WHERE project_id='finance'")).rows[0].n,1);
+    await managePages(db,{project:'health',action:'resume-project'});
+    assert.equal((await decide(0)).destination,original+'/destination-a');
+    await managePages(db,{project:'health',page:pages[0],action:'pause-page'});
+    assert.deepEqual(await decide(0),{action:'OBSERVE_ONLY'});
+    assert.equal((await decide(1)).destination,original+'/destination-b');
+    await managePages(db,{project:'health',page:pages[0],action:'resume-page'});
+    assert.equal((await decide(0)).destination,original+'/destination-a');
     // Legacy activation no longer changes either page's reviewed active binding.
     await activatePolicy(db,'health',1);
     assert.equal((await decide(1)).destination,original+'/destination-b');
