@@ -59,7 +59,7 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>) {
             await recordRisk(db,context.project,new URL(origin).hostname,assessment,evidence);
             res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result));
           };
-          if (!stealthEligible(assessment,false)) { fallback(); return; }
+          if (!stealthEligible(assessment,false)) { await finish({action:'OBSERVE_ONLY'}); return; }
           if (endpoint==='entry-decision' && approval.entryVersion!==null) {
             const result=await client.query('SELECT v.version,v.enabled,v.approved_destination,v.allocation FROM active_protection_policies a JOIN protection_policy_versions v ON v.project_id=a.project_id AND v.version=a.version JOIN page_entry_policy_bindings b ON b.project_id=a.project_id AND b.version=a.version WHERE a.project_id=$1 AND b.page_id=$2 AND v.stealth=true',[context.project,context.page]);
             const policy=result.rows[0];

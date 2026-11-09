@@ -1,13 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, scryptSync } from 'node:crypto';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { spawn } from 'node:child_process';
 import { Pool } from 'pg';
 import { chromium } from 'playwright';
 import { managePages, PageConflict } from '../apps/protected-pages.js';
+import { createAdminServer } from '../apps/admin-auth.js';
+import { publishCtaPolicy } from '../apps/cta-policy.js';
+import { TOTP, Secret } from 'otpauth';
 
 test('scoped browser observations isolate projects on one origin and preserve copied installation', {timeout:60000}, async () => {
   assert.ok(process.env.TEST_DATABASE_URL);
@@ -26,12 +29,15 @@ test('scoped browser observations isolate projects on one origin and preserve co
   const origin=`http://127.0.0.1:${address.port}`;
   let child: ReturnType<typeof spawn> | undefined;
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+  let admin: ReturnType<typeof createAdminServer> | undefined;
   try {
     for (const file of ['001_initial','002_alerts','003_projects','004_observation_sources','005_canaries','006_page_redirect','007_protection_policy','008_traffic_observations','009_risk_assessments','024_risk_evidence','010_policy_allocation','011_cta_inventory','022_cta_capture_selection','012_cta_policy','013_cta_review','014_cta_drift_alerts','023_cta_commercial','018_notification_budget','019_alert_outbox_expiry','025_installation_signals','036_cta_surface_policies']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
     await db.query(await readFile('infra/037_protected_pages.sql','utf8'));
     await db.query(await readFile('infra/038_page_url_review.sql','utf8'));
     await db.query(await readFile('infra/039_page_policy_bindings.sql','utf8'));
     await db.query(await readFile('infra/040_page_policy_approvals.sql','utf8'));
+    await db.query('CREATE TABLE admin_totp_replay(factor_id text PRIMARY KEY,last_counter bigint NOT NULL)');
+    await db.query('CREATE TABLE admin_totp_codes(factor_id text NOT NULL,digest text NOT NULL,valid_until bigint NOT NULL,PRIMARY KEY(factor_id,digest))');
     await db.query("INSERT INTO projects VALUES ('health','Health',$1),('finance','Finance',$1)",[origin]);
     const hp=randomUUID(), fp=randomUUID();
     await db.query("INSERT INTO protected_pages(id,project_id,installation_id,name) VALUES ($1,'health',$2,'Health'),($3,'finance',$4,'Finance')",[hp,health,fp,finance]);
@@ -86,15 +92,40 @@ test('scoped browser observations isolate projects on one origin and preserve co
     await db.query("INSERT INTO page_cta_policy_bindings VALUES('health',$1,'main',1)",[hp]);
     assert.equal((await (await decide(health,`http://localhost:${address.port}`)).json() as {action:string}).action,'OBSERVE_ONLY');
     const generation=await db.query('SELECT url_generation FROM protected_pages WHERE id=$1',[hp]);
-    await db.query("INSERT INTO protected_page_urls(page_id,origin,pathname) VALUES($1,'https://new.test','/oferta')",[hp]);
+    await managePages(db,{action:'add-url',project:'health',page:hp,url:origin+'/saude-nova'});
+    await managePages(db,{action:'remove-url',project:'health',page:hp,url:origin+'/saude'});
     const changed=await db.query('SELECT url_generation,url_review_required FROM protected_pages WHERE id=$1',[hp]);
-    assert.equal(BigInt(changed.rows[0].url_generation),BigInt(generation.rows[0].url_generation)+1n); assert.equal(changed.rows[0].url_review_required,true);
+    assert.equal(BigInt(changed.rows[0].url_generation),BigInt(generation.rows[0].url_generation)+2n); assert.equal(changed.rows[0].url_review_required,true);
     assert.deepEqual(await (await decide(health,`http://localhost:${address.port}`)).json(),{action:'OBSERVE_ONLY'});
     await assert.rejects(managePages(db,{action:'approve',project:'health',page:hp,generation:generation.rows[0].url_generation,configGeneration:'0',entryVersion:null,ctaVersions:[1]}),PageConflict);
+    await publishCtaPolicy(db,'health',{enabled:true,surface:'main',pathname:'/saude-nova',allocation});
+    await db.query("INSERT INTO cta_policy_versions(project_id,version,enabled,surface,pathname,allocation) VALUES('finance',99,true,'other','/financas',$1)",[allocation]);
+    const current=await db.query('SELECT url_generation,config_generation FROM protected_pages WHERE id=$1',[hp]);
+    const candidate={action:'approve',project:'health',page:hp,generation:current.rows[0].url_generation,configGeneration:current.rows[0].config_generation,entryVersion:null,ctaVersions:[99]};
+    await assert.rejects(managePages(db,candidate),PageConflict);
+    await db.query("UPDATE cta_destinations SET url='https://incompatible.invalid/' WHERE project_id='health'");
+    const changedConfig=await db.query('SELECT config_generation FROM protected_pages WHERE id=$1',[hp]);
+    await assert.rejects(managePages(db,{...candidate,configGeneration:changedConfig.rows[0].config_generation,ctaVersions:[2]}),PageConflict);
+    await db.query("UPDATE cta_destinations SET url=$1 WHERE project_id='health'",[origin+'/health-checkout']);
+    const salt='0123456789abcdef0123456789abcdef',secret='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+    admin=createAdminServer(`scrypt$${salt}$${scryptSync('password',Buffer.from(salt,'hex'),64).toString('hex')}`,secret,db).listen(0,'127.0.0.1');
+    await once(admin,'listening'); const adminAddress=admin.address(); assert.ok(adminAddress && typeof adminAddress!=='string');
+    const panel=await browser.newPage(); await panel.goto(`http://127.0.0.1:${adminAddress.port}/admin/ui/`);
+    await panel.getByLabel('Senha administrativa').fill('password'); await panel.getByLabel('Código TOTP').fill(new TOTP({secret:Secret.fromBase32(secret)}).generate()); await panel.getByRole('button',{name:'Entrar',exact:true}).click();
+    const form=panel.locator('#pages-form'); await form.locator('[name=project]').fill('health'); await form.locator('[name=page]').fill(hp); await form.getByRole('button',{name:'Consultar políticas da página'}).click();
+    await panel.locator('#page-approval input[type=checkbox]').check(); await panel.getByRole('button',{name:'Confirmar aprovação de políticas'}).click();
+    await panel.getByText('Políticas aprovadas para a geração 3.').waitFor();
+    assert.equal((await (await decide(health,`http://localhost:${address.port}`)).json() as {action:string}).action,'REPLACE_CONVERSION');
+    const refreshed=page.waitForResponse(r=>r.url().endsWith('/entry-decision')); await page.goto(`http://localhost:${address.port}/outro-slug`); await refreshed;
+    await page.waitForFunction(()=>document.documentElement.dataset.ctaReady==='yes');
+    const resumed=await page.evaluate(()=>{const link=document.querySelector<HTMLAnchorElement>('a')!;let target='';window.addEventListener('click',event=>{target=link.href;event.preventDefault();},{once:true});link.click();return target;});
+    assert.equal(resumed,origin+'/health-checkout');
+    await managePages(db,{action:'add-url',project:'health',page:hp,url:origin+'/outra'});
+    assert.deepEqual(await (await decide(health,`http://localhost:${address.port}`)).json(),{action:'OBSERVE_ONLY'});
     await assert.rejects(db.query("INSERT INTO page_cta_policy_bindings VALUES('finance',$1,'other',1)",[hp]),{code:'23503'});
     assert.equal((await fetch(`http://127.0.0.1:3000/i/${health}/observe`,{method:'POST',headers:{'content-type':'text/plain',origin},body:JSON.stringify({origin,pathname:'/saude',signals:{},project_id:'finance'})})).status,400);
   } finally {
-    if (browser) await browser.close();
+    if (browser) await browser.close(); if (admin) await new Promise<void>(resolve=>admin!.close(()=>resolve()));
     if (child && child.exitCode===null && child.signalCode===null) { child.kill('SIGTERM'); await once(child,'exit'); }
     fixture.close(); await db.end(); await root.query(`DROP SCHEMA ${schema} CASCADE`); await root.end();
   }
