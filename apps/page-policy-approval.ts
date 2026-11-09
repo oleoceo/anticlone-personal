@@ -3,7 +3,7 @@ import { approvedDestination } from './page-redirect.js';
 import { validateAllocation } from './allocation.js';
 
 // A conservative snapshot: changes to any selected surface suspend the approval.
-export async function approvalConfiguration(client: PoolClient, project: string, page: string, entry: number|null, versions: number[]) {
+export async function approvalConfiguration(client: PoolClient, project: string, page: string, entry: number|null, versions: number[], runtime = false) {
   const urls=await client.query('SELECT origin,pathname FROM protected_page_urls WHERE page_id=$1 ORDER BY origin,pathname',[page]);
   if (urls.rowCount!==1) throw new Error('ambiguous page URLs');
   const original=urls.rows[0];
@@ -20,12 +20,12 @@ export async function approvalConfiguration(client: PoolClient, project: string,
   const points=await client.query(`SELECT p.id,p.surface,p.marker,p.kind,p.offer,p.review_required,m.destination_id,d.url,r.destination_id AS commercial_destination,r.offer AS commercial_offer,r.amount,r.currency,r.version AS commercial_version,r.suspension FROM cta_points p LEFT JOIN cta_mappings m ON m.project_id=p.project_id AND m.point_id=p.id AND m.offer=p.offer LEFT JOIN cta_destinations d ON d.project_id=m.project_id AND d.offer=m.offer AND d.id=m.destination_id LEFT JOIN cta_commercial_references r ON r.project_id=p.project_id AND r.point_id=p.id WHERE p.project_id=$1 AND p.surface=ANY($2::text[]) ORDER BY p.surface,p.id`,[project,surfaces]);
   for (const surface of surfaces) {
     const selected=points.rows.filter(row=>row.surface===surface);
-    if (!selected.length || selected.length>100 || selected.some(row=>row.kind!=='a' || !row.marker || row.review_required || !row.url || row.suspension || (row.commercial_destination && (row.commercial_destination!==row.destination_id || row.commercial_offer!==row.offer)))) throw new Error('CTA mapping or commercial state incompatible');
+    if (!selected.length || selected.length>100 || selected.some(row=>row.kind!=='a' || !row.marker || (!runtime && row.review_required) || !row.url || (!runtime && row.suspension) || (row.commercial_destination && (row.commercial_destination!==row.destination_id || row.commercial_offer!==row.offer)))) throw new Error('CTA mapping or commercial state incompatible');
     if (new Set(selected.map(row=>row.marker)).size!==selected.length) throw new Error('ambiguous CTA markers');
     for (const row of selected) approvedDestination(row.url,original.origin);
   }
   // Binding is recorded independently; do not let creating it change the snapshot.
-  return {urls:urls.rows,entry:entries.rows,ctas:policies.rows.map(row=>({version:row.version,enabled:row.enabled,surface:row.surface,pathname:row.pathname,allocation:row.allocation})),points:points.rows};
+  return {urls:urls.rows,entry:entries.rows,ctas:policies.rows.map(row=>({version:row.version,enabled:row.enabled,surface:row.surface,pathname:row.pathname,allocation:row.allocation})),points:runtime ? points.rows.map(row=>({...row,review_required:false,suspension:null})) : points.rows};
 }
 
 export async function currentApproval(client: PoolClient, project: string, page: string) {
@@ -39,7 +39,7 @@ export async function currentApproval(client: PoolClient, project: string, page:
   const ctaBindings=await client.query('SELECT surface,version FROM page_cta_policy_bindings WHERE project_id=$1 AND page_id=$2 ORDER BY surface',[project,page]);
   if ((bindings.rows[0]?.version ?? null)!==entryVersion || JSON.stringify(ctaBindings.rows)!==JSON.stringify(ctas.rows)) return null;
   try {
-    const configuration=await approvalConfiguration(client,project,page,entryVersion,ctas.rows.map(row=>row.version));
+    const configuration=await approvalConfiguration(client,project,page,entryVersion,ctas.rows.map(row=>row.version),true);
     const equal=await client.query('SELECT $1::jsonb = $2::jsonb AS equal',[JSON.stringify(approval.configuration),JSON.stringify(configuration)]);
     return equal.rows[0].equal ? {entryVersion} : null;
   } catch { return null; }

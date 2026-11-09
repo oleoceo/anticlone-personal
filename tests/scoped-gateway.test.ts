@@ -1,3 +1,4 @@
+import {importInventory,reviewPoint} from '../apps/cta-inventory.js';
 import {SMTPServer} from 'smtp-server';
 import {deliverOne} from '../apps/alerts.js';
 import {configureEstimate,observedMetrics} from '../apps/observed-metrics.js';
@@ -28,7 +29,7 @@ test('scoped browser observations isolate projects on one origin and preserve co
     const path=req.url?.split('?')[0];
     if(path==='/shared-checkout'){res.writeHead(200,{'content-type':'text/html'}).end('<h1>Checkout destination</h1>');return;}
     const id=path==='/entry-one' ? entryOne : path==='/entry-two' ? entryTwo : path==='/financas' ? finance : health;
-    res.writeHead(200,{'content-type':'text/html'}).end(`<div data-anticlone-surface="main"><a data-anticlone-point="shared01" href="/checkout">Checkout</a></div><script src="http://127.0.0.1:3000/i/${id}/runtime.js"></script><script src="http://127.0.0.1:3000/i/${id}/fallback.js"></script>`);
+    res.writeHead(200,{'content-type':'text/html'}).end(`<div data-anticlone-surface="main"><a data-anticlone-point="shared01" href="/checkout">Checkout</a><a data-anticlone-point="second01" href="/checkout-two">Second offer</a><a data-anticlone-point="whats001" href="/wa-synthetic">Synthetic WhatsApp</a></div><script src="http://127.0.0.1:3000/i/${id}/runtime.js"></script><script src="http://127.0.0.1:3000/i/${id}/fallback.js"></script>`);
   }).listen(0,'127.0.0.1');
   await once(fixture,'listening');
   const address=fixture.address(); assert.ok(address && typeof address!=='string');
@@ -50,6 +51,8 @@ test('scoped browser observations isolate projects on one origin and preserve co
     await db.query(await readFile('infra/047_observed_metrics.sql','utf8'));
     await db.query(await readFile('infra/048_observed_receipts.sql','utf8'));
     await db.query(await readFile('infra/033_clone_delivery_attempts.sql','utf8'));
+    await db.query(await readFile('infra/049_isolated_runtime_drift.sql','utf8'));
+    await db.query(await readFile('infra/015_cta_alert_deliveries.sql','utf8'));
     await db.query('CREATE TABLE admin_totp_replay(factor_id text PRIMARY KEY,last_counter bigint NOT NULL)');
     await db.query('CREATE TABLE admin_totp_codes(factor_id text NOT NULL,digest text NOT NULL,valid_until bigint NOT NULL,PRIMARY KEY(factor_id,digest))');
     await db.query("INSERT INTO projects VALUES ('health','Health',$1),('finance','Finance',$1)",[origin]);
@@ -66,6 +69,10 @@ test('scoped browser observations isolate projects on one origin and preserve co
       await db.query("INSERT INTO cta_destinations(project_id,offer,id,url) VALUES($1,'offer',$2,$3)",[project,destination,origin+'/'+project+'-checkout'+(project==='health'?'?utm_source=offer':'')]);
       await db.query("INSERT INTO cta_mappings VALUES($1,$2,'offer',$3)",[project,point,destination]);
     }
+    for(const [marker,offer,path] of [['second01','second','/official-second'],['whats001','whatsapp','/wa-approved']]){
+      const point=randomUUID(),destination=randomUUID();await db.query("INSERT INTO cta_points(project_id,id,surface,marker,kind,offer) VALUES('health',$1,'main',$2,'a',$3)",[point,marker,offer]);await db.query("INSERT INTO cta_destinations VALUES('health',$1,$2,$3)",[offer,destination,origin+path]);await db.query("INSERT INTO cta_mappings VALUES('health',$1,$2,$3)",[point,offer,destination]);
+    }
+    for(const [marker,path] of [['shared01','/checkout'],['second01','/checkout-two'],['whats001','/wa-synthetic']])await db.query("INSERT INTO cta_observations(project_id,point_id,evidence,confidence,observed_url) SELECT 'health',id,'controlled baseline','HIGH',$2 FROM cta_points WHERE project_id='health' AND marker=$1",[marker,`http://localhost:${address.port}`+path]);
     const shared=origin+'/shared-checkout?utm_source=offer';
     await db.query("INSERT INTO protection_policy_versions(project_id,version,enabled,approved_destination,stealth,allocation) VALUES('health',1,true,$1,true,$2)",[shared,allocation]);
     for (const [pageId,installation,path] of [[pageOne,entryOne,'/entry-one'],[pageTwo,entryTwo,'/entry-two']]) {
@@ -155,12 +162,22 @@ test('scoped browser observations isolate projects on one origin and preserve co
     await configureEstimate(db,'health',10000,250,'BRL');
     const metrics=await observedMetrics(db,'health',hp,new Date(Date.now()-60000).toISOString(),new Date(Date.now()+60000).toISOString());assert.equal(metrics.estimate?.amount_minor_numerator,'5000000');assert.equal(metrics.recovered_revenue,null);assert.equal(metrics.external_load_confirmed,null);
     assert.equal((await observedMetrics(db,'finance',fp,new Date(Date.now()-60000).toISOString(),new Date(Date.now()+60000).toISOString())).estimate,null);
+    const candidates=[['shared01','/changed-checkout'],['second01','/checkout-two'],['whats001','/wa-synthetic']].map(([marker,path],index)=>({marker,kind:'a',parent:'div',ordinal:index+1,url:`http://localhost:${address.port}`+path}));
+    await importInventory(db,'health',{surface:'main',candidates});
+    const driftDecision=page.waitForResponse(r=>r.url().endsWith('/entry-decision'));await page.goto(`http://localhost:${address.port}/outro-slug`);await driftDecision;await page.waitForFunction(()=>document.documentElement.dataset.ctaReady==='yes');
+    const targets=await page.evaluate(()=>Array.from(document.querySelectorAll<HTMLAnchorElement>('a')).map(link=>{let target='';window.addEventListener('click',event=>{target=link.href;event.preventDefault();},{once:true});link.click();return target;}));
+    assert.deepEqual(targets,[`http://localhost:${address.port}/checkout`,origin+'/official-second',origin+'/wa-approved']);
+    assert.equal((await db.query("SELECT count(*)::int n FROM cta_drift_alerts WHERE project_id='health'")).rows[0].n,1);
+    const driftChanged=(await db.query("SELECT p.id,m.destination_id,(SELECT id::text FROM cta_observations o WHERE o.project_id=p.project_id AND o.point_id=p.id ORDER BY id DESC LIMIT 1) observation FROM cta_points p JOIN cta_mappings m ON m.project_id=p.project_id AND m.point_id=p.id WHERE p.project_id='health' AND p.marker='shared01'")).rows[0];
+    await reviewPoint(db,'health',{pointId:driftChanged.id,destinationId:driftChanged.destination_id,observationId:driftChanged.observation});
+    assert.equal((await entryRequest(entryTwo,{},'b'.repeat(32))).version,1);
+
 
     const decide=(id:string,source:string) => fetch(`http://127.0.0.1:3000/i/${id}/entry-decision`,{method:'POST',headers:{origin:source,'content-type':'text/plain'},body:JSON.stringify({pathname:'/outro-slug',session:'a'.repeat(32),signals:{}})});
     const decision=await decide(health,`http://localhost:${address.port}`);
-    const selected=await decision.json() as {action:string;pathname:string;mappings:{destination:string}[]};
+    const selected=await decision.json() as {action:string;pathname:string;mappings:{marker:string;destination:string}[]};
     assert.equal(selected.action,'REPLACE_CONVERSION'); assert.equal(selected.pathname,'/outro-slug');
-    assert.equal(selected.mappings[0].destination,origin+'/health-checkout?utm_source=offer');
+    assert.equal(selected.mappings.find(row=>row.marker==='shared01')?.destination,origin+'/health-checkout?utm_source=offer');
     assert.deepEqual((selected as typeof selected & {attribution:unknown}).attribution,{[origin+'/health-checkout?utm_source=offer']:{utm_source:['ads'],utm_campaign:['spring']}});
     assert.deepEqual(await (await decide(finance,`http://localhost:${address.port}`)).json(),{action:'OBSERVE_ONLY'});
     assert.deepEqual(await (await decide(finance,origin)).json(),{action:'OBSERVE_ONLY'});
@@ -204,6 +221,17 @@ test('scoped browser observations isolate projects on one origin and preserve co
     assert.deepEqual(financeAfter.rows,financeSnapshot.rows);
     await assert.rejects(db.query("INSERT INTO page_cta_policy_bindings VALUES('finance',$1,'other',1)",[hp]),{code:'23503'});
     assert.equal((await fetch(`http://127.0.0.1:3000/i/${health}/observe`,{method:'POST',headers:{'content-type':'text/plain',origin},body:JSON.stringify({origin,pathname:'/saude',signals:{},project_id:'finance'})})).status,400);
+    const withoutCore=await browser.newPage();await withoutCore.route('**/core.js',route=>route.abort());
+    await withoutCore.goto(`http://localhost:${address.port}/outro-slug`);await withoutCore.getByText('Checkout',{exact:true}).click();await withoutCore.waitForURL(`http://localhost:${address.port}/checkout`);await withoutCore.close();
+    const retained=(await db.query('SELECT count(*)::int n FROM observed_action_facts')).rows[0].n;
+    child.kill('SIGTERM');await once(child,'exit');
+    const offline=await browser.newPage();await offline.goto(`http://localhost:${address.port}/outro-slug`);await offline.getByText('Checkout',{exact:true}).click();await offline.waitForURL(`http://localhost:${address.port}/checkout`);await offline.close();
+    assert.equal((await db.query('SELECT count(*)::int n FROM observed_action_facts')).rows[0].n,retained);
+    child=spawn(process.execPath,['dist/apps/server.js'],{env,stdio:'ignore'});
+    let restarted=false;for(let i=0;i<100;i++){try{if((await fetch('http://127.0.0.1:3000/healthz')).ok){restarted=true;break;}}catch{/* startup */}await new Promise(r=>setTimeout(r,50));}assert.ok(restarted);
+    assert.equal((await db.query('SELECT count(*)::int n FROM observed_action_facts')).rows[0].n,retained);
+    assert.equal((await db.query("SELECT count(*)::int n FROM incidents WHERE project_id='health'")).rows[0].n,1);assert.equal(messages.length,1);
+
   } finally {
     if (browser) await browser.close(); if (admin) await new Promise<void>(resolve=>admin!.close(()=>resolve()));
     if (child && child.exitCode===null && child.signalCode===null) { child.kill('SIGTERM'); await once(child,'exit'); }
