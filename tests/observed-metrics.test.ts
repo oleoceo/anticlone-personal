@@ -1,3 +1,4 @@
+import {retainObservedMetrics} from '../apps/observed-retention.js';
 import {issueObservedReceipt} from '../apps/observed-receipts.js';
 import {createServer} from 'node:http';
 import {observedSessionGateway} from '../apps/observed-session-gateway.js';
@@ -82,6 +83,13 @@ test('observed metrics persist idempotently, isolate pages and separate estimate
    await panel.waitForFunction(()=>document.getElementById('observed-result')?.textContent?.includes('ESTIMATE'));
    const displayed=JSON.parse((await panel.locator('#observed-result').textContent())!);assert.equal(displayed.estimate.amount_minor_numerator,'3000000');assert.equal(displayed.recovered_revenue,null);
   }finally{await browser.close();await new Promise<void>(resolve=>server.close(()=>resolve()));}
+  await db.query("UPDATE observed_action_facts SET received_at=clock_timestamp()-interval '8 days' WHERE project_id='two'");
+  await db.query("UPDATE observed_decision_receipts SET prepared_at=clock_timestamp()-interval '8 days' WHERE project_id='two'");
+  await retainObservedMetrics(db,'two');
+  assert.equal((await db.query("SELECT count(*)::int n FROM observed_action_facts WHERE project_id='two'")).rows[0].n,0);
+  assert.equal((await db.query("SELECT count(*)::int n FROM observed_decision_receipts WHERE project_id='two'")).rows[0].n,0);
+  assert.ok((await db.query("SELECT count(*)::int n FROM observed_action_facts WHERE project_id='one'")).rows[0].n>0);
+
 
  }finally{await db.end();await root.query(`DROP SCHEMA ${schema} CASCADE`);await root.end();}
 });

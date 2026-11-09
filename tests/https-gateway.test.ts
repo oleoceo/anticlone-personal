@@ -50,7 +50,10 @@ test('HTTPS Nginx + PostgreSQL + Chromium: install, spoofing, limits, outage and
   await db.query("INSERT INTO projects VALUES('https','HTTPS','https://owner.test')");
   await db.query(await readFile('infra/035_checkout_receipts.sql','utf8'));
   const checkoutSecret='cd'.repeat(32);
-  await db.query("INSERT INTO installations(project_id,id,origin) VALUES('https',$1,'https://owner.test')",[crypto.randomUUID()]);
+  const scopedInstallation=crypto.randomUUID();
+  await db.query("INSERT INTO installations(project_id,id,origin) VALUES('https',$1,'https://owner.test')",[scopedInstallation]);
+  for(const file of ['037_protected_pages','047_observed_metrics'])await db.query(await readFile(`infra/${file}.sql`,'utf8'));
+
   await writeFile(gatewayEnv,Object.entries({PGOPTIONS:options,DATABASE_URL:process.env.TEST_DATABASE_URL,PROJECT_ID:'https',SMTP_PORT:'1',PORT:'3000',GATEWAY_MODE:'PILOT_OBSERVE',GATEWAY_TRANSPORT:'HTTPS_PROXY',PUBLIC_GATEWAY_HOST:'gateway.test',PILOT_ORIGINS:'["https://owner.test"]',CHECKOUT_WEBHOOK_SECRET:checkoutSecret}).map(([key,value])=>`${key}=${value}`).join('\n'),{mode:0o600});
   execFileSync('openssl',['req','-x509','-newkey','rsa:2048','-nodes','-keyout',join(dir,'privkey.pem'),'-out',join(dir,'fullchain.pem'),'-days','1','-subj','/CN=gateway.test','-addext','subjectAltName=DNS:gateway.test'],{stdio:'ignore'});
   execFileSync(process.execPath,['dist/apps/https-config.js',join(dir,'nginx.conf')],{env:{...process.env,PUBLIC_GATEWAY_HOST:'gateway.test'},stdio:'pipe'});
@@ -114,6 +117,13 @@ test('HTTPS Nginx + PostgreSQL + Chromium: install, spoofing, limits, outage and
     await page.goto('https://owner.test/'); assert.equal((await ownerObservation).status(),204);
     for (let i=0;i<100;i++) {if ((await db.query("SELECT 1 FROM installation_signals WHERE project_id='https' AND source='core'")).rowCount) break; await new Promise(r=>setTimeout(r,50));}
     assert.equal((await db.query("SELECT count(*)::int n FROM installation_signals WHERE project_id='https' AND source='core'")).rows[0].n,1);
+    await new Promise(r=>setTimeout(r,3000));
+    await page.route('https://owner.test/**',route=>route.fulfill({contentType:'text/html',body:`<a href="/checkout">Native scoped</a><script src="https://gateway.test/i/${scopedInstallation}/runtime.js"></script>`}));
+    const scopedSession=page.waitForResponse(r=>r.url().endsWith('/observed-session'));
+    const scopedDecision=page.waitForResponse(r=>r.url().includes('/i/')&&r.url().endsWith('/entry-decision'));
+    await page.goto('https://owner.test/');assert.equal((await scopedSession).status(),204);assert.deepEqual(await(await scopedDecision).json(),{action:'OBSERVE_ONLY'});
+    assert.equal((await db.query("SELECT count(*)::int n FROM observed_action_facts WHERE project_id='https' AND action='SESSION_OBSERVED'")).rows[0].n,1);
+    await page.getByText('Native scoped',{exact:true}).click();assert.equal(new URL(page.url()).pathname,'/checkout');
     const statuses = await Promise.all(Array.from({length:35},async()=> (await api.get('https://gateway.test/runtime.js')).status()));
     assert.ok(statuses.includes(429));
     // Let the proxy burst refill, then verify an actual upstream outage.

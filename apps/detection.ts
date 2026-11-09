@@ -1,3 +1,4 @@
+import {retainObservedMetrics} from './observed-retention.js';
 import { notificationRetention } from './notification-lifecycle.js';
 import { tryRecordTimeline } from './investigation-timeline.js';
 import type { Pool } from 'pg';
@@ -21,6 +22,7 @@ export async function cleanup(db: Pool, project: string): Promise<void> {
   try {
   await pool.query('BEGIN');
   const retention=await notificationRetention(pool,project);
+  await retainObservedMetrics(pool,project);
   const timeline = await pool.query("SELECT to_regclass('investigation_timeline') IS NOT NULL AS installed");
   if (timeline.rows[0].installed) await pool.query("DELETE FROM investigation_timeline WHERE project_id=$1 AND recorded_at < clock_timestamp()-interval '30 days'",[project]);
   await pool.query("DELETE FROM risk_assessment_days WHERE project_id = $1 AND observed_at < now() - interval '7 days'", [project]);
