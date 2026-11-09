@@ -1,3 +1,4 @@
+import { assertProjectAdministrativeWrite, withProjectAdministrativeWrite } from './admin-project-write.js';
 import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import { approvedDestination, configurationOrigin } from './page-redirect.js';
@@ -57,6 +58,7 @@ export async function importInventory(db: Pool, project: string, body: unknown) 
   const {rows,surface} = candidates(body); const client = await db.connect();
   try {
     await client.query('BEGIN');
+    await assertProjectAdministrativeWrite(client,project);
     const p = await client.query('SELECT origin FROM projects WHERE id=$1 FOR UPDATE',[project]);
     if (!p.rowCount) throw Error('invalid project'); lab(p.rows[0].origin);
     await client.query("DELETE FROM cta_observations WHERE project_id=$1 AND observed_at < now() - interval '7 days'",[project]);
@@ -117,12 +119,14 @@ export async function importInventory(db: Pool, project: string, body: unknown) 
   } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
 }
 export async function approveDestination(db: Pool, project: string, body: unknown) {
+ return withProjectAdministrativeWrite(db,project,async client=>{
   const row = fields(body,'offer,url');
   if (typeof row.offer !== 'string' || !offerPattern.test(row.offer) || typeof row.url !== 'string') throw Error('invalid destination');
-  const p = await db.query('SELECT origin FROM projects WHERE id=$1',[project]); if (!p.rowCount) throw Error('invalid project');
+  const p = await client.query('SELECT origin FROM projects WHERE id=$1',[project]); if (!p.rowCount) throw Error('invalid project');
   configurationOrigin(p.rows[0].origin); const url = approvedDestination(row.url,p.rows[0].origin); const id = randomUUID();
-  await db.query('INSERT INTO cta_destinations(project_id,offer,id,url) VALUES($1,$2,$3,$4)',[project,row.offer,id,url]);
+  await client.query('INSERT INTO cta_destinations(project_id,offer,id,url) VALUES($1,$2,$3,$4)',[project,row.offer,id,url]);
   return {id};
+ });
 }
 
 // An intent records a human choice only; it is never consumed by the runtime.
@@ -133,6 +137,7 @@ export async function selectObservation(db: Pool, body: unknown) {
   const client=await db.connect();
   try {
     await client.query('BEGIN');
+    await assertProjectAdministrativeWrite(client,row.project as string);
     const project=await client.query('SELECT origin FROM projects WHERE id=$1 FOR UPDATE',[row.project]);
     if (!project.rowCount) throw new TypeError('invalid project');
     lab(project.rows[0].origin);
@@ -159,6 +164,7 @@ export async function approveCommercial(db: Pool, body: unknown) {
   const client=await db.connect();
   try {
     await client.query('BEGIN');
+    await assertProjectAdministrativeWrite(client,row.project as string);
     const project=await client.query('SELECT origin FROM projects WHERE id=$1 FOR UPDATE',[row.project]);
     if (!project.rowCount) throw new TypeError('invalid project');
     lab(project.rows[0].origin);
@@ -186,7 +192,8 @@ export async function mapPoint(db: Pool, project: string, body: unknown) {
   if (typeof row.offer !== 'string' || !offerPattern.test(row.offer) || typeof row.pointId !== 'string' || typeof row.destinationId !== 'string' || !uuid.test(row.pointId) || !uuid.test(row.destinationId)) throw Error('invalid mapping');
   const client = await db.connect();
   try {
-    await client.query('BEGIN'); const p = await client.query('SELECT origin FROM projects WHERE id=$1 FOR UPDATE',[project]); if (!p.rowCount) throw Error('invalid project'); lab(p.rows[0].origin);
+    await client.query('BEGIN');
+    await assertProjectAdministrativeWrite(client,project); const p = await client.query('SELECT origin FROM projects WHERE id=$1 FOR UPDATE',[project]); if (!p.rowCount) throw Error('invalid project'); lab(p.rows[0].origin);
     const d = await client.query('SELECT id FROM cta_destinations WHERE project_id=$1 AND offer=$2 AND id=$3',[project,row.offer,row.destinationId]); if (!d.rowCount) throw Error('destination not approved for offer');
     const point = await client.query('UPDATE cta_points SET offer=$3 WHERE project_id=$1 AND id=$2 AND offer IS NULL RETURNING id',[project,row.pointId,row.offer]); if (!point.rowCount) throw Error('point unavailable');
     await client.query('INSERT INTO cta_mappings(project_id,point_id,offer,destination_id) VALUES($1,$2,$3,$4)',[project,row.pointId,row.offer,row.destinationId]); await client.query('COMMIT');
@@ -201,6 +208,7 @@ export async function reviewPoint(db: Pool, project: string, body: unknown) {
   const client = await db.connect();
   try {
     await client.query('BEGIN');
+    await assertProjectAdministrativeWrite(client,project);
     const p = await client.query('SELECT origin FROM projects WHERE id=$1 FOR UPDATE',[project]);
     if (!p.rowCount) throw Error('invalid project'); lab(p.rows[0].origin);
     const result = await client.query(`SELECT p.offer,o.observed_url FROM cta_points p JOIN cta_mappings m ON m.project_id=p.project_id AND m.point_id=p.id

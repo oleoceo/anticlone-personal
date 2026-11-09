@@ -1,4 +1,7 @@
 # STATUS — AntiClone Personal
+- **F36/GS15 exclusoes:** guard transacional de escritas admin em projeto tombstonado; LP encerrada com URL reutilizavel, versao/confirmacao/CSRF/auditoria e ancora historica. Apenas dados sinteticos exercitados.
+- **Exclusao fisica BLOCKED isolada:** preview catalogado com FKs/triggers e schemas externos; aprovacoes/versoes imutaveis, FKs de auditoria e ledger financeiro sem politica de desvinculo impedem purga comprovada. Nenhum executor habilitado; nao concluida.
+- **Provas/revisao:** Lint/typecheck/build PASS e 19/19 focados PostgreSQL/Chromium PASS; integrado safe-deletion passou. Revisao read-only /root/safe_deletion_review. Politica/limites: docs/SAFE-DELETION.md. Sem PR/merge/deploy ou exclusao de dados reais.
 - **F36/GS15 ciclo reversivel:** arquivo, restauracao para PAUSED e exclusao logica confirmada no painel; migration045 aditiva com versao e auditoria atomicas. Sem purga fisica, perda de IDs/historico ou resolucao de backlog.
 - **Validacao lifecycle:** PostgreSQL/Chromium/SMTP sinteticos; fluxo admin/CSRF, confirmacao, concorrencia e rollback auditados em tests/project-lifecycle-admin.test.ts. Lint/typecheck/build e 8/8 testes focados PASS; revisao read-only /root/lifecycle_corrections_review. Nenhuma operacao em projeto real.
 - **Correcao da revisao F36/F45:** DNS sem conexao/lock durante resolver; revalidacao transacional antes de gravar. CTA PROCESSING nunca retomado por lease; callback continua dono do token, quedas ficam retidas para revisao sem acao administrativa.

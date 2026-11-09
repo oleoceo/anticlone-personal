@@ -1,3 +1,4 @@
+import { assertProjectAdministrativeWrite, withProjectAdministrativeWrite } from './admin-project-write.js';
 import type { Pool } from 'pg';
 import { approvedDestination, configurationOrigin } from './page-redirect.js';
 
@@ -12,16 +13,19 @@ export function validateDraft(body: unknown, origin: string): Draft {
   return {enabled:value.enabled, approved_destination:approvedDestination(value.approved_destination, origin), stealth:true, allocation:validateAllocation(value.allocation)};
 }
 export async function saveDraft(db: Pool, project: string, body: unknown) {
-  const result = await db.query('SELECT origin FROM projects WHERE id=$1', [project]);
+ return withProjectAdministrativeWrite(db,project,async client=>{
+  const result = await client.query('SELECT origin FROM projects WHERE id=$1', [project]);
   if (!result.rowCount) throw Error('invalid project');
   const draft = validateDraft(body, result.rows[0].origin);
-  await db.query(`INSERT INTO protection_policy_drafts(project_id,enabled,approved_destination,stealth,allocation) VALUES($1,$2,$3,$4,$5)
+  await client.query(`INSERT INTO protection_policy_drafts(project_id,enabled,approved_destination,stealth,allocation) VALUES($1,$2,$3,$4,$5)
     ON CONFLICT(project_id) DO UPDATE SET enabled=$2,approved_destination=$3,stealth=$4,allocation=$5`, [project,draft.enabled,draft.approved_destination,draft.stealth,JSON.stringify(draft.allocation)]);
+ });
 }
 export async function activatePolicy(db: Pool, project: string, version?: number) {
   const client = await db.connect();
   try {
     await client.query('BEGIN');
+    await assertProjectAdministrativeWrite(client,project);
     const row = await client.query('SELECT origin FROM projects WHERE id=$1 FOR UPDATE', [project]);
     if (!row.rowCount) throw Error('invalid project');
     if (version === undefined) {

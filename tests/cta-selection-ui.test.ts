@@ -93,13 +93,18 @@ test('CTA selection is authenticated, capture-scoped and never activates mitigat
     const raceRow=(await db.query('SELECT c.id AS capture_id,o.id AS observation_id,o.point_id FROM cta_captures c JOIN cta_observations o ON o.capture_id=c.id WHERE c.is_current AND c.project_id=$1 ORDER BY o.id DESC LIMIT 1',['p'])).rows[0];
     const race={...body,captureId:raceRow.capture_id,observationId:String(raceRow.observation_id),pointId:raceRow.point_id};
     const blocker=await db.connect();
+    const poolImport=new Pool({connectionString:process.env.TEST_DATABASE_URL,options:`-c search_path=${schema}`,max:1});
+    const poolSelect=new Pool({connectionString:process.env.TEST_DATABASE_URL,options:`-c search_path=${schema}`,max:1});
+    let importing:Promise<unknown>|undefined, selecting:Promise<void>|undefined;
     try {
+      const importPid=(await poolImport.query('SELECT pg_backend_pid() AS pid')).rows[0].pid;
+      const selectPid=(await poolSelect.query('SELECT pg_backend_pid() AS pid')).rows[0].pid;
       await blocker.query('BEGIN'); await blocker.query('SELECT id FROM projects WHERE id=$1 FOR UPDATE',['p']);
-      const waiters=async(n:number)=>{for(let i=0;i<200;i++){const result=await db.query("SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT origin FROM projects WHERE id=%FOR UPDATE'"); if(result.rows[0].n>=n)return; await new Promise(r=>setTimeout(r,10));} throw Error('lock waiters not observed');};
-      const importing=importInventory(db,'p',{surface:'landing',candidates:[]}); await waiters(1);
-      const selecting=assert.rejects(selectObservation(db,race),SelectionConflict); await waiters(2);
-      await blocker.query('COMMIT'); await importing; await selecting;
-    } finally {blocker.release();}
+      const waitForLock=async(pid:number)=>{const deadline=Date.now()+5000;do{const result=await db.query("SELECT wait_event_type='Lock' AS waiting FROM pg_stat_activity WHERE pid=$1",[pid]);if(result.rows[0]?.waiting)return;}while(Date.now()<deadline);throw Error('specific lock waiter not observed');};
+      importing=importInventory(poolImport,'p',{surface:'landing',candidates:[]});await waitForLock(importPid);
+      selecting=assert.rejects(selectObservation(poolSelect,race),SelectionConflict);await waitForLock(selectPid);
+      await blocker.query('COMMIT');await importing;await selecting;
+    } finally {await blocker.query('ROLLBACK');blocker.release();await Promise.allSettled([importing,selecting]);await poolImport.end();await poolSelect.end();}
     await assert.rejects(selectObservation(db,race),SelectionConflict);
     await page.goto(base+'/admin/ui/'); await page.locator('#cta-query [name=project]').fill('p'); await page.locator('#cta-query [name=surface]').fill('landing'); await page.getByRole('button',{name:'Consultar CTAs'}).click();
     await page.getByText('Seleções pendentes de capturas anteriores, desatualizadas e sem ativação: 1',{exact:false}).waitFor();

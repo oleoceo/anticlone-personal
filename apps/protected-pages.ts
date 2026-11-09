@@ -1,3 +1,5 @@
+import { assertPageAdministrativeWrite } from './admin-project-write.js';
+import { deletePage } from './page-deletion.js';
 import { isLifecycleAction, projectLifecycle } from './project-lifecycle.js';
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
@@ -24,6 +26,7 @@ export async function managePages(db: Pool, body: unknown) {
   const data=body as Record<string,unknown>;
   if (typeof data.project!=='string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(data.project) || typeof data.action!=='string') throw new TypeError('invalid request');
   const project=data.project, action=data.action;
+  if (action==='preview-delete-page' || action==='delete-page') return deletePage(db,data);
   if (isLifecycleAction(action)) return projectLifecycle(db,data);
   if (['project-state','pause-project','resume-project','pause-page','resume-page'].includes(action)) {
     const pageAction=action.endsWith('-page');
@@ -38,6 +41,7 @@ export async function managePages(db: Pool, body: unknown) {
         await client.query('COMMIT'); return {project,state:p.rows[0].lifecycle_state,pages:pages.rows};
       }
       if (pageAction) {
+        await assertPageAdministrativeWrite(client,project,data.page as string);
         const page=await client.query('SELECT lifecycle_state,enabled FROM protected_pages WHERE project_id=$1 AND id=$2 FOR UPDATE',[project,data.page]);
         if (!page.rowCount) throw new TypeError('unknown page');
         const next=action==='pause-page' ? 'PAUSED' : 'ACTIVE';
@@ -56,6 +60,7 @@ export async function managePages(db: Pool, body: unknown) {
     try {
       await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
       await assertMutableProject(client,project);
+      await assertPageAdministrativeWrite(client,project,data.page as string);
       await client.query('LOCK TABLE projects, protected_pages, protected_page_urls, active_protection_policies, active_cta_surface_policies, page_entry_policy_bindings, page_cta_policy_bindings, cta_points, cta_mappings, cta_destinations, cta_commercial_references IN SHARE ROW EXCLUSIVE MODE');
       const page=await client.query('SELECT url_generation,config_generation,enabled FROM protected_pages WHERE id=$1 AND project_id=$2',[data.page,project]);
       if (!page.rowCount || !page.rows[0].enabled || page.rows[0].url_generation!==data.generation || page.rows[0].config_generation!==data.configGeneration) throw new PageConflict();
@@ -123,6 +128,7 @@ export async function managePages(db: Pool, body: unknown) {
     try {
       await client.query('BEGIN');
       await assertMutableProject(client,project);
+      await assertPageAdministrativeWrite(client,project,data.page as string);
       const page=await client.query('SELECT id FROM protected_pages WHERE id=$1 AND project_id=$2 FOR UPDATE',[data.page,project]);
       if (!page.rowCount) throw new TypeError('unknown page');
       if (action==='add-url') await client.query('INSERT INTO protected_page_urls(page_id,origin,pathname) VALUES($1,$2,$3)',[data.page,url.origin,url.pathname]);

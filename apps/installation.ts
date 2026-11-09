@@ -1,3 +1,4 @@
+import { assertProjectAdministrativeWrite, withProjectAdministrativeWrite } from './admin-project-write.js';
 import { operationallyEligible } from './operational-eligibility.js';
 import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
@@ -21,14 +22,16 @@ export async function recordInstallationClaim(db: Pool, project: string, origin:
 }
 
 export async function enableInstallation(db: Pool, project: string) {
-  const result = await db.query(`INSERT INTO installations(project_id,id,origin)
+  await withProjectAdministrativeWrite(db,project,async client=>{
+  const result = await client.query(`INSERT INTO installations(project_id,id,origin)
     SELECT id,$2,origin FROM projects WHERE id=$1
     ON CONFLICT (project_id) DO UPDATE SET enabled=true WHERE installations.origin=excluded.origin RETURNING id`, [project,randomUUID()]);
   if (!result.rowCount) {
-    const existing = await db.query('SELECT id FROM installations WHERE project_id=$1', [project]);
+    const existing = await client.query('SELECT id FROM installations WHERE project_id=$1', [project]);
     if (!existing.rowCount) throw new TypeError('unknown project');
     throw new InstallationOriginConflict('installation origin differs from current project origin');
   }
+  });
   return installationDiagnostic(db,project);
 }
 
@@ -36,6 +39,7 @@ export async function disableInstallation(db: Pool, project: string) {
   const client=await db.connect();
   try {
     await client.query('BEGIN');
+    await assertProjectAdministrativeWrite(client,project,'SHARE');
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1), 45)',[project]);
     await client.query('UPDATE installations SET enabled=false WHERE project_id=$1',[project]);
     await client.query('COMMIT');

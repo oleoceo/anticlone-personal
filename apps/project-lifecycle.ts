@@ -1,13 +1,15 @@
+import { projectPurgePreview } from './project-purge-preview.js';
 import type { Pool } from 'pg';
 
 export class LifecycleConflict extends Error {}
-const actions=new Set(['lifecycle-status','preview-delete-project','archive-project','restore-project','delete-project']);
+const actions=new Set(['preview-purge-project','purge-project','lifecycle-status','preview-delete-project','archive-project','restore-project','delete-project']);
 export function isLifecycleAction(action:string) {return actions.has(action);}
 
 // Called only through the existing authenticated/CSRF-protected admin pages route.
 // "Delete" is a reversible tombstone; this module never issues DELETE.
 export async function projectLifecycle(db:Pool, data:Record<string,unknown>) {
   const project=data.project as string, action=data.action as string;
+  if(action==='preview-purge-project' || action==='purge-project') return projectPurgePreview(db,data);
   const read=action==='lifecycle-status' || action==='preview-delete-project';
   const expectedKeys=read ? 'action,project' : action==='delete-project' ? 'action,confirmation,justification,project,version' : 'action,justification,project,version';
   if (!actions.has(action) || Object.keys(data).sort().join(',')!==expectedKeys) throw new TypeError('invalid lifecycle request');

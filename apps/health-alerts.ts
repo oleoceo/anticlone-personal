@@ -1,3 +1,4 @@
+import { assertProjectAdministrativeWrite } from './admin-project-write.js';
 import type { Pool, PoolClient } from 'pg';
 import { sendLocalMail } from './alerts.js';
 import { budgetMayBeAvailable, lockBudget, recordBudget } from './notification-budget.js';
@@ -10,6 +11,7 @@ export async function configureHealth(db: Pool, project: string, enabled: boolea
   const client = await db.connect();
   try {
     await client.query('BEGIN');
+    await assertProjectAdministrativeWrite(client,project,'SHARE');
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1), 45)',[project]);
     const previous = (await client.query('SELECT enabled,inactivity_seconds,operational_enabled FROM installation_health_settings WHERE project_id=$1',[project])).rows[0];
     const result = await client.query(`INSERT INTO installation_health_settings(project_id,enabled,inactivity_seconds,operational_enabled)

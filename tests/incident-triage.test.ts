@@ -73,7 +73,7 @@ test('incident triage: atomic audit, concurrency, observations, API and browser'
     const headers={origin:base,'sec-fetch-site':'same-origin','content-type':'application/json',cookie:`admin_session=${cookie.value}`};
     assert.equal((await fetch(base+'/admin/ui/incident-status',{method:'POST',headers,body:JSON.stringify(payload)})).status,403);
     assert.equal((await fetch(base+'/admin/ui/incident-status',{headers:{'sec-fetch-site':'same-origin',cookie:`admin_session=${cookie.value}`}})).status,404);
-    await page.locator('#incident-list select').selectOption('investigating'); await page.getByLabel('Justificativa').fill('Revisão manual'); await page.getByRole('button',{name:'Registrar classificação'}).click();
+    await page.locator('#incident-list select').selectOption('investigating'); await page.locator('#incident-list').getByLabel('Justificativa',{exact:true}).fill('Revisão manual'); await page.getByRole('button',{name:'Registrar classificação'}).click();
     await page.getByText('Classificação e auditoria registradas. Consulte novamente.').waitFor();
     await db.query("UPDATE alert_outbox SET sent_at=now() WHERE incident_id=(SELECT id FROM incidents WHERE project_id='a')");
     await classifyIncident(db,{...payload,version:'4',expected:'investigating',status:'false_positive'});
