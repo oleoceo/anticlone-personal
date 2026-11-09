@@ -116,7 +116,7 @@ function recordClaim(origin: string, source: 'core' | 'fallback') {
 const handleCheckout = checkoutWebhook(pool,activeProject,process.env);
 const server = http.createServer((req, res) => {
   if (!boundary(req, res)) return;
-  if (scoped(req,res)) return;
+  if (!project && scoped(req,res)) return;
   if (!project && req.url !== '/healthz') { res.writeHead(404).end(); return; }
   if (handleCheckout(req,res)) return;
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -315,7 +315,7 @@ async function infrastructureMaintenance() {
   finally { dnsBusy = false; }
 }
 if (project) void infrastructureMaintenance();
-const dnsTimer = setInterval(() => void infrastructureMaintenance(),60_000);
+const dnsTimer = setInterval(() => { if (project) void infrastructureMaintenance(); },60_000);
 dnsTimer.unref();
 if (project) void maintenance(); const timer = setInterval(() => { if (project) void maintenance(); }, 1000);
 process.on('SIGTERM', () => { clearInterval(timer); clearInterval(dnsTimer); server.close(() => { void pool.end().finally(() => process.exit()); }); });
