@@ -138,10 +138,11 @@ PR #59 - contrato multiprojeto (laboratorio):
 - URLs duplas OBSERVE_ONLY; sinais agregados nao verificam nova URL: conferir script/requisicoes no navegador, remover antiga e reaprovar pelo painel.
 - Sem merge/deploy, mitigacao operacional ou ciclo pausa/arquivo/exclusao; transicao e limites em docs/MULTIPROJECT-TRANSITION.md.
 
-## PR #64 - revisao corretiva (consolidacao PARCIAL)
-- OPERATIONAL opt-in por LP/aprovacao/geracoes, auditoria e suspensao; processo real + Nginx/TLS sintetico, dois projetos/tres LPs sem fixtures.
-- Rotacao explicita na mesma origem, historico estavel, recursos neutros v2 e compatibilidade v1; HTML/CSS separados como ROUTE_OBSERVED, F45 somente agregado.
-- F08/diagnostico BLOCKED: falta verificador com isolamento de rede comprovado; verify/URLs arbitrarias recusados, capacidades NOT_VERIFIED/UNKNOWN.
-- Codigo 4691f4cc620c79b22b9621bbc0548ada5c3626e0: regressao integral 105 PASS/0 FAIL/0 SKIP (300497 ms); lint/typecheck/build e nove testes Python PASS.
-- Revisao independente /root/pr64_corrective_review favoravel, sem P0/P1/P2 remanescentes; fingerprint de 24 arquivos bc3f656710ac908a1f82dd2843d78f6d4e1387b635b7cd0977f59296a05bc7ed.
-- CI BLOCKED antes de qualquer etapa: GitHub Actions recusou iniciar por pagamento/limite de gastos da conta (run 42829199298). Mesmo PR #64 draft; F08 pendente. Sem merge/deploy/DNS/migration de producao/ativacao real.
+## PR #64 - CI local gratuita, opcao A do proprietario
+- Referencia 48a9541 equivale ao codigo4691f4c (dois commits somente docs); CI local Node22 completa:105PASS/0FAIL/0SKIP, exit0,450s.
+- Teste operacional existente ampliado: v2 + painel MFA/CSRF + publicacao/rotacao/autorizacao/suspensao + PAGE/CTA reais + aliases antigos/isolamento/fail-open; foco Nginx1/1PASS.
+- Nenhuma mudanca em apps/runtime/infra. D05-D15 e parecer independente anterior preservados; delta runner/teste revisado independentemente.
+- Runner scripts/local-ci.sh cria PostgreSQL16 descartavel, reproduz workflow, falha por erro de comando/log e registra SHA/versoes/comandos/duracoes/exit codes.
+- Resultado integral do HEAD e evidencias: test-results/pr64-local-ci/report.json, final/result.txt e steps.tsv; reproducao/limites em docs/LOCAL-CI.md.
+- F08 continua BLOCKED; GitHub Actions BLOCKED por cota/faturamento, sem fabricar verde ou repetir workflow. Gate local escolhido expressamente pelo dono.
+- Mesmo PR64 Draft para revisao humana. Sem merge/deploy/DNS publico/migrations de producao/ativacao real; nenhum custo/cobranca alterado.
