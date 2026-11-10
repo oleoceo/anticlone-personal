@@ -121,4 +121,3 @@ test('GS05/GS19 optional Stealth: PostgreSQL and Chromium, two projects/two LPs,
     process.env=saved;if(browser)await browser.close();if(server)await new Promise<void>(resolve=>server!.close(()=>resolve()));await new Promise<void>(resolve=>fixture.close(()=>resolve()));await db.end();await root.query(`DROP SCHEMA ${schema} CASCADE`);await root.end();
   }
 });
-
