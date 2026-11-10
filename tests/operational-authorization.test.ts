@@ -23,6 +23,16 @@ import {observedSessionGateway} from '../apps/observed-session-gateway.js';
 import type {Distribution} from '../apps/runtime-distribution.js';
 import {TOTP,Secret} from 'otpauth';
 
+test('deployment mode requires the explicit operational overlay and preserves private boundaries',{skip:process.env.HTTPS_GATE_TEST!=='1'?'requires Linux Docker; mandatory in CI':false},()=>{
+  const env={...process.env,GATEWAY_IMAGE:'anticlone-pilot:test',GATEWAY_ENV_FILE:'/dev/null',DATABASE_PASSWORD_FILE:'/dev/null',NGINX_CONFIG:'/tmp/nginx.conf',TLS_DIRECTORY:'/tmp/tls'};
+  const config=(operational:boolean)=>JSON.parse(execFileSync('docker',['compose','-f','infra/https/compose.yaml',...(operational?['-f','infra/https/operational.yaml']:[]),'config','--format','json'],{env,stdio:'pipe'}).toString());
+  const pilot=config(false),operational=config(true);
+  assert.equal(pilot.services.gateway.environment.GATEWAY_MODE,'PILOT_OBSERVE');
+  assert.equal(operational.services.gateway.environment.GATEWAY_MODE,'OPERATIONAL');
+  operational.services.gateway.environment.GATEWAY_MODE='PILOT_OBSERVE';
+  assert.deepEqual(operational,pilot,'mode is the only delta; database, loopback, secrets and hardening preserved');
+});
+
 test('operational v2 + MFA/CSRF admin: HTTPS publication, rotation, PAGE/CTA, suspension, isolation and fail-open',{timeout:120000},async()=>{
   assert.ok(process.env.TEST_DATABASE_URL);
   assert.equal(gatewayMode({GATEWAY_MODE:'OPERATIONAL'},'https://owner.test').pilot,true);
@@ -109,9 +119,18 @@ test('operational v2 + MFA/CSRF admin: HTTPS publication, rotation, PAGE/CTA, su
     browser=await chromium.launch({args:['--no-proxy-server','--host-resolver-rules=MAP gateway.test 127.0.0.1']});
     const context=await browser.newContext({ignoreHTTPSErrors:true});
     if(proxy)assert.throws(()=>execFileSync(process.execPath,['dist/apps/installation-smoke.js',base],{env:{...process.env,NODE_EXTRA_CA_CERTS:join(dir,'cert')},stdio:'pipe'}),/unexpected gateway mode/);
+    if(proxy){
+      // Explicit operational smoke retains certificate validation and checks the
+      // real Nginx/server boundary. Default pilot smoke must still reject it.
+      await new Promise(r=>setTimeout(r,2500));
+      const smoke=execFileSync(process.execPath,['dist/apps/installation-smoke.js',base,'OPERATIONAL',pages[0].installation],{env:{...process.env,NODE_EXTRA_CA_CERTS:join(dir,'cert')},stdio:'pipe'}).toString();
+      assert.match(smoke,/OPERATIONAL.*NOT_VERIFIED/);
+      await new Promise(r=>setTimeout(r,2500));
+    }
     await context.grantPermissions(['local-network-access'],{origin:copy});
     await context.grantPermissions(['local-network-access'],{origin:original});
     const panel=await context.newPage();await panel.goto(adminBase+'/admin/ui/');
+    assert.match(await panel.locator('#stealth-limitation').textContent()??'',/Stealth ON não garante invisibilidade.*UNCERTAIN.*provável operador/);
     await panel.locator('input[name="password"]').fill('password');
     const totp=new TOTP({secret:Secret.fromBase32(secret)});
     const validCode=totp.generate(),invalidCode=String((Number(validCode)+1)%1000000).padStart(6,'0');
@@ -123,6 +142,7 @@ test('operational v2 + MFA/CSRF admin: HTTPS publication, rotation, PAGE/CTA, su
     await panel.locator('input[name="code"]').fill(totp.generate());
     const goodLogin=panel.waitForResponse(r=>r.url().endsWith('/admin/ui/login'));
     await panel.getByRole('button',{name:'Entrar',exact:true}).click();assert.equal((await goodLogin).status(),204);await panel.locator('#operational-form').waitFor();
+    assert.equal(await panel.locator('#stealth-limitation').isVisible(),true);
     // A session without CSRF is insufficient, even after successful MFA.
     assert.equal(await panel.evaluate(async()=> (await fetch('/admin/ui/operational',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).status),403);
     const distributionForm=panel.locator('#distribution-form');
