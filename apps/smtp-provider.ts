@@ -23,6 +23,11 @@ export async function providerAuthorized(db: Pick<PoolClient,'query'>, config:Sm
 }
 
 export async function sendProviderAlert(config:SmtpProvider, id:string, host:string): Promise<void> {
+  return sendProviderNotice(config,id,'AntiClone: unverified clone signal',`Project observation requires review. Unverified browser claim for host: ${host}`);
+}
+
+export async function sendProviderNotice(config:SmtpProvider,id:string,subject:string,text:string):Promise<void>{
+  if(!/^(?:(?:cta|health)-)?[1-9][0-9]{0,19}$/.test(id)||!subject||subject.length>120||/[\r\n\0]/.test(subject)||text.length>4096)throw new TypeError('invalid notification');
   let socket:Socket|undefined;
   const transport=nodemailer.createTransport({host:config.host,port:config.port,secure:config.tls_mode==='implicit',requireTLS:true,
     auth:{user:config.user,pass:config.password},tls:{minVersion:'TLSv1.2',rejectUnauthorized:true},
@@ -36,8 +41,7 @@ export async function sendProviderAlert(config:SmtpProvider, id:string, host:str
   let timer:ReturnType<typeof setTimeout>|undefined;
   try {
     const deadline=new Promise<never>((_resolve,reject)=>{timer=setTimeout(()=>{socket?.destroy();reject(Error('SMTP total deadline'));},10000);});
-    const result=await Promise.race([transport.sendMail({from:config.sender,to:config.recipient,subject:'AntiClone: unverified clone signal',
-      text:`Project observation requires review. Unverified browser claim for host: ${host}`,
+    const result=await Promise.race([transport.sendMail({from:config.sender,to:config.recipient,subject,text,
       messageId:`<anticlone-${id}@${config.sender.split('@')[1]}>`}),deadline]);
     if (result.accepted.length!==1 || String(result.accepted[0]).toLowerCase()!==config.recipient.toLowerCase() || result.rejected.length) throw Error('SMTP recipient not accepted');
   } finally {if(timer)clearTimeout(timer);socket?.destroy();transport.close();}

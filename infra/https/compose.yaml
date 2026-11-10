@@ -60,6 +60,29 @@ services:
     logging:
       driver: local
       options: {max-size: 5m, max-file: '2'}
+  notifications:
+    profiles: [notifications]
+    image: ${GATEWAY_IMAGE:?set immutable gateway image tag}
+    command: [node, dist/apps/cta-delivery-worker.js]
+    network_mode: host
+    depends_on:
+      postgres: {condition: service_healthy}
+    env_file: ${GATEWAY_ENV_FILE:?set absolute private env path}
+    environment:
+      NOTIFICATION_WORKER_MODE: PROVIDER
+      MONITOR_LOCAL_GATEWAY: '1'
+      MONITOR_GATEWAY_PORT: '3000'
+      GATEWAY_TRANSPORT: HTTPS_PROXY
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    stop_grace_period: 20s
+    mem_limit: 256m
+    pids_limit: 64
+    logging:
+      driver: local
+      options: {max-size: 5m, max-file: '2'}
 volumes:
   pilot_data:
 secrets:
