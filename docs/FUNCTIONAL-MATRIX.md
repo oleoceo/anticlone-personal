@@ -18,7 +18,7 @@ Legenda: **P** = planejada no Personal; **PARCIAL** = parte comprovada, capacida
 | F04 | Bootstrap pequeno + Core Runtime | 23-RUNTIME-PROTOCOL | Carregamento e falha em Chromium, tests/gs02.test.ts, CI 41680979048; instalação limitada a laboratório | PARCIAL |
 | F05 | Fallback independente com capacidades limitadas | 23-RUNTIME-PROTOCOL | GS09 parcial: fallback e canários em Chromium, tests/gs02.test.ts; CSP e outros navegadores pendentes | PARCIAL |
 | F06 | HTML Canary e CSS Canary best-effort | 23-RUNTIME-PROTOCOL, 02- Observacoes Tecnicas | GS09 parcial em Chromium, tests/gs02.test.ts, CI 41688461172; CSP e outros navegadores pendentes | PARCIAL |
-| F07 | Entrega de scripts, rotas públicas e alias persistido/versionado | 24-EDGE-DELIVERY-NETWORK, 02- Observacoes Tecnicas | GS01, GS10 | PARCIAL |
+| F07 | Entrega de scripts, rotas públicas e alias persistido/versionado | 24-EDGE-DELIVERY-NETWORK, 02- Observacoes Tecnicas | Distribuição v1: tests/runtime-distribution.test.ts, scoped-gateway legado+alias e https-gateway; três papéis em um hostname, revisões persistidas e snippets HTML/CSS. Publicação real/múltiplos hosts pendentes; docs/RUNTIME-DISTRIBUTION-CONTRACT.md | PARCIAL |
 | F08 | Verificação de instalação e degradação FULL/PARTIAL/UNSUPPORTED | 27-COMPATIBILITY-MATRIX, 12-MVP-SCOPE | GS10: sinais nao autenticados em tests/installation.test.ts; verificacao controlada pendente | PARCIAL |
 | F09 | Contexto autorizado vs. execução em host não autorizado | 23-RUNTIME-PROTOCOL | Origem alegada comparada no servidor, original e cópia em tests/gs02.test.ts, CI 41680979048; sinais forjáveis | PARCIAL |
 | F10 | Contextos `file://`, iframe/sandbox quando possível, sem garantia | 23-RUNTIME-PROTOCOL | GS10 | P |

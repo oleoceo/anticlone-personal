@@ -1,5 +1,6 @@
 (() => {
   try {
+    const distribution = null;
     const source = document.currentScript && document.currentScript.src;
     if (!source) return;
     const signals = {};
@@ -18,8 +19,8 @@
         if (['http:', 'https:'].includes(ref.protocol) && !ref.username && !ref.password && /^[a-z0-9]+(?:[a-z0-9.-]*[a-z0-9])?$/.test(ref.hostname) && ref.hostname.length <= 253 && !ref.hostname.includes('..')) signals.referrerHost = ref.hostname.toLowerCase();
       } catch (_) { /* Missing or invalid referrer. */ }
     }
-    const scoped = new URL(source).pathname.startsWith('/i/');
-    fetch(new URL('observe', source).href, {
+    const scoped = !!distribution || new URL(source).pathname.startsWith('/i/');
+    fetch(new URL('observe', distribution ? distribution.bases.TELEMETRY : source).href, {
       method: 'POST', headers: { 'Content-Type': 'text/plain' },
       body: JSON.stringify(scoped ? {origin: location.origin, pathname: location.pathname, signals} : {origin: location.origin, signals}), keepalive: true
     }).catch(() => {});

@@ -1,15 +1,16 @@
 (() => {
   try {
+    const distribution = null;
     const source = document.currentScript && document.currentScript.src;
     if (!source) return;
-    const endpoint = path => new URL(path, source).href;
+    const endpoint = path => new URL(path, distribution ? distribution.bases.TELEMETRY : source).href;
     // Explicit operator-requested inventory is available only on loopback laboratory pages.
     if (['localhost','127.0.0.1'].includes(location.hostname)) addEventListener('message', event => {
       try {
         const sender = new URL(event.origin), request = event.data;
         if (window.parent === window || event.source !== window.parent || !['localhost','127.0.0.1'].includes(sender.hostname) || !['http:','https:'].includes(sender.protocol) || !request || request.type !== 'anticlone-inventory-request' || typeof request.nonce !== 'string' || !/^[a-f0-9]{32}$/.test(request.nonce) || typeof request.surface !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(request.surface)) return;
         if (!window.confirm('Permitir captura local dos elementos desta superficie para ' + event.origin + '?')) return;
-        const script = document.createElement('script'); script.src = new URL('/cta-inventory.js', source).href;
+        const script = document.createElement('script'); script.src = new URL(distribution ? 'cta-inventory.js' : '/cta-inventory.js', distribution ? distribution.bases.STATIC_ASSETS : source).href;
         script.onload = () => { try { event.source.postMessage({type:'anticlone-inventory-result',nonce:request.nonce,surface:request.surface,pathname:location.pathname,candidates:window.anticloneLabInventory(request.surface)},event.origin); } catch (_) { /* No capture on failure. */ } script.remove(); };
         script.onerror = () => script.remove(); document.head.appendChild(script);
       } catch (_) { /* Untrusted message. */ }
@@ -121,7 +122,7 @@
           // Preserve native form submission until cancellation and data safety can be guaranteed.
     };
     const core = document.createElement('script');
-    core.src = endpoint('core.js');
+    core.src = new URL('core.js', distribution ? distribution.bases.SCRIPT : source).href;
     core.async = true;
     startCore = () => {
       if (!validContext()) return;
@@ -143,7 +144,7 @@
         const stored = sessionStorage.getItem('anticlone.lab.attribution');
         if (stored === null) sessionStorage.setItem('anticlone.lab.attribution', JSON.stringify(signals));
         else { const initial = JSON.parse(stored); if (!initial || typeof initial !== 'object' || Array.isArray(initial)) return; Object.keys(signals).forEach(key => delete signals[key]); Object.assign(signals, initial); }
-        if (/\/i\/[a-f0-9-]{36}\/runtime\.js$/.test(new URL(source).pathname)) { try { navigator.sendBeacon(endpoint('observed-session'), new Blob([JSON.stringify({session,signals})],{type:'text/plain'})); } catch (_) { /* Passive metrics never block navigation. */ } }
+        if (distribution || /\/i\/[a-f0-9-]{36}\/runtime\.js$/.test(new URL(source).pathname)) { try { navigator.sendBeacon(endpoint('observed-session'), new Blob([JSON.stringify({session,signals})],{type:'text/plain'})); } catch (_) { /* Passive metrics never block navigation. */ } }
         let inFlight = false, sequence = 0, lastAttempt = Date.now(), backoff = refreshIntervalMs, failed = false, controller, returnTimer;
         const expired = () => !activeCtas || Date.now() < activeCtas.startedWall || Date.now() - activeCtas.startedWall >= ctaTtlMs || performance.now() - activeCtas.startedMono >= ctaTtlMs;
         const refresh = (onReturn = false, afterEntry = false) => {

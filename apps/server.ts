@@ -1,3 +1,5 @@
+import { distributionGateway } from './distribution-gateway.js';
+import { runtimeLayerObservations, scopedCorrelationOrigin } from './runtime-layer-observations.js';
 import { observedSessionGateway } from './observed-session-gateway.js';
 import { withAttribution } from './attribution.js';
 import { authorizedHosts, collectInfrastructure, realResolver } from './infrastructure-dns.js';
@@ -68,12 +70,13 @@ const core = readFileSync('runtime/core.js');
 const inventoryScript = readFileSync('runtime/cta-inventory.js');
 const fallback = readFileSync('runtime/fallback.js');
 const maintainProjects = projectMaintenance(pool,process.env,project);
+const layerObservations=runtimeLayerObservations(pool,process.env);
 const scoped = scopedGateway(pool, {'runtime.js':bootstrap,'core.js':core,'fallback.js':fallback},async(id,page,origin,source)=>{
   const key='scoped_'+randomUUID();
   if (id===project) claimPending.add(key);
   try { const ok=await maintainProjects.collect(id,page,origin,source); if (id===project) observeFailure('installation_claim',!ok); return ok; }
   finally { if (id===project) claimPending.delete(key); }
-});
+},layerObservations);
 let windowStart = Date.now(), count = 0;
 let decisionWindowStart = Date.now(), decisionCount = 0;
 let refreshWindowStart = Date.now(), refreshCount = 0;
@@ -148,10 +151,12 @@ async function withLegacyEligibility<T>(action: () => Promise<T>, reserve=true):
 const handleObservedSession=observedSessionGateway(pool);
 const handleCheckout = checkoutWebhook(pool,activeProject,project ? process.env : {...process.env,CHECKOUT_WEBHOOK_SECRET:undefined});
 const handleProjectCheckout = projectCheckoutWebhooks(pool,process.env);
+const distributed = distributionGateway(pool, {'runtime.js':bootstrap,'core.js':core,'fallback.js':fallback,'cta-inventory.js':inventoryScript},(req,res)=>{if (!handleObservedSession(req,res) && !scoped(req,res)) res.writeHead(404).end();},layerObservations);
 const server = http.createServer((req, res) => {
   if (!boundary(req, res)) return;
   if (handleProjectCheckout(req,res)) return;
   if (handleObservedSession(req,res)) return;
+  if (distributed(req,res)) return;
   if (scoped(req,res)) return;
   if (!project && req.url !== '/healthz') { res.writeHead(404).end(); return; }
   if (handleCheckout(req,res)) return;
@@ -305,7 +310,7 @@ async function maintenance() {
   busy = true;
   try {
     const active=await operationallyEligible(pool,activeProject);
-    const temporalOrigin = !mode.pilot && optional.canaryDegradation.state !== 'NOT_INSTALLED' ? controlledOrigin : undefined;
+    const temporalOrigin = !mode.pilot && optional.canaryDegradation.state !== 'NOT_INSTALLED' ? controlledOrigin ?? await scopedCorrelationOrigin(pool,activeProject,process.env) : undefined;
     await degradationTask('maintenance', () => maintainDegradation(pool, activeProject, temporalOrigin, optional.canaryDegradation.state !== 'NOT_INSTALLED'));
     try {
       await cleanup(pool,activeProject);

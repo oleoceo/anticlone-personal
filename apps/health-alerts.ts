@@ -66,7 +66,7 @@ async function transition(client: PoolClient, project: string, kind: 'INACTIVE'|
 
 // A canary request with a matching, unauthenticated Referer is an activity
 // claim only. It does not establish installation integrity or visitor identity.
-export async function recordInstallationActivity(db: Pool, project: string, origin: string) {
+export async function recordInstallationActivity(db: Pick<Pool,'query'>, project: string, origin: string) {
   await db.query(`UPDATE installation_last_signal l SET last_activity_at=clock_timestamp()
     FROM installations i JOIN projects p ON p.id=i.project_id
     WHERE l.project_id=$1 AND i.project_id=l.project_id AND i.enabled AND i.origin=$2 AND p.origin=i.origin`,[project,origin]);

@@ -9,6 +9,7 @@ import { OperationalObservations } from './operational-observations.js';
 import { invalidateInactivity, evaluateInactivity, deliverHealth, maintainHealthHistory, reconcileOperationalEpisode, recoverOperationalSource } from './health-alerts.js';
 import { authorizedHosts, realResolver, collectInfrastructure } from './infrastructure-dns.js';
 import { smtpProvider } from './smtp-provider.js';
+import { scopedCorrelationOrigin } from './runtime-layer-observations.js';
 
 // One serialized sweep, keyset batches, independent failure/backoff state per project.
 // Paused projects retain cleanup, but cannot collect or reconcile operations.
@@ -50,7 +51,7 @@ export function projectMaintenance(db: Pool, env: NodeJS.ProcessEnv, exclude?: s
             const state=await getState(id);
             const {optional,failures}=state;
             const active=await operationallyEligible(db,id);
-            await optional.degradation.run('maintenance',()=>maintainDegradation(db,id,undefined,optional.canaryDegradation.state!=='NOT_INSTALLED'));
+            await optional.degradation.run('maintenance',async()=>maintainDegradation(db,id,await scopedCorrelationOrigin(db,id,env),optional.canaryDegradation.state!=='NOT_INSTALLED'));
             try { await cleanup(db,id); if (active) await deliverOne(db,id,smtp ?? Number(env.SMTP_PORT)); failures.observe('maintenance',false); }
             catch { failures.observe('maintenance',true,'UNKNOWN'); }
             if (active) {
