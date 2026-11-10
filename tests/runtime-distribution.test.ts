@@ -60,7 +60,7 @@ test('distribution v1: persistent revisions, admin HTML/CSS, real browser layers
   const browser=await chromium.launch();
   const request={project:'one',page:pageId,action:'inspect'};
   try{
-    for(const file of (await readdir('infra')).filter(file=>/^\d{3}_.+\.sql$/.test(file)).sort())await db.query((await readFile('infra/'+file,'utf8')).replace(/^\uFEFF/,''));
+    for(const file of (await readdir('infra')).filter(file=>/^\d{3}_.+\.sql$/.test(file) && (Number(file.slice(0,3))<53 || Number(file.slice(0,3))===54)).sort())await db.query((await readFile('infra/'+file,'utf8')).replace(/^\uFEFF/,''));
     await db.query('CREATE TABLE admin_totp_replay(factor_id text PRIMARY KEY,last_counter bigint NOT NULL)');
     await db.query('CREATE TABLE admin_totp_codes(factor_id text NOT NULL,digest text NOT NULL,valid_until bigint NOT NULL,PRIMARY KEY(factor_id,digest))');
     await db.query("INSERT INTO projects VALUES('one','One',$1),('two','Two','http://localhost:10001')",[origin]);

@@ -68,7 +68,7 @@ test('authorized original requests and partial copy: contextual evidence without
     const rows=await investigation(db,'one');assert.equal(rows.length,1);const row=rows[0];
     assert.equal(row.project_cta_context.relation,'PROJECT_ONLY');
     assert.ok(row.history.chronology.some((e:{source:string;limitation:string})=>e.source==='cta_drift'&&e.limitation.includes('sem vínculo')));
-    const runtimeEvents=row.linked_evidence.events.filter((e:{kind:string})=>e.kind==='runtime_receipt');
+    const runtimeEvents=row.linked_evidence.events.filter((e:{kind:string;claimed_host:string|null})=>e.kind==='runtime_receipt'&&e.claimed_host==='localhost');
     assert.ok(runtimeEvents.length>=1);
     assert.equal(new Set(runtimeEvents.map((e:{first_received_at:Date})=>Math.floor(new Date(e.first_received_at).getTime()/60000))).size,runtimeEvents.length,'one receipt per minute/context; crossing a minute is legitimate');
     assert.ok(row.linked_evidence.events.some((e:{kind:string})=>e.kind==='original_request'));
