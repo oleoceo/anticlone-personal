@@ -12,6 +12,7 @@ import { Conflict, getNotificationSettings, saveNotificationSettings, setNotific
 import { approveCommercial, importInventory, selectObservation, SelectionConflict } from './cta-inventory.js';
 import { disableInstallation, enableInstallation, installationDiagnostic, InstallationOriginConflict } from './installation.js';
 import { investigation } from './investigation.js';
+import {receiptHistory} from './investigation-receipts.js';
 import { checkoutMetrics } from './checkout-webhook.js';
 import { classifyIncident, IncidentConflict } from './incident-triage.js';
 import { protectionAdmin } from './protection-admin.js';
@@ -56,7 +57,7 @@ export function handleAdminUi(req: IncomingMessage, res: ServerResponse, db: Poo
     }
     res.writeHead(404).end(); return false;
   }
-  if (req.method !== 'POST' || !['/admin/ui/operational','/admin/ui/distribution','/admin/ui/observed-metrics','/admin/ui/pages','/admin/ui/checkout-metrics','/admin/ui/protection','/admin/ui/incidents','/admin/ui/incident-status','/admin/ui/login','/admin/ui/logout','/admin/ui/settings','/admin/ui/preference','/admin/ui/cta-inventory','/admin/ui/cta-import','/admin/ui/cta-selection','/admin/ui/cta-commercial','/admin/ui/installation','/admin/ui/installation-enable','/admin/ui/installation-disable'].includes(req.url ?? '')) { res.writeHead(404).end(); return false; }
+  if (req.method !== 'POST' || !['/admin/ui/receipt-history','/admin/ui/operational','/admin/ui/distribution','/admin/ui/observed-metrics','/admin/ui/pages','/admin/ui/checkout-metrics','/admin/ui/protection','/admin/ui/incidents','/admin/ui/incident-status','/admin/ui/login','/admin/ui/logout','/admin/ui/settings','/admin/ui/preference','/admin/ui/cta-inventory','/admin/ui/cta-import','/admin/ui/cta-selection','/admin/ui/cta-commercial','/admin/ui/installation','/admin/ui/installation-enable','/admin/ui/installation-disable'].includes(req.url ?? '')) { res.writeHead(404).end(); return false; }
   if (req.headers.origin !== origin || site !== 'same-origin' || req.headers['content-type'] !== 'application/json') { res.writeHead(403).end(); return false; }
   const expected = login ? cookie('admin_login_csrf') : valid ? session.csrf : undefined;
   if (!expected || !/^[a-f0-9]{64}$/.test(expected) || req.headers['x-csrf-token'] !== expected) { res.writeHead(403).end(); return false; }
@@ -68,6 +69,12 @@ export function handleAdminUi(req: IncomingMessage, res: ServerResponse, db: Poo
   req.on('end',()=>{
     if(rejected) return;
     let body:unknown; try { body=JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { res.writeHead(400).end(); return; }
+    if(req.url==='/admin/ui/receipt-history'){
+      const value=body as Record<string,unknown>;
+      if(!value||typeof value!=='object'||Array.isArray(value)||typeof value.project!=='string'||!/^[a-zA-Z0-9_-]{1,64}$/.test(value.project)){res.writeHead(400).end();return;}
+      const {project,...cursor}=value;
+      void receiptHistory(db,project,cursor).then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error:unknown)=>res.writeHead(error instanceof TypeError?400:503).end());return;
+    }
     const operation=req.url === '/admin/ui/operational' ? operationalAdmin(db,body) : req.url === '/admin/ui/distribution' ? distributionAdmin(db,body) : req.url === '/admin/ui/observed-metrics' ? metricsAdmin(db,body) : req.url === '/admin/ui/pages' ? managePages(db,body) : req.url === '/admin/ui/checkout-metrics' ? checkoutSummary(db,body) : req.url === '/admin/ui/protection' ? protectionAdmin(db,body) : req.url === '/admin/ui/incidents' ? incidentList(db,body) : req.url === '/admin/ui/incident-status' ? classifyIncident(db,body) : req.url === '/admin/ui/settings' ? saveNotificationSettings(db,body) : req.url === '/admin/ui/preference' ? setNotificationPreference(db,body) : req.url === '/admin/ui/cta-inventory' ? inventory(db,body) : req.url === '/admin/ui/cta-import' ? importUiInventory(db,body) : req.url?.startsWith('/admin/ui/installation') ? installation(db,body,req.url) : req.url === '/admin/ui/cta-commercial' ? approveCommercial(db,body).then(()=>({state:'APPROVED'})) : selectObservation(db,body).then(()=>({state:'PENDING'}));
     void operation.then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error:unknown)=>res.writeHead(error instanceof ProjectPurgeConflict || error instanceof PageDeletionConflict || error instanceof DeletedProjectConflict || error instanceof LifecycleConflict || error instanceof PageConflict || error instanceof IncidentConflict || error instanceof Conflict || error instanceof SelectionConflict || error instanceof InstallationOriginConflict ? 409 : error instanceof DeletedProjectConflict ? 409 : error instanceof TypeError ? 400 : 503).end());
   }); return false;
@@ -226,6 +233,11 @@ incidentQuery.addEventListener('submit',async event=>{event.preventDefault(); co
  const summary=document.createElement('div'), chronology=document.createElement('ol'), technical=document.createElement('details'), technicalTitle=document.createElement('summary');
  const line=text=>{const p=document.createElement('p');p.textContent=text;summary.append(p)};
  line(row.history.coverage+' | '+row.history.scope);
+ if(row.linked_evidence){
+   line('Recibos: prévia de '+row.linked_evidence.events.length+' / '+row.linked_evidence.total+' registros contextuais; '+row.linked_evidence.omitted+' omitidos nesta prévia. Histórico do projeto não vincula visitantes.');
+   const more=document.createElement('button'),history=document.createElement('pre');more.type='button';more.textContent='Consultar histórico de recibos do projeto (100 por página)';let after;
+   more.addEventListener('click',async()=>{more.disabled=true;try{const data=await request('receipt-history',{project,...(after?{after}:{})});history.textContent=JSON.stringify(data,null,2);after=data.next_after;more.textContent=after?'Próximos 100 recibos do projeto':'Fim do histórico retido';more.disabled=!after}catch{history.textContent='Histórico indisponível; sessão ou cursor inválido.';more.disabled=false}});summary.append(more,history);
+ }
  line('Recebimentos disponíveis associados ao hostname alegado — primeiro: '+row.history.first_available_receipt_at+' | último: '+row.history.last_available_receipt_at+'. Cabeçalho: contatos Core/Fallback do incidente.');
  line('Fontes recebidas: '+(row.history.sources.join(', ')||'Sem dados')+'. Não representam fontes independentes.');
  line('Primeiro registro disponível DIRECT_UNKNOWN: '+(row.history.first_direct_unknown_at??'Sem dados')+' | PAID_ATTRIBUTED: '+(row.history.first_paid_at??'Sem dados'));

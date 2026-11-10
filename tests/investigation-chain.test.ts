@@ -49,6 +49,12 @@ test('authorized original requests and partial copy: contextual evidence without
     const headers={authorization:'Bearer '+token,'content-type':'application/json'};
     assert.equal((await fetch(endpoint,{method:'POST',headers,body:JSON.stringify({id:randomUUID(),page,resource:'HTML',source:'owned_access_log',authorized:true})})).status,200);
     assert.equal((await fetch(endpoint,{method:'POST',headers,body:'x'.repeat(2049)})).status,413);
+    const historyEndpoint=adminBase+'/admin/projects/one/investigation-receipts';
+    assert.equal((await fetch(historyEndpoint)).status,401);
+    assert.equal((await fetch(historyEndpoint,{headers:{...headers,origin:'https://untrusted.test'}})).status,403);
+    for(const suffix of ['?after=-1','?after=1&after=2','?extra=1'])assert.equal((await fetch(historyEndpoint+suffix,{headers})).status,400);
+    assert.equal((await fetch(historyEndpoint,{headers})).status,200);
+    assert.equal((await fetch(adminBase+'/admin/ui/receipt-history',{method:'POST',headers,body:'{}'})).status,403);
     const tab=await browser.newPage();await tab.goto(origin);await Promise.all(imports);
     assert.equal((await db.query('SELECT count(*)::int n FROM incidents')).rows[0].n,0);
     const response=tab.waitForResponse(r=>r.url().endsWith('/observe/fallback'));await tab.goto(copy);await response;

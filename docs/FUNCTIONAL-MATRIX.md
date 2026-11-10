@@ -1,6 +1,6 @@
 # Matriz de Cobertura Funcional — AntiClone Personal
 
-Complemento investigativo PR #65: recibos opcionais 054 e importação administrativa minimizada ligam contextos de LP/instalação/alias, sem vincular visitantes. F11/F13/F14 continuam PARCIAIS; avaliação contextual UNCERTAIN, D05 preservada. F08 BLOCKED por falta de isolamento verificável; F44/F45 conservam limitações. Contrato em INVESTIGATION-CHAIN.md; testes e CI do SHA final no PR, sem promoção antecipada a V.
+Complemento investigativo PR #65: recibos opcionais 054/055 e importação administrativa minimizada ligam contextos de LP/instalação/alias, sem vincular visitantes; accessed_at declarado separado de imported_at e prévias com histórico paginado. F11/F13/F14 continuam PARCIAIS; avaliação contextual UNCERTAIN, D05 preservada. F08 BLOCKED por falta de isolamento verificável; F44/F45 conservam limitações. Contrato em INVESTIGATION-CHAIN.md; testes e CI do SHA final no PR, sem promoção antecipada a V.
 
 Recorte F01/F26/F36/F45: pausa integrada a manutencao multiprojeto/legada e despachos reais; fila SUSPENDED/REVIEW_REQUIRED, sem replay automatico. Prova PostgreSQL/SMTP A-J em tests/project-pause-delivery.test.ts, politica e limites em PROJECT-PAUSE-NOTIFICATIONS.md. Isto nao conclui as capacidades integrais da matriz.
 

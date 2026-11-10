@@ -1,6 +1,6 @@
 import { DeletedProjectConflict } from './admin-project-write.js';
 import { investigation } from './investigation.js';
-import {importOriginalRequest} from './investigation-receipts.js';
+import {importOriginalRequest,receiptHistory} from './investigation-receipts.js';
 import { checkoutMetrics } from './checkout-webhook.js';
 import { classifyIncident, IncidentConflict } from './incident-triage.js';
 import { TOTP, Secret } from 'otpauth';
@@ -102,6 +102,12 @@ export function createAdminServer(passwordRecord: string, totpSecret: string, db
         });return;
       }
       const investigationPath = /^\/admin\/projects\/([a-zA-Z0-9_-]{1,64})\/investigation$/.exec(req.url ?? '');
+      const receiptPath=/^\/admin\/projects\/([a-zA-Z0-9_-]{1,64})\/investigation-receipts(?:\?([^#]{0,200}))?$/.exec(req.url??'');
+      if(req.method==='GET'&&receiptPath){
+        const params=new URLSearchParams(receiptPath[2]);
+        if([...params.keys()].length!==new Set(params.keys()).size){res.writeHead(400).end();return;}
+        void receiptHistory(db,receiptPath[1],Object.fromEntries(params)).then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error:unknown)=>res.writeHead(error instanceof TypeError?400:503).end());return;
+      }
       if (req.method === 'GET' && investigationPath) {
         void investigation(db, investigationPath[1]).then(result => res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify(result))).catch(() => res.writeHead(503).end()); return;
       }

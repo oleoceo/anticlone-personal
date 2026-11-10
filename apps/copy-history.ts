@@ -2,7 +2,7 @@ type Time = string | Date;
 type Entry = {at: string; precision: 'instant' | 'day'; state: string; source: string; description: string; limitation: string};
 type Input = {
   project_cta_context?:{events:{point_id:string;created_at:Time}[]};
-  linked_evidence?:{events:{id:string;page_id:string;installation_id:string;kind:string;source:string;resource:string;alias:string|null;claimed_host:string|null;first_received_at:Time}[]};
+  linked_evidence?:{omitted?:number;events:{id:string;page_id:string;installation_id:string;kind:string;source:string;resource:string;alias:string|null;claimed_host:string|null;first_received_at:Time;accessed_at?:Time|null}[]};
   first_observed_at: Time; last_observed_at: Time;
   observation_sources: {source:string; day:string}[];
   browser_claims: {source:string; kind:string; traffic_class:string; observed_at:Time}[];
@@ -21,10 +21,12 @@ const instant = (value:Time) => new Date(value).toISOString();
 export function copyHistory(row:Input) {
   const entries:Entry[]=[];
   const add=(at:Time, state:string, source:string, description:string, limitation:string) => entries.push({at:instant(at),precision:'instant',state,source,description,limitation});
+  for(const event of row.linked_evidence?.events??[])if(event.kind==='original_request'&&event.accessed_at&&event.accessed_at!=='UNKNOWN')add(event.accessed_at,'Declarado pela fonte',event.source,'Acesso ao original declarado no log | LP '+event.page_id,
+    'accessed_at da fonte autorizada, não verificado independentemente. imported_at: '+instant(event.first_received_at)+'. Não prova download completo, clonagem ou identidade. Prévia limitada; histórico completo paginado.');
   for(const event of row.project_cta_context?.events??[])add(event.created_at,'Contexto do projeto','cta_drift','CTA entrou em revisão: '+event.point_id,'Alerta de drift no mesmo projeto; sem vínculo demonstrado com este hostname, visitante ou incidente. Não comprova troca de checkout pelo operador.');
   for(const event of row.linked_evidence?.events??[]) add(event.first_received_at,event.kind==='original_request'?'Atestado administrativamente':'Recebido',event.source,
     (event.kind==='original_request'?'Importação de registro autorizado do original':event.claimed_host?'Contato recebido com hostname alegado':'Recurso da instalação; hostname desconhecido')+' | LP '+event.page_id+' | instalação '+event.installation_id+' | recurso '+event.resource+(event.alias?' | alias '+event.alias:''),
-    event.kind==='original_request'?'Horário da importação, acesso original em horário desconhecido. Relação apenas pela LP; não demonstra download, clonagem ou vínculo entre visitantes.':'Hostname é alegado. Recebimento não prova execução; LP/alias públicos não autenticam operador. Deduplicação por minuto, retenção de 7 dias e capacidade podem omitir contatos.');
+    event.kind==='original_request'?'imported_at do servidor AntiClone; accessed_at: '+(event.accessed_at&&event.accessed_at!=='UNKNOWN'?instant(event.accessed_at)+' (declarado pela fonte, não verificado)':'UNKNOWN')+'. Relação apenas pela LP; não demonstra download, clonagem ou vínculo entre visitantes.':'Hostname é alegado. Recebimento não prova execução; LP/alias públicos não autenticam operador. Deduplicação por minuto, retenção de 7 dias e capacidade podem omitir contatos.');
   add(row.first_observed_at,'Observado','gateway','Primeiro contato registrado no incidente','Recebimento de alegação de hostname; não é data de publicação, download ou identidade do operador. Canários isolados não atualizam este contato.');
   if(instant(row.last_observed_at)!==instant(row.first_observed_at)) add(row.last_observed_at,'Observado','gateway','Último contato registrado no incidente','Core/Fallback; pode haver recebimentos intermediários não preservados pela deduplicação diária.');
   for(const item of row.observation_sources) entries.push({at:String(item.day).slice(0,10),precision:'day',state:'Observado',source:item.source,description:'Fonte recebida neste dia UTC',limitation:'Presença diária, sem horário ou ordem entre fontes no mesmo dia. Core e Fallback podem vir do mesmo navegador.'});
