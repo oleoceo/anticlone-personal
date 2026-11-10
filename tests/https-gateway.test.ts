@@ -1,3 +1,4 @@
+import {distributionAdmin} from '../apps/runtime-distribution.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
@@ -52,8 +53,10 @@ test('HTTPS Nginx + PostgreSQL + Chromium: install, spoofing, limits, outage and
   const checkoutSecret='cd'.repeat(32);
   const scopedInstallation=crypto.randomUUID();
   await db.query("INSERT INTO installations(project_id,id,origin) VALUES('https',$1,'https://owner.test')",[scopedInstallation]);
-  for(const file of ['037_protected_pages','047_observed_metrics'])await db.query(await readFile(`infra/${file}.sql`,'utf8'));
+  for(const file of ['037_protected_pages','042_page_installation_signals','047_observed_metrics','051_runtime_distribution'])await db.query(await readFile(`infra/${file}.sql`,'utf8'));
 
+  const scopedPage=(await db.query('SELECT id FROM protected_pages WHERE installation_id=$1',[scopedInstallation])).rows[0].id;
+  const distributed=await distributionAdmin(db,{action:'publish',project:'https',page:scopedPage},{RUNTIME_PUBLIC_ORIGIN:'https://gateway.test'});assert.ok(distributed.distribution);assert.ok(distributed.snippets);
   await writeFile(gatewayEnv,Object.entries({PGOPTIONS:options,DATABASE_URL:process.env.TEST_DATABASE_URL,PROJECT_ID:'https',SMTP_PORT:'1',PORT:'3000',GATEWAY_MODE:'PILOT_OBSERVE',GATEWAY_TRANSPORT:'HTTPS_PROXY',PUBLIC_GATEWAY_HOST:'gateway.test',PILOT_ORIGINS:'["https://owner.test"]',CHECKOUT_WEBHOOK_SECRET:checkoutSecret}).map(([key,value])=>`${key}=${value}`).join('\n'),{mode:0o600});
   execFileSync('openssl',['req','-x509','-newkey','rsa:2048','-nodes','-keyout',join(dir,'privkey.pem'),'-out',join(dir,'fullchain.pem'),'-days','1','-subj','/CN=gateway.test','-addext','subjectAltName=DNS:gateway.test'],{stdio:'ignore'});
   execFileSync(process.execPath,['dist/apps/https-config.js',join(dir,'nginx.conf')],{env:{...process.env,PUBLIC_GATEWAY_HOST:'gateway.test'},stdio:'pipe'});
@@ -124,6 +127,12 @@ test('HTTPS Nginx + PostgreSQL + Chromium: install, spoofing, limits, outage and
     await page.goto('https://owner.test/');assert.equal((await scopedSession).status(),204);assert.deepEqual(await(await scopedDecision).json(),{action:'OBSERVE_ONLY'});
     assert.equal((await db.query("SELECT count(*)::int n FROM observed_action_facts WHERE project_id='https' AND action='SESSION_OBSERVED'")).rows[0].n,1);
     await page.getByText('Native scoped',{exact:true}).click();assert.equal(new URL(page.url()).pathname,'/checkout');
+    await new Promise(resolve=>setTimeout(resolve,3000));
+    await page.route('https://owner.test/**',route=>route.fulfill({contentType:'text/html',body:'<style>'+distributed.snippets!.css+'</style><div class="anticlone-canary">Owned</div>'+distributed.snippets!.html}));
+    const aliasLayers=Promise.all(['observe','observe/fallback','html.gif','css.gif'].map(path=>page.waitForResponse(response=>response.url().startsWith('https://gateway.test/d/v1/')&&response.url().endsWith('/'+path)&&response.ok())));
+    await page.goto('https://owner.test/');await aliasLayers;
+    await new Promise(resolve=>setTimeout(resolve,3000));
+    assert.equal((await api.get(distributed.distribution.bases.TELEMETRY+'runtime.js')).status(),404);
     const statuses = await Promise.all(Array.from({length:35},async()=> (await api.get('https://gateway.test/runtime.js')).status()));
     assert.ok(statuses.includes(429));
     // Let the proxy burst refill, then verify an actual upstream outage.

@@ -1,3 +1,4 @@
+import {distributionAdmin, type Distribution} from '../apps/runtime-distribution.js';
 import {importInventory,reviewPoint} from '../apps/cta-inventory.js';
 import {SMTPServer} from 'smtp-server';
 import {deliverOne} from '../apps/alerts.js';
@@ -17,7 +18,7 @@ import { publishCtaPolicy } from '../apps/cta-policy.js';
 import { TOTP, Secret } from 'otpauth';
 import { investigation } from '../apps/investigation.js';
 
-test('scoped browser observations isolate projects on one origin and preserve copied installation', {timeout:60000}, async () => {
+for (const distributionMode of [false,true]) test('scoped browser observations isolate projects on one origin and preserve copied installation; distribution='+distributionMode, {timeout:60000}, async () => {
   assert.ok(process.env.TEST_DATABASE_URL);
   const root=new Pool({connectionString:process.env.TEST_DATABASE_URL});
   const schema='scoped_'+randomUUID().replaceAll('-','');
@@ -26,11 +27,14 @@ test('scoped browser observations isolate projects on one origin and preserve co
   const db=new Pool({connectionString:process.env.TEST_DATABASE_URL,options});
   const health=randomUUID(), finance=randomUUID(), entryOne=randomUUID(), entryTwo=randomUUID();
   const pageOne=randomUUID(), pageTwo=randomUUID();
+  const distributions=new Map<string,Distribution>();
+  const scriptBase=(id:string)=>distributions.get(id)?.bases.SCRIPT ?? 'http://127.0.0.1:3000/i/'+id+'/';
+  const telemetryBase=(id:string)=>distributions.get(id)?.bases.TELEMETRY ?? 'http://127.0.0.1:3000/i/'+id+'/';
   const fixture=createServer((req,res) => {
     const path=req.url?.split('?')[0];
     if(path==='/shared-checkout'){res.writeHead(200,{'content-type':'text/html'}).end('<h1>Checkout destination</h1>');return;}
     const id=path==='/entry-one' ? entryOne : path==='/entry-two' ? entryTwo : path==='/financas' ? finance : health;
-    res.writeHead(200,{'content-type':'text/html'}).end(`<div data-anticlone-surface="main"><a data-anticlone-point="shared01" href="/checkout">Checkout</a><a data-anticlone-point="second01" href="/checkout-two">Second offer</a><a data-anticlone-point="whats001" href="/wa-synthetic">Synthetic WhatsApp</a></div><script src="http://127.0.0.1:3000/i/${id}/runtime.js"></script><script src="http://127.0.0.1:3000/i/${id}/fallback.js"></script>`);
+    res.writeHead(200,{'content-type':'text/html'}).end(`<div data-anticlone-surface="main"><a data-anticlone-point="shared01" href="/checkout">Checkout</a><a data-anticlone-point="second01" href="/checkout-two">Second offer</a><a data-anticlone-point="whats001" href="/wa-synthetic">Synthetic WhatsApp</a></div><script src="${scriptBase(id)}runtime.js"></script><script src="${scriptBase(id)}fallback.js"></script>`);
   }).listen(0,'127.0.0.1');
   await once(fixture,'listening');
   const address=fixture.address(); assert.ok(address && typeof address!=='string');
@@ -53,6 +57,7 @@ test('scoped browser observations isolate projects on one origin and preserve co
     await db.query(await readFile('infra/048_observed_receipts.sql','utf8'));
     await db.query(await readFile('infra/033_clone_delivery_attempts.sql','utf8'));
     await db.query(await readFile('infra/049_isolated_runtime_drift.sql','utf8'));
+    await db.query(await readFile('infra/051_runtime_distribution.sql','utf8'));
     await db.query((await readFile('infra/017_notification_settings.sql','utf8')).replace(/^\uFEFF/,''));
     for(const file of ['030_infrastructure_dns','031_investigation_timeline']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
     await db.query(await readFile('infra/015_cta_alert_deliveries.sql','utf8'));
@@ -93,6 +98,10 @@ test('scoped browser observations isolate projects on one origin and preserve co
     const financeState=await db.query('SELECT config_generation FROM protected_pages WHERE id=$1',[fp]);
     await managePages(db,{action:'approve',project:'finance',page:fp,generation:'1',configGeneration:financeState.rows[0].config_generation,entryVersion:null,ctaVersions:[1]});
     const financeSnapshot=await db.query(`SELECT p.url_generation,p.config_generation,p.url_review_required,b.surface,b.version,a.id AS approval FROM protected_pages p JOIN page_cta_policy_bindings b ON b.page_id=p.id AND b.project_id=p.project_id JOIN page_policy_approvals a ON a.page_id=p.id AND a.project_id=p.project_id WHERE p.id=$1`,[fp]);
+    if(distributionMode) for(const [project,pageId] of [['health',hp],['finance',fp],['health',pageOne],['health',pageTwo]]) {
+      const result=await distributionAdmin(db,{action:'publish',project,page:pageId},{RUNTIME_PUBLIC_ORIGIN:'http://127.0.0.1:3000'});
+      assert.ok(result.distribution);distributions.set(result.distribution.installation,result.distribution);
+    }
     const env: NodeJS.ProcessEnv={...process.env,PGOPTIONS:options,DATABASE_URL:process.env.TEST_DATABASE_URL,SMTP_PORT:String(smtpAddress.port),PORT:'3000',SCOPED_LAB_INSTALLATIONS:[health,entryOne,entryTwo].join(','),ATTRIBUTION_ALLOWLIST:JSON.stringify({health:{[pageOne]:{[shared]:{utm_source:['ads'],utm_campaign:['one']}},[pageTwo]:{[shared]:{utm_source:['ads'],utm_campaign:['two']}},[hp]:{[origin+'/health-checkout?utm_source=offer']:{utm_source:['ads'],utm_campaign:['spring']}}},finance:{[fp]:{[origin+'/finance-checkout']:{utm_campaign:['finance']}}}}),SCOPED_LAB_ORIGIN:`http://localhost:${address.port}`};
     delete env.PROJECT_ID; delete env.ALLOWED_ORIGIN;
     child=spawn(process.execPath,['dist/apps/server.js'],{env,stdio:'ignore'});
@@ -126,10 +135,10 @@ test('scoped browser observations isolate projects on one origin and preserve co
       await controlled.waitForURL(shared);
       await controlled.close();
     }
-    const ineligible=await fetch(`http://127.0.0.1:3000/i/${entryOne}/entry-decision`,{method:'POST',headers:{origin,'content-type':'text/plain'},body:JSON.stringify({pathname:'/entry-one',session:'a'.repeat(32),signals:{}})});
+    const ineligible=await fetch(`${telemetryBase(entryOne)}entry-decision`,{method:'POST',headers:{origin,'content-type':'text/plain'},body:JSON.stringify({pathname:'/entry-one',session:'a'.repeat(32),signals:{}})});
     assert.deepEqual(await ineligible.json(),{action:'OBSERVE_ONLY'});
     const trafficCases=[{}, {medium:'cpc'}, {referrerHost:'google.com'}, {referrerHost:'publisher.test'}];
-    const entryRequest=async(id:string,signals:object,session:string)=>await(await fetch(`http://127.0.0.1:3000/i/${id}/entry-decision`,{method:'POST',headers:{origin:`http://localhost:${address.port}`,'content-type':'text/plain'},body:JSON.stringify({pathname:id===entryOne?'/entry-one':'/entry-two',signals,session})})).json() as {action:string;version?:number;observationReceipt?:string};
+    const entryRequest=async(id:string,signals:object,session:string)=>await(await fetch(`${telemetryBase(id)}entry-decision`,{method:'POST',headers:{origin:`http://localhost:${address.port}`,'content-type':'text/plain'},body:JSON.stringify({pathname:id===entryOne?'/entry-one':'/entry-two',signals,session})})).json() as {action:string;version?:number;observationReceipt?:string};
     for(const signals of trafficCases)assert.equal((await entryRequest(entryTwo,signals,'b'.repeat(32))).action,'PAGE_REDIRECT');
     for(const [version,percentage] of [[2,0],[3,50]]){
       const configured={PAID_ATTRIBUTED:percentage,ORGANIC:percentage,REFERRAL:percentage,DIRECT_UNKNOWN:percentage};
@@ -187,7 +196,7 @@ test('scoped browser observations isolate projects on one origin and preserve co
     assert.equal((await entryRequest(entryTwo,{},'b'.repeat(32))).version,1);
 
 
-    const decide=(id:string,source:string) => fetch(`http://127.0.0.1:3000/i/${id}/entry-decision`,{method:'POST',headers:{origin:source,'content-type':'text/plain'},body:JSON.stringify({pathname:'/outro-slug',session:'a'.repeat(32),signals:{}})});
+    const decide=(id:string,source:string) => fetch(`${telemetryBase(id)}entry-decision`,{method:'POST',headers:{origin:source,'content-type':'text/plain'},body:JSON.stringify({pathname:'/outro-slug',session:'a'.repeat(32),signals:{}})});
     const decision=await decide(health,`http://localhost:${address.port}`);
     const selected=await decision.json() as {action:string;pathname:string;mappings:{marker:string;destination:string}[]};
     assert.equal(selected.action,'REPLACE_CONVERSION'); assert.equal(selected.pathname,'/outro-slug');

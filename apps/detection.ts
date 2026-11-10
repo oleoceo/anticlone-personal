@@ -1,7 +1,7 @@
 import {retainObservedMetrics} from './observed-retention.js';
 import { notificationRetention } from './notification-lifecycle.js';
 import { tryRecordTimeline } from './investigation-timeline.js';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import { tryIntent } from './notification-intents.js';
 import { classifyTraffic } from './traffic.js';
 export function hostFromUrl(input: string): string {
@@ -73,17 +73,21 @@ export async function observe(pool: Pool, project: string, allowedOrigin: string
 
 // Referer is an unauthenticated claim; never create an incident or alert from a canary.
 export async function observeCanary(pool: Pool, project: string, referer: string | undefined, source: 'html_canary' | 'css_canary'): Promise<void> {
-  let host = '';
-  try { if (referer) host = hostFromUrl(referer); } catch { /* Unknown is not a fraud signal. */ }
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [project]);
-    await client.query(`INSERT INTO canary_observations(project_id,host,source,day)
-      SELECT $1,$2,$3,(now() AT TIME ZONE 'UTC')::date WHERE
-      (SELECT count(*) FROM canary_observations WHERE project_id=$1) < 1400
-      ON CONFLICT DO NOTHING`, [project, host, source]);
+    await recordCanaryClaim(client,project,referer,source);
     await client.query('COMMIT');
   } catch (error) { await client.query('ROLLBACK'); throw error; }
   finally { client.release(); }
+}
+
+// Reuse the caller's transaction and connection for installation-scoped collection.
+export async function recordCanaryClaim(client:PoolClient,project:string,referer:string|undefined,source:'html_canary'|'css_canary') {
+  let host='';
+  try {if(referer)host=hostFromUrl(referer);}catch { /* Unknown remains unknown. */ }
+  await client.query('SELECT pg_advisory_xact_lock(hashtext($1))',[project]);
+  await client.query(`INSERT INTO canary_observations(project_id,host,source,day)
+    SELECT $1,$2,$3,(now() AT TIME ZONE 'UTC')::date WHERE
+    (SELECT count(*) FROM canary_observations WHERE project_id=$1)<1400 ON CONFLICT DO NOTHING`,[project,host,source]);
 }

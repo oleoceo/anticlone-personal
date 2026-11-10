@@ -1,5 +1,9 @@
 - **Consolidacao pre-VPS validada em laboratorio:** codigo f0dd974; F42, fatos/recibos F29, premissas/estimativa F30 e painel integrados a PostgreSQL/Chromium/SMTP. Suite Linux HTTPS final: 98 PASS, 0 FAIL, 0 SKIP; lint/typecheck/build e 9 testes Python PASS. Revisao independente consolidada favoravel, incluindo retencao periodica, proxy scoped e fixture TTL atomica. Evidencias em docs/PRE-VPS-FUNCTIONAL-LAB.md. Receita comprovada/carregamento externo indisponiveis; LOW apenas LAB. Branch para revisao externa, sem merge/deploy.
 # STATUS — AntiClone Personal
+- **F07/F03 PARCIAIS — distribuição v1 após PR #63:** três papéis em um hostname, aliases persistidos/imutáveis por instalação/LP e revisão, HTML/CSS no painel; consulta sem rotação, Fallback independente e URLs anteriores preservadas. Contrato: docs/RUNTIME-DISTRIBUTION-CONTRACT.md; migration 051 somente laboratorial.
+- **Integração preservada:** handlers de Page Redirect/CTA/Stealth e investigação existentes; canários passivos atualizam F45 e correlação F44 scoped autorizada conserva UNKNOWN após reinício/perda, sem novo HIGH operacional.
+- **Provas locais:** Linux/PostgreSQL/Chromium/Nginx HTTPS, regressão integral 104 PASS/0 FAIL/0 SKIP e complemento TLS final 2/2 PASS; lint/typecheck/build e 9 testes Python PASS. Cenário legado+alias, instalação do painel, F44/F45, versões antigas e falha real de coleta exercitados.
+- **Revisão consolidada:** /root/distribution_review favorável; hash dos 17 arquivos dfa7a863043ae7b0e509b5080881055567e4eb188b2c7a425f7830fcc592f60d. PR da branch feat/runtime-distribution-contract exige CI verde do SHA final. Múltiplos hosts reais/proxy TLS e compatibilidade universal pendentes; sem merge/deploy/DNS/migration de produção/ativação real.
 - **F11/F12 investigação cronológica pré-VPS (PARCIAL):** resumo e timeline legível em Incidentes, fontes/tráfego declarados, DNS, degradação, lacunas e alertas; detalhes técnicos e triagem preservados. Projeção administrativa, sem nova coleta/migration ou vínculo automático com LP; Stealth #62 inalterado.
 - **Provas no código e1e0be6:** lint/typecheck/build, validação documental e 9 testes Python PASS; suíte Linux PostgreSQL/Chromium/HTTPS 101 PASS, 0 FAIL, 0 SKIP. Original/cópia, file:// sem hostname atribuível, SMTP, reinício, retenção e isolamento reproduzíveis; docs/COPY-INVESTIGATION.md registra comandos e hash do log.
 - **Revisão independente:** /root/copy_investigation_review aprovada em dce0dc8 e delta e1e0be6, sem achados remanescentes; estado SUSPENDED/REVIEW_REQUIRED corrigido com teste. Push/PR únicos para CI do SHA final e revisão do proprietário; sem merge/deploy/migration de produção ou mitigação em domínio real.
@@ -133,3 +137,12 @@ PR #59 - contrato multiprojeto (laboratorio):
 - Revisao independente /root/final_review e CI HTTPS do SHA final: parecer/resultados vinculados ao SHA na descricao do PR #59.
 - URLs duplas OBSERVE_ONLY; sinais agregados nao verificam nova URL: conferir script/requisicoes no navegador, remover antiga e reaprovar pelo painel.
 - Sem merge/deploy, mitigacao operacional ou ciclo pausa/arquivo/exclusao; transicao e limites em docs/MULTIPROJECT-TRANSITION.md.
+
+## PR #64 - CI local gratuita, opcao A do proprietario
+- Referencia 48a9541 equivale ao codigo4691f4c (dois commits somente docs); CI local Node22 completa:105PASS/0FAIL/0SKIP, exit0,450s.
+- Teste operacional existente ampliado: v2 + painel MFA/CSRF + publicacao/rotacao/autorizacao/suspensao + PAGE/CTA reais + aliases antigos/isolamento/fail-open; foco Nginx1/1PASS.
+- Nenhuma mudanca em apps/runtime/infra. D05-D15 e parecer independente anterior preservados; delta runner/teste revisado independentemente.
+- Runner scripts/local-ci.sh cria PostgreSQL16 descartavel, reproduz workflow, falha por erro de comando/log e registra SHA/versoes/comandos/duracoes/exit codes.
+- Resultado integral do HEAD e evidencias: test-results/pr64-local-ci/report.json, final/result.txt e steps.tsv; reproducao/limites em docs/LOCAL-CI.md.
+- F08 continua BLOCKED; GitHub Actions BLOCKED por cota/faturamento, sem fabricar verde ou repetir workflow. Gate local escolhido expressamente pelo dono.
+- Mesmo PR64 Draft para revisao humana. Sem merge/deploy/DNS publico/migrations de producao/ativacao real; nenhum custo/cobranca alterado.

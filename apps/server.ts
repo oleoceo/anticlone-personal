@@ -1,3 +1,5 @@
+import { distributionGateway } from './distribution-gateway.js';
+import { runtimeLayerObservations, scopedCorrelationOrigin } from './runtime-layer-observations.js';
 import { observedSessionGateway } from './observed-session-gateway.js';
 import { withAttribution } from './attribution.js';
 import { authorizedHosts, collectInfrastructure, realResolver } from './infrastructure-dns.js';
@@ -32,7 +34,7 @@ const cloneSmtp = smtpProvider(process.env);
 if (!connectionString || (project !== undefined && !/^[a-zA-Z0-9_-]{1,64}$/.test(project)) || !Number.isInteger(smtpPort) || smtpPort < 1 || smtpPort > 65535 || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('invalid local test configuration');
 const activeProject: string = project ?? '';
 // Multiproject observation is currently a laboratory-only checkpoint.
-if (!project && (process.env.GATEWAY_MODE === 'PILOT_OBSERVE' || process.env.GATEWAY_TRANSPORT || process.env.ALLOWED_ORIGIN || process.env.LAB_CONTROLLED_ORIGIN || process.env.LAB_CONTROLLED_RISK)) throw Error('multiproject pilot configuration unavailable');
+if (!project && process.env.GATEWAY_MODE!=='OPERATIONAL' && (process.env.GATEWAY_MODE === 'PILOT_OBSERVE' || process.env.GATEWAY_TRANSPORT || process.env.ALLOWED_ORIGIN || process.env.LAB_CONTROLLED_ORIGIN || process.env.LAB_CONTROLLED_RISK)) throw Error('multiproject pilot configuration unavailable');
 const pool = new Pool({ connectionString, max: 5, connectionTimeoutMillis: 2000, statement_timeout: 3000, query_timeout: 4000 });
 if (cloneSmtp) await pool.query('SELECT outbox_id,attempt,transport,started_at,finished_at,outcome FROM clone_delivery_attempts LIMIT 0');
 pool.on('error', () => process.stderr.write('database connection failed\n'));
@@ -47,7 +49,7 @@ await pool.query('SELECT project_id,host,day,level,evaluator_version,source,reas
 const projectRow = project ? await pool.query('SELECT origin FROM projects WHERE id=$1', [activeProject]) : null;
 if (project && projectRow?.rowCount !== 1) throw new Error('unknown project');
 const normalizedOrigin = projectRow ? configuredOrigin(projectRow.rows[0].origin) : 'http://localhost';
-const mode = project ? gatewayMode(process.env, normalizedOrigin) : {pilot:true,origins:[]};
+const mode = project || process.env.GATEWAY_MODE==='OPERATIONAL' ? gatewayMode(process.env, normalizedOrigin) : {pilot:true,origins:[]};
 let healthBaselineVersion = 1, healthBaselinePersisted = 0;
 const failures = new OperationalObservations();
 function observeFailure(source: string, failed: boolean, code?: string) {
@@ -68,12 +70,13 @@ const core = readFileSync('runtime/core.js');
 const inventoryScript = readFileSync('runtime/cta-inventory.js');
 const fallback = readFileSync('runtime/fallback.js');
 const maintainProjects = projectMaintenance(pool,process.env,project);
+const layerObservations=runtimeLayerObservations(pool,process.env);
 const scoped = scopedGateway(pool, {'runtime.js':bootstrap,'core.js':core,'fallback.js':fallback},async(id,page,origin,source)=>{
   const key='scoped_'+randomUUID();
   if (id===project) claimPending.add(key);
   try { const ok=await maintainProjects.collect(id,page,origin,source); if (id===project) observeFailure('installation_claim',!ok); return ok; }
   finally { if (id===project) claimPending.delete(key); }
-});
+},layerObservations);
 let windowStart = Date.now(), count = 0;
 let decisionWindowStart = Date.now(), decisionCount = 0;
 let refreshWindowStart = Date.now(), refreshCount = 0;
@@ -148,17 +151,19 @@ async function withLegacyEligibility<T>(action: () => Promise<T>, reserve=true):
 const handleObservedSession=observedSessionGateway(pool);
 const handleCheckout = checkoutWebhook(pool,activeProject,project ? process.env : {...process.env,CHECKOUT_WEBHOOK_SECRET:undefined});
 const handleProjectCheckout = projectCheckoutWebhooks(pool,process.env);
+const distributed = distributionGateway(pool, {'runtime.js':bootstrap,'core.js':core,'fallback.js':fallback,'cta-inventory.js':inventoryScript},(req,res)=>{if (!handleObservedSession(req,res) && !scoped(req,res)) res.writeHead(404).end();},layerObservations);
 const server = http.createServer((req, res) => {
   if (!boundary(req, res)) return;
   if (handleProjectCheckout(req,res)) return;
   if (handleObservedSession(req,res)) return;
+  if (distributed(req,res)) return;
   if (scoped(req,res)) return;
   if (!project && req.url !== '/healthz') { res.writeHead(404).end(); return; }
   if (handleCheckout(req,res)) return;
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Access-Control-Allow-Origin', '*'); res.setHeader('Cache-Control', 'no-store');
   if (req.method === 'GET' && req.url === '/healthz') {
-    void pool.query('SELECT 1').then(() => res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify({status:'ready', mode:mode.pilot ? 'PILOT_OBSERVE' : 'LAB', action:'OBSERVE_ONLY'}))).catch(() => res.writeHead(503).end()); return;
+    void pool.query('SELECT 1').then(() => res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify({status:'ready', mode:process.env.GATEWAY_MODE==='OPERATIONAL'?'OPERATIONAL':mode.pilot ? 'PILOT_OBSERVE' : 'LAB', action:process.env.GATEWAY_MODE==='OPERATIONAL'?'SCOPED_AUTHORIZATION_REQUIRED':'OBSERVE_ONLY'}))).catch(() => res.writeHead(503).end()); return;
   }
   if (req.method === 'GET' && (req.url === '/runtime.js' || req.url === '/core.js' || req.url === '/fallback.js' || req.url === '/cta-inventory.js')) {
     res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
@@ -305,7 +310,7 @@ async function maintenance() {
   busy = true;
   try {
     const active=await operationallyEligible(pool,activeProject);
-    const temporalOrigin = !mode.pilot && optional.canaryDegradation.state !== 'NOT_INSTALLED' ? controlledOrigin : undefined;
+    const temporalOrigin = !mode.pilot && optional.canaryDegradation.state !== 'NOT_INSTALLED' ? controlledOrigin ?? await scopedCorrelationOrigin(pool,activeProject,process.env) : undefined;
     await degradationTask('maintenance', () => maintainDegradation(pool, activeProject, temporalOrigin, optional.canaryDegradation.state !== 'NOT_INSTALLED'));
     try {
       await cleanup(pool,activeProject);

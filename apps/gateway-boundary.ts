@@ -6,7 +6,7 @@ export function gatewayBoundary(env: NodeJS.ProcessEnv) {
   const published = env.GATEWAY_TRANSPORT === 'HTTPS_PROXY';
   if (env.GATEWAY_TRANSPORT && !published) throw Error('invalid gateway transport');
   const host = env.PUBLIC_GATEWAY_HOST;
-  if (published && (env.GATEWAY_MODE !== 'PILOT_OBSERVE' || !host || host.length > 253 || !/^[a-z0-9]+(?:[.-][a-z0-9]+)+$/.test(host) || isIP(host))) throw Error('invalid HTTPS proxy configuration');
+  if (published && (!['PILOT_OBSERVE','OPERATIONAL'].includes(env.GATEWAY_MODE??'') || !host || host.length > 253 || !/^[a-z0-9]+(?:[.-][a-z0-9]+)+$/.test(host) || isIP(host))) throw Error('invalid HTTPS proxy configuration');
   if (!published && host) throw Error('public host requires HTTPS proxy');
   let start = Date.now(), total = 0;
   const clients = new Map<string, number>();

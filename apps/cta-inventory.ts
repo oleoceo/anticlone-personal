@@ -14,9 +14,6 @@ function object(value: unknown): Record<string, unknown> {
 function fields(value: unknown, keys: string): Record<string, unknown> {
   const data = object(value); if (Object.keys(data).sort().join(',') !== keys) throw Error('invalid fields'); return data;
 }
-function lab(origin: string) {
-  if (!['localhost','127.0.0.1'].includes(new URL(origin).hostname)) throw Error('laboratory only');
-}
 function observationUrl(value: unknown): string | null {
   if (value === null) return null;
   if (typeof value !== 'string' || value.length > 1024 || /[\u0000-\u0020\\]/.test(value)) throw Error('invalid observed URL');
@@ -60,7 +57,7 @@ export async function importInventory(db: Pool, project: string, body: unknown) 
     await client.query('BEGIN');
     await assertProjectAdministrativeWrite(client,project);
     const p = await client.query('SELECT origin FROM projects WHERE id=$1 FOR UPDATE',[project]);
-    if (!p.rowCount) throw Error('invalid project'); lab(p.rows[0].origin);
+    if (!p.rowCount) throw Error('invalid project'); configurationOrigin(p.rows[0].origin);
     await client.query("DELETE FROM cta_observations WHERE project_id=$1 AND observed_at < now() - interval '7 days'",[project]);
     await client.query('DELETE FROM cta_points p WHERE p.project_id=$1 AND NOT EXISTS (SELECT 1 FROM cta_observations o WHERE o.project_id=p.project_id AND o.point_id=p.id) AND NOT EXISTS (SELECT 1 FROM cta_mappings m WHERE m.project_id=p.project_id AND m.point_id=p.id)',[project]);
     const count = await client.query('SELECT count(*)::int AS n FROM cta_observations WHERE project_id=$1',[project]);
@@ -140,7 +137,7 @@ export async function selectObservation(db: Pool, body: unknown) {
     await assertProjectAdministrativeWrite(client,row.project as string);
     const project=await client.query('SELECT origin FROM projects WHERE id=$1 FOR UPDATE',[row.project]);
     if (!project.rowCount) throw new TypeError('invalid project');
-    lab(project.rows[0].origin);
+    configurationOrigin(project.rows[0].origin);
     const result=await client.query(`SELECT o.observed_url FROM cta_captures c
       JOIN cta_observations o ON o.capture_id=c.id AND o.project_id=c.project_id
       JOIN cta_points p ON p.project_id=o.project_id AND p.id=o.point_id AND p.surface=c.surface
@@ -167,7 +164,7 @@ export async function approveCommercial(db: Pool, body: unknown) {
     await assertProjectAdministrativeWrite(client,row.project as string);
     const project=await client.query('SELECT origin FROM projects WHERE id=$1 FOR UPDATE',[row.project]);
     if (!project.rowCount) throw new TypeError('invalid project');
-    lab(project.rows[0].origin);
+    configurationOrigin(project.rows[0].origin);
     const evidence=await client.query(`SELECT m.offer FROM cta_captures c
       JOIN cta_observations o ON o.project_id=c.project_id AND o.capture_id=c.id
       JOIN cta_points p ON p.project_id=o.project_id AND p.id=o.point_id AND p.surface=c.surface
@@ -193,7 +190,7 @@ export async function mapPoint(db: Pool, project: string, body: unknown) {
   const client = await db.connect();
   try {
     await client.query('BEGIN');
-    await assertProjectAdministrativeWrite(client,project); const p = await client.query('SELECT origin FROM projects WHERE id=$1 FOR UPDATE',[project]); if (!p.rowCount) throw Error('invalid project'); lab(p.rows[0].origin);
+    await assertProjectAdministrativeWrite(client,project); const p = await client.query('SELECT origin FROM projects WHERE id=$1 FOR UPDATE',[project]); if (!p.rowCount) throw Error('invalid project'); configurationOrigin(p.rows[0].origin);
     const d = await client.query('SELECT id FROM cta_destinations WHERE project_id=$1 AND offer=$2 AND id=$3',[project,row.offer,row.destinationId]); if (!d.rowCount) throw Error('destination not approved for offer');
     const point = await client.query('UPDATE cta_points SET offer=$3 WHERE project_id=$1 AND id=$2 AND offer IS NULL RETURNING id',[project,row.pointId,row.offer]); if (!point.rowCount) throw Error('point unavailable');
     await client.query('INSERT INTO cta_mappings(project_id,point_id,offer,destination_id) VALUES($1,$2,$3,$4)',[project,row.pointId,row.offer,row.destinationId]); await client.query('COMMIT');
@@ -210,7 +207,7 @@ export async function reviewPoint(db: Pool, project: string, body: unknown) {
     await client.query('BEGIN');
     await assertProjectAdministrativeWrite(client,project);
     const p = await client.query('SELECT origin FROM projects WHERE id=$1 FOR UPDATE',[project]);
-    if (!p.rowCount) throw Error('invalid project'); lab(p.rows[0].origin);
+    if (!p.rowCount) throw Error('invalid project'); configurationOrigin(p.rows[0].origin);
     const result = await client.query(`SELECT p.offer,o.observed_url FROM cta_points p JOIN cta_mappings m ON m.project_id=p.project_id AND m.point_id=p.id
       JOIN LATERAL (SELECT id,confidence,observed_url,observed_at FROM cta_observations WHERE project_id=p.project_id AND point_id=p.id ORDER BY observed_at DESC,id DESC LIMIT 1) o ON true
       WHERE p.project_id=$1 AND p.id=$2 AND p.kind='a' AND p.marker IS NOT NULL AND p.review_required

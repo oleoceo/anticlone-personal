@@ -29,6 +29,17 @@ Não adicionar decisões para preferências triviais; registrar somente trade-of
 
 | D15 | Drift operacional de ponto (review_required/review_after_observation ou suspension comercial) nao invalida a aprovacao inteira da pagina. A decisao filtra os pontos suspensos; snapshot aprovado continua imutavel e destino/oferta/marcador/mapeamento/referencia/versao/politica alterados continuam invalidando a configuracao. | Conclusao solicitada pelo proprietario: GS08 integrado scoped demonstrou o bloqueio global anterior. Migration aditiva 049 e snapshot runtime normalizam exclusivamente flags operacionais; publicacao/aprovacao administrativa continua recusando ponto pendente. tests/scoped-gateway.test.ts exercita tres CTAs, drift isolado, revisao e invalidacao por destino alterado. | IMPLEMENTADO EM LAB; revisao consolidada e regressao final pendentes |
 
+## Distribuição do runtime v1 — decisão do proprietário em 2026-11-10
+
+Um hostname público operacional inicial atende SCRIPT, TELEMETRY e STATIC_ASSETS; admin privado separado. Distribuição, instalação e aliases são versionados e persistidos por LP, sem rotação em consultas. Evolução para origens próprias por papel mantém revisões/rotas antigas até migração explícita. Não reconstruir módulos funcionais nem converter canários em mitigação. Contrato e mapa do código após PR #63 em [RUNTIME-DISTRIBUTION-CONTRACT.md](RUNTIME-DISTRIBUTION-CONTRACT.md); implementação aditiva 051 e testes de compatibilidade. Sem mudança de D05, ativação operacional, DNS, merge ou deploy.
+
 ## Histórico de D05
 
 A redação inicial aprovada para início era: “Stealth com risco alto ou explicitamente incerto prevalece sobre mitigação visível; sinais não provam identidade.” Foi superada para novas versões explícitas pela decisão do proprietário em 2026-11-09. Versões publicadas legadas conservam esse comportamento; nenhuma fonte histórica SaaS foi modificada.
+
+## Correção operacional do PR #64
+
+Opt-in comercial persistido por projeto/LP, contexto HTTPS explícito, revisão concorrente e vínculo à aprovação/gerações (052). Configurar OPERATIONAL não ativa LP. Origem declarada não comprova cópia: servidor exclui origens oficiais cadastradas e Bootstrap confere contexto real. Suspensão impede novas admissões após commit, preservando D09 para snapshots entregues. D05–D15 preservados.
+
+Rotação na mesma origem cria revisão explícita auditável (053); recursos neutros v2 preservam v1. Canários registram chegada por alias separada da presença alegada da LP; Referer raiz não distingue LPs. Verificador navegável BLOCKED por falta de isolamento de rede demonstrado; URLs arbitrárias são recusadas, sem estados positivos. Esta pendência impede declarar consolidação integral.
+PR #64, decisao expressa posterior do proprietario: opcao A de validacao integral local WSL/Linux como gate desta revisao, sem minutos pagos do GitHub Actions. Reproduzir workflow real, manter Actions BLOCKED e PR Draft ate autorizacao expressa. Nao alterar workflow, cobranca ou fabricar status remoto. Evidencias em LOCAL-CI.md; F08 e os demais limites nao mudam.

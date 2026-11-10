@@ -1,15 +1,16 @@
 (() => {
   try {
+    const distribution = null;
     const source = document.currentScript && document.currentScript.src;
     if (!source) return;
-    const endpoint = path => new URL(path, source).href;
+    const endpoint = path => new URL(distribution?.paths?.[path] ?? path, distribution ? distribution.bases.TELEMETRY : source).href;
     // Explicit operator-requested inventory is available only on loopback laboratory pages.
     if (['localhost','127.0.0.1'].includes(location.hostname)) addEventListener('message', event => {
       try {
         const sender = new URL(event.origin), request = event.data;
         if (window.parent === window || event.source !== window.parent || !['localhost','127.0.0.1'].includes(sender.hostname) || !['http:','https:'].includes(sender.protocol) || !request || request.type !== 'anticlone-inventory-request' || typeof request.nonce !== 'string' || !/^[a-f0-9]{32}$/.test(request.nonce) || typeof request.surface !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(request.surface)) return;
         if (!window.confirm('Permitir captura local dos elementos desta superficie para ' + event.origin + '?')) return;
-        const script = document.createElement('script'); script.src = new URL('/cta-inventory.js', source).href;
+        const script = document.createElement('script'); script.src = new URL(distribution ? (distribution.paths?.['cta-inventory.js'] ?? 'cta-inventory.js') : '/cta-inventory.js', distribution ? distribution.bases.STATIC_ASSETS : source).href;
         script.onload = () => { try { event.source.postMessage({type:'anticlone-inventory-result',nonce:request.nonce,surface:request.surface,pathname:location.pathname,candidates:window.anticloneLabInventory(request.surface)},event.origin); } catch (_) { /* No capture on failure. */ } script.remove(); };
         script.onerror = () => script.remove(); document.head.appendChild(script);
       } catch (_) { /* Untrusted message. */ }
@@ -64,11 +65,15 @@
       if (typeof receipt !== 'string') return;
       try { const hex=Array.from(crypto.getRandomValues(new Uint8Array(16)),x=>x.toString(16).padStart(2,'0')).join(''); const event=[hex.slice(0,8),hex.slice(8,12),hex.slice(12,16),hex.slice(16,20),hex.slice(20)].join('-'); navigator.sendBeacon(endpoint('observed-action'), new Blob([JSON.stringify({receipt,event,marker,surface})],{type:'text/plain'})); } catch (_) { /* Observation never gates navigation. */ }
     };
+    const operationalContextMatches = decision => {
+      const context=decision.operationalContext;
+      return context && location.protocol==='https:' && context.origin===location.origin && context.pathname===location.pathname && context.original!==location.origin;
+    };
     const prepareCtas = (decision, startedWall, startedMono) => {
       try {
         if (!Number.isSafeInteger(decision.version) || decision.version < 1 || decision.version < latestCtaVersion || location.pathname !== decision.pathname || !Array.isArray(decision.mappings) || decision.mappings.length > 100) return;
         const original = new URL(decision.original);
-        if (!['http:', 'https:'].includes(original.protocol) || original.origin !== decision.original || original.origin === location.origin || !['localhost','127.0.0.1'].includes(original.hostname) || !['localhost','127.0.0.1'].includes(location.hostname)) return;
+        if (!['http:', 'https:'].includes(original.protocol) || original.origin !== decision.original || original.origin === location.origin || (!(['localhost','127.0.0.1'].includes(original.hostname) && ['localhost','127.0.0.1'].includes(location.hostname)) && !(operationalContextMatches(decision) && decision.operationalContext.original===original.origin))) return;
         const mappings = new Map();
         const external = decision.externalDestinations ?? [];
         if (!Array.isArray(external) || external.length > 100 || external.some(url => typeof url !== 'string' || url.length > 2048)) return;
@@ -121,7 +126,7 @@
           // Preserve native form submission until cancellation and data safety can be guaranteed.
     };
     const core = document.createElement('script');
-    core.src = endpoint('core.js');
+    core.src = new URL(distribution?.paths?.['core.js'] ?? 'core.js', distribution ? distribution.bases.SCRIPT : source).href;
     core.async = true;
     startCore = () => {
       if (!validContext()) return;
@@ -143,7 +148,7 @@
         const stored = sessionStorage.getItem('anticlone.lab.attribution');
         if (stored === null) sessionStorage.setItem('anticlone.lab.attribution', JSON.stringify(signals));
         else { const initial = JSON.parse(stored); if (!initial || typeof initial !== 'object' || Array.isArray(initial)) return; Object.keys(signals).forEach(key => delete signals[key]); Object.assign(signals, initial); }
-        if (/\/i\/[a-f0-9-]{36}\/runtime\.js$/.test(new URL(source).pathname)) { try { navigator.sendBeacon(endpoint('observed-session'), new Blob([JSON.stringify({session,signals})],{type:'text/plain'})); } catch (_) { /* Passive metrics never block navigation. */ } }
+        if (distribution || /\/i\/[a-f0-9-]{36}\/runtime\.js$/.test(new URL(source).pathname)) { try { navigator.sendBeacon(endpoint('observed-session'), new Blob([JSON.stringify({session,signals})],{type:'text/plain'})); } catch (_) { /* Passive metrics never block navigation. */ } }
         let inFlight = false, sequence = 0, lastAttempt = Date.now(), backoff = refreshIntervalMs, failed = false, controller, returnTimer;
         const expired = () => !activeCtas || Date.now() < activeCtas.startedWall || Date.now() - activeCtas.startedWall >= ctaTtlMs || performance.now() - activeCtas.startedMono >= ctaTtlMs;
         const refresh = (onReturn = false, afterEntry = false) => {
@@ -182,6 +187,7 @@
             }
             redirectPending = false;
             if (decision.action !== 'PAGE_REDIRECT' || !Number.isSafeInteger(decision.version) || decision.version < 1 || typeof decision.destination !== 'string') return;
+            if(decision.operationalContext && !operationalContextMatches(decision)) return;
             const target = new URL(decision.destination);
             if (!['http:', 'https:'].includes(target.protocol) || target.username || target.password || target.hash || target.href === location.href || target.origin === location.origin) return;
             reportAction(decision.observationReceipt, null, null);
