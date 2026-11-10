@@ -27,7 +27,7 @@ export type StructuredEvidence = {
   validity: 'current' | 'stale' | 'unknown';
 };
 export type EvidenceLimitation = 'INDEPENDENT_EVIDENCE_NOT_AVAILABLE' | 'PROVENANCE_NOT_VERIFIABLE' | 'EVIDENCE_EXPIRED_OR_UNKNOWN' | 'COLLECTION_GAP' | 'CONTRADICTORY_EVIDENCE' | 'NO_EVIDENCE';
-export type StructuredAssessment = RiskAssessment & { sources: StructuredEvidence[]; limitations: EvidenceLimitation[] };
+export type StructuredAssessment = RiskAssessment & { sources: StructuredEvidence[]; limitations: EvidenceLimitation[]; hypothesis: {subject:'operator_of_this_context'; supporting:string[]; opposing:string[]; required:string[]} };
 // Receipt corroborates only that a request arrived, never the browser's claims.
 // No available source establishes independent session-bound operator evidence.
 export function assessEvidence(evidence: readonly StructuredEvidence[], controlledFixture: boolean): StructuredAssessment {
@@ -40,7 +40,11 @@ export function assessEvidence(evidence: readonly StructuredEvidence[], controll
   if (sources.some(item => item.type === 'collection_gap')) limitations.push('COLLECTION_GAP');
   if (sources.some(item => item.type === 'contradiction')) limitations.push('CONTRADICTORY_EVIDENCE');
   const fixture = controlledFixture && sources.some(item => item.type === 'gateway_receipt' && item.provenance === 'gateway' && item.reliability === 'observed' && item.validity === 'current') && !sources.some(item => item.validity !== 'current' || item.type === 'collection_gap' || item.type === 'contradiction');
-  return {...evaluateRisk(fixture), version:'conservative-risk-v4', sources, limitations};
+  return {...evaluateRisk(fixture), version:'conservative-risk-v4', sources, limitations,
+    hypothesis:{subject:'operator_of_this_context',
+      supporting:sources.some(item=>item.type==='gateway_receipt'&&item.reliability==='observed')?['Request received; establishes activity only']:[],
+      opposing:limitations.map(item=>item),
+      required:['Independent verifiable evidence bound to this session/context','Current provenance and validity; contradictions resolved','Incident confirmation, IP, fingerprint, direct traffic and repeated requests do not satisfy this criterion']}};
 }
 export function assessObservation(evidence: RiskEvidence, controlledFixture: boolean): StructuredAssessment {
   if (evidence.source !== 'browser' || evidence.reliability !== 'uncorroborated') throw Error('unsupported evidence');

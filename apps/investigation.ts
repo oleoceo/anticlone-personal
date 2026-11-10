@@ -8,11 +8,15 @@ export async function investigation(pool: Pool, project: string) {
     to_regclass('degradation_collection_gaps') IS NOT NULL AS gaps,
     to_regclass('infrastructure_dns_observations') IS NOT NULL AS infrastructure,
     to_regclass('investigation_timeline') IS NOT NULL AS timeline,
+    to_regclass('investigation_receipts') IS NOT NULL AS receipts,
     to_regclass('incident_status_audit') IS NOT NULL AS audit,
     to_regclass('alert_outbox') IS NOT NULL AS notifications,
     to_regclass('notification_lifecycle_queue') IS NOT NULL AS notification_holds,
     to_regclass('clone_delivery_attempts') IS NOT NULL AS notification_history`);
   const available = schema.rows[0];
+  const receipts=available.receipts?await pool.query(`SELECT id,page_id,installation_id,kind,source,resource,alias,claimed_host,first_received_at,last_received_at FROM investigation_receipts WHERE project_id=$1 AND last_received_at>=clock_timestamp()-interval '7 days' ORDER BY first_received_at,id LIMIT 10000`,[project]):{rows:[]};
+  const pagesByHost=new Map<string,Set<string>>();
+  for(const receipt of receipts.rows)if(receipt.claimed_host){const pages=pagesByHost.get(receipt.claimed_host)??new Set<string>();pages.add(receipt.page_id);pagesByHost.set(receipt.claimed_host,pages);}
   const result = await pool.query(`SELECT i.id AS incident_id, i.host, i.status, ${available.audit ? 'i.triage_version' : 'NULL AS triage_version'}, i.first_seen AS first_observed_at, i.last_seen AS last_observed_at,
     COALESCE((SELECT jsonb_agg(jsonb_build_object('source',s.source,'day',s.day) ORDER BY s.day,s.source)
       FROM observation_source_days s WHERE s.project_id=i.project_id AND s.host=i.host AND s.day >= (now() AT TIME ZONE 'UTC')::date-7), '[]'::jsonb) AS observation_sources,
@@ -50,6 +54,11 @@ export async function investigation(pool: Pool, project: string) {
   const notificationHistory = available.notification_history ? await pool.query(`SELECT h.outbox_id,h.attempt,h.transport,h.started_at,h.finished_at,h.outcome
     FROM clone_delivery_attempts h JOIN alert_outbox a ON a.id=h.outbox_id JOIN incidents i ON i.id=a.incident_id WHERE i.project_id=$1 ORDER BY h.outbox_id,h.attempt`,[project]) : {rows:[]};
   return result.rows.map(row => ({ ...row,
+    linked_evidence: {
+      available:available.receipts,original_access_coverage:'NOT_OBSERVABLE_UNLESS_IMPORTED',
+      events:receipts.rows.filter(item=>item.claimed_host===row.host || (!item.claimed_host && pagesByHost.get(row.host)?.has(item.page_id))),
+      limitation:'LP/installation and claimed hostname are context links only. Shared LP, alias, time or resource does not link visitors or identify an operator. Import time is not original access time. Missing or saturated collection remains unknown.'
+    },
     notification: {available:available.notifications,history_available:available.notification_history,
       outbox:notifications.rows.find(item=>item.incident_id===row.incident_id) ?? null,
       history:notificationHistory.rows.filter(item=>item.outbox_id===notifications.rows.find(notification=>notification.incident_id===row.incident_id)?.outbox_id),
@@ -68,7 +77,7 @@ export async function investigation(pool: Pool, project: string) {
       const reconstruction = known ? assessEvidence([
         {type:assessment.evidence_kind === 'none' ? 'no_attribution' : 'traffic_claim',provenance:'browser',reliability:'uncorroborated',validity:'current'},
         {type:'gateway_receipt',provenance:'gateway',reliability:'observed',validity:'current'}], assessment.source === 'lab_configuration') : null;
-      return {...assessment, reconstructed_at_decision: reconstruction && {sources:reconstruction.sources, limitations:assessment.version === 'conservative-risk-v3' ? ['Browser claims are manipulable; endpoints do not establish independence.', 'Gateway receipt does not verify the claimed host or identify a visitor.', 'No independent session-bound operator evidence is available.'] : reconstruction.limitations},
+      return {...assessment, reconstructed_at_decision: reconstruction && {sources:reconstruction.sources, hypothesis:reconstruction.hypothesis, limitations:assessment.version === 'conservative-risk-v3' ? ['Browser claims are manipulable; endpoints do not establish independence.', 'Gateway receipt does not verify the claimed host or identify a visitor.', 'No independent session-bound operator evidence is available.'] : reconstruction.limitations},
         synthetic_high_fixture: assessment.level === 'HIGH' && assessment.source === 'lab_configuration' && assessment.confidence === 'test_only'};
     }),
     degradation: {available: available.degradation, inference: states.rows.find(state => state.host === row.host) ?? null, received_claims: events.rows.filter(event => event.host === row.host)},

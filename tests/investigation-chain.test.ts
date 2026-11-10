@@ -1,0 +1,63 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {randomUUID} from 'node:crypto';
+import {readFile,readdir} from 'node:fs/promises';
+import {createServer} from 'node:http';
+import {once} from 'node:events';
+import type {AddressInfo} from 'node:net';
+import {Pool} from 'pg';
+import {chromium} from 'playwright';
+import {importOriginalRequest,recordRuntimeReceipt,retainInvestigationReceipts} from '../apps/investigation-receipts.js';
+import {scopedGateway} from '../apps/scoped-gateway.js';
+import {investigation} from '../apps/investigation.js';
+import {assessEvidence} from '../apps/risk.js';
+
+test('authorized original requests and partial copy: contextual evidence without visitor identity',{timeout:60000},async()=>{
+  assert.ok(process.env.TEST_DATABASE_URL);
+  const root=new Pool({connectionString:process.env.TEST_DATABASE_URL});
+  const schema='chain_'+randomUUID().replaceAll('-','');await root.query(`CREATE SCHEMA ${schema}`);
+  const db=new Pool({connectionString:process.env.TEST_DATABASE_URL,options:`-c search_path=${schema}`});
+  const page=randomUUID(),installation=randomUUID(),other=randomUUID(),otherInstallation=randomUUID();
+  const fallback=await readFile('runtime/fallback.js');
+  const scoped=scopedGateway(db,{'fallback.js':fallback},async()=>true);
+  const gateway=createServer((req,res)=>{if(!scoped(req,res))res.writeHead(404).end();}).listen(0,'127.0.0.1');await once(gateway,'listening');
+  const base='http://127.0.0.1:'+(gateway.address() as AddressInfo).port;
+  const imports:Promise<unknown>[]=[];
+  const site=createServer((req,res)=>{
+    if(req.headers.host?.startsWith('127.0.0.1'))imports.push(importOriginalRequest(db,'one',{id:randomUUID(),page,source:'owned_access_log',resource:req.url==='/image'?'IMAGE':'HTML',authorized:true}));
+    res.writeHead(200,{'content-type':req.url==='/image'?'text/plain':'text/html'}).end(req.url==='/image'?'synthetic':`<img src="/image"><script src="${base}/i/${installation}/fallback.js"></script><a href="/checkout">Native</a>`);
+  }).listen(0,'127.0.0.1');await once(site,'listening');
+  const origin='http://127.0.0.1:'+(site.address() as AddressInfo).port,copy=origin.replace('127.0.0.1','localhost');
+  const browser=await chromium.launch();
+  try {
+    for(const file of (await readdir('infra')).filter(file=>/^\d{3}_.+\.sql$/.test(file)).sort())await db.query((await readFile('infra/'+file,'utf8')).replace(/^\uFEFF/,''));
+    await db.query("INSERT INTO projects VALUES('one','One',$1),('two','Two','https://other.test')",[origin]);
+    await db.query("INSERT INTO protected_pages(id,project_id,installation_id,name) VALUES($1,'one',$2,'First'),($3,'one',$4,'Second')",[page,installation,other,otherInstallation]);
+    await db.query("INSERT INTO protected_page_urls(page_id,origin,pathname) VALUES($1,$2,'/'),($3,$2,'/second')",[page,origin,other]);
+    const tab=await browser.newPage();await tab.goto(origin);await Promise.all(imports);
+    assert.equal((await db.query('SELECT count(*)::int n FROM incidents')).rows[0].n,0);
+    const response=tab.waitForResponse(r=>r.url().endsWith('/observe/fallback'));await tab.goto(copy);await response;
+    // Wait for complementary persistence, which deliberately does not delay navigation.
+    for(let n=0;n<100;n++){if((await db.query("SELECT 1 FROM investigation_receipts WHERE claimed_host='localhost'")).rowCount)break;await new Promise(resolve=>setTimeout(resolve,20));}
+    const context={project:'one',page,installation,urls:[{origin,pathname:'/'}]};
+    for(let n=0;n<3;n++)await recordRuntimeReceipt(db,context,'observe/fallback','fallback','localhost');
+    await recordRuntimeReceipt(db,{...context,page:other,installation:otherInstallation},'html.gif','html_canary','different.test');
+    const id=randomUUID(),payload={id,page,resource:'HTML',source:'authorized_provider_log',authorized:true};
+    assert.equal((await importOriginalRequest(db,'one',payload)).state,'IMPORTED');
+    assert.equal((await importOriginalRequest(db,'one',payload)).state,'ALREADY_IMPORTED');
+    await assert.rejects(importOriginalRequest(db,'one',{...payload,resource:'SCRIPT'}),TypeError);
+    await assert.rejects(importOriginalRequest(db,'two',{...payload,id:randomUUID()}),TypeError);
+    for(const bad of [{...payload,ip:'192.0.2.1'},{...payload,url:'http://127.0.0.1/private'},{...payload,authorized:false},{...payload,cookies:'private'}])await assert.rejects(importOriginalRequest(db,'one',bad),TypeError);
+    const rows=await investigation(db,'one');assert.equal(rows.length,1);const row=rows[0];
+    assert.equal(row.linked_evidence.events.filter((e:{kind:string})=>e.kind==='runtime_receipt').length,1);
+    assert.ok(row.linked_evidence.events.some((e:{kind:string})=>e.kind==='original_request'));
+    assert.ok(row.linked_evidence.events.every((e:{page_id:string})=>e.page_id===page));
+    assert.ok(row.history.chronology.some((e:{description:string})=>e.description.includes('Importação')));
+    assert.equal((await db.query('SELECT count(*)::int n FROM incidents')).rows[0].n,1);
+    assert.equal(assessEvidence([{type:'gateway_receipt',provenance:'gateway',reliability:'observed',validity:'current'}],false).level,'UNCERTAIN');
+    await tab.route(base+'/**',route=>route.abort());await tab.goto(copy);assert.equal(await tab.locator('a').getAttribute('href'),'/checkout');
+    await db.query("UPDATE investigation_receipts SET last_received_at=clock_timestamp()-interval '8 days' WHERE project_id='one'");
+    await retainInvestigationReceipts(db,'two');assert.ok((await db.query('SELECT 1 FROM investigation_receipts')).rowCount);
+    await retainInvestigationReceipts(db,'one');assert.equal((await db.query('SELECT 1 FROM investigation_receipts')).rowCount,0);
+  }finally{await browser.close();site.close();gateway.close();await db.end();await root.query(`DROP SCHEMA ${schema} CASCADE`);await root.end();}
+});

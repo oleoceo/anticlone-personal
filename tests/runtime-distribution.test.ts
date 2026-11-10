@@ -60,7 +60,7 @@ test('distribution v1: persistent revisions, admin HTML/CSS, real browser layers
   const browser=await chromium.launch();
   const request={project:'one',page:pageId,action:'inspect'};
   try{
-    for(const file of (await readdir('infra')).filter(file=>/^\d{3}_.+\.sql$/.test(file) && Number(file.slice(0,3))<53).sort())await db.query((await readFile('infra/'+file,'utf8')).replace(/^\uFEFF/,''));
+    for(const file of (await readdir('infra')).filter(file=>/^\d{3}_.+\.sql$/.test(file)).sort())await db.query((await readFile('infra/'+file,'utf8')).replace(/^\uFEFF/,''));
     await db.query('CREATE TABLE admin_totp_replay(factor_id text PRIMARY KEY,last_counter bigint NOT NULL)');
     await db.query('CREATE TABLE admin_totp_codes(factor_id text NOT NULL,digest text NOT NULL,valid_until bigint NOT NULL,PRIMARY KEY(factor_id,digest))');
     await db.query("INSERT INTO projects VALUES('one','One',$1),('two','Two','http://localhost:10001')",[origin]);
@@ -131,6 +131,9 @@ test('distribution v1: persistent revisions, admin HTML/CSS, real browser layers
     await copied.goto(clone);
     const wait=async(check:()=>Promise<boolean>)=>{for(let index=0;index<100;index++){if(await check())return;await new Promise(resolve=>setTimeout(resolve,30));}throw Error('layer journal did not settle');};
     await wait(async()=>(await db.query("SELECT count(DISTINCT source)::int n FROM degradation_events WHERE project_id='one' AND origin=$1",[clone])).rows[0].n===4);
+    await wait(async()=>(await db.query("SELECT count(DISTINCT source)::int n FROM investigation_receipts WHERE project_id='one' AND page_id=$1 AND claimed_host='localhost' AND alias IS NOT NULL",[pageId])).rows[0].n===4);
+    const linked=(await db.query("SELECT DISTINCT installation_id,page_id FROM investigation_receipts WHERE project_id='one' AND claimed_host='localhost'")).rows;
+    assert.deepEqual(linked,[{installation_id:installation,page_id:pageId}]);
     assert.equal(await degradationState(db,'one','localhost',clone),'UNKNOWN','restart gap prevents immediate inference');
     // Age real committed samples rather than waiting 31 minutes. Same F44 contract.
     const aging=await db.connect();

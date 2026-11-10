@@ -1,6 +1,7 @@
 type Time = string | Date;
 type Entry = {at: string; precision: 'instant' | 'day'; state: string; source: string; description: string; limitation: string};
 type Input = {
+  linked_evidence?:{events:{id:string;page_id:string;installation_id:string;kind:string;source:string;resource:string;alias:string|null;first_received_at:Time}[]};
   first_observed_at: Time; last_observed_at: Time;
   observation_sources: {source:string; day:string}[];
   browser_claims: {source:string; kind:string; traffic_class:string; observed_at:Time}[];
@@ -19,6 +20,9 @@ const instant = (value:Time) => new Date(value).toISOString();
 export function copyHistory(row:Input) {
   const entries:Entry[]=[];
   const add=(at:Time, state:string, source:string, description:string, limitation:string) => entries.push({at:instant(at),precision:'instant',state,source,description,limitation});
+  for(const event of row.linked_evidence?.events??[]) add(event.first_received_at,event.kind==='original_request'?'Atestado administrativamente':'Recebido',event.source,
+    (event.kind==='original_request'?'Importação de registro autorizado do original':'Contato recebido')+' | LP '+event.page_id+' | instalação '+event.installation_id+' | recurso '+event.resource+(event.alias?' | alias '+event.alias:''),
+    event.kind==='original_request'?'Horário da importação, acesso original em horário desconhecido. Relação apenas pela LP; não demonstra download, clonagem ou vínculo entre visitantes.':'Hostname é alegado. Recebimento não prova execução; LP/alias públicos não autenticam operador. Deduplicação por minuto, retenção de 7 dias e capacidade podem omitir contatos.');
   add(row.first_observed_at,'Observado','gateway','Primeiro contato registrado no incidente','Recebimento de alegação de hostname; não é data de publicação, download ou identidade do operador. Canários isolados não atualizam este contato.');
   if(instant(row.last_observed_at)!==instant(row.first_observed_at)) add(row.last_observed_at,'Observado','gateway','Último contato registrado no incidente','Core/Fallback; pode haver recebimentos intermediários não preservados pela deduplicação diária.');
   for(const item of row.observation_sources) entries.push({at:String(item.day).slice(0,10),precision:'day',state:'Observado',source:item.source,description:'Fonte recebida neste dia UTC',limitation:'Presença diária, sem horário ou ordem entre fontes no mesmo dia. Core e Fallback podem vir do mesmo navegador.'});
@@ -47,7 +51,7 @@ export function copyHistory(row:Input) {
     chronology:entries,
     coverage:'Coleta incompleta',
     project_gap_at:row.collection_gap.last_dropped_at,
-    scope:'Projeto e hostname alegado. Relação com uma LP específica não demonstrada por estes agregados.',
+    scope:'Projeto e hostname alegado. Registros com LP/instalação explícitas vinculam contextos; agregados legados não demonstram essa relação nem vinculam visitantes.',
     limitations:[
       'Primeiro e último contato são os registros Core/Fallback do incidente; primeiros registros disponíveis podem já ter expirado em outras fontes.',
       'Fontes e tráfego: 7 dias; timeline e DNS: 30 dias, sujeitos a limites. Lacunas, retenção e deduplicação impedem reconstrução completa.',

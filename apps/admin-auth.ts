@@ -1,5 +1,6 @@
 import { DeletedProjectConflict } from './admin-project-write.js';
 import { investigation } from './investigation.js';
+import {importOriginalRequest} from './investigation-receipts.js';
 import { checkoutMetrics } from './checkout-webhook.js';
 import { classifyIncident, IncidentConflict } from './incident-triage.js';
 import { TOTP, Secret } from 'otpauth';
@@ -88,6 +89,17 @@ export function createAdminServer(passwordRecord: string, totpSecret: string, db
       if (installationPath && (req.method === 'GET' || req.method === 'POST')) {
         const operation = req.method === 'GET' ? installationDiagnostic(db,installationPath[1]) : installationPath[2] ? disableInstallation(db,installationPath[1]) : enableInstallation(db,installationPath[1]);
         void operation.then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error:unknown)=>res.writeHead(error instanceof InstallationOriginConflict || error instanceof DeletedProjectConflict ? 409 : error instanceof TypeError ? 404 : 503).end()); return;
+      }
+      const originalRequestPath = /^\/admin\/projects\/([a-zA-Z0-9_-]{1,64})\/original-requests$/.exec(req.url ?? '');
+      if(req.method==='POST' && originalRequestPath) {
+        if(req.headers['content-type']!=='application/json'){res.writeHead(415).end();return;}
+        let size=0,rejected=false;const chunks:Buffer[]=[];
+        req.on('data',(chunk:Buffer)=>{size+=chunk.length;if(size>2048){if(!rejected)res.writeHead(413).end();rejected=true;chunks.length=0;}else if(!rejected)chunks.push(chunk);});
+        req.on('end',()=>{
+          if(rejected)return;
+          let input:unknown;try{input=JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{res.writeHead(400).end();return;}
+          void importOriginalRequest(db,originalRequestPath[1],input).then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error:unknown)=>res.writeHead(error instanceof DeletedProjectConflict?409:error instanceof TypeError?400:503).end());
+        });return;
       }
       const investigationPath = /^\/admin\/projects\/([a-zA-Z0-9_-]{1,64})\/investigation$/.exec(req.url ?? '');
       if (req.method === 'GET' && investigationPath) {

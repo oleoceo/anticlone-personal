@@ -14,6 +14,7 @@ import { currentApproval } from './page-policy-approval.js';
 import { projectMaintenance } from './project-maintenance.js';
 import { operationallyEligible } from './operational-eligibility.js';
 import type { LayerObserver } from './runtime-layer-observations.js';
+import {receiveRuntimeReceipt,receiptAliases} from './investigation-receipts.js';
 
 // Identifiers in these routes are correlation handles, never credentials.
 export function scopedGateway(db: Pool, scripts: Record<string, Buffer>, collect=projectMaintenance(db,{SMTP_PORT:'1'}).collect, layers:LayerObserver=async()=>{}) {
@@ -107,6 +108,7 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>, collect
           if (!await operationallyEligible(client,context.project,context.page,true)) { res.writeHead(204).end(); return; }
           const authorized=context.urls.some(value => value.origin===origin && value.pathname===url.pathname);
           const result=await observe(db,context.project,authorized ? [origin] : [],origin,core ? 'core' : 'fallback',core ? fields.signals : undefined);
+          receiveRuntimeReceipt(db,context,endpoint,core?'core':'fallback',new URL(origin).hostname,receiptAliases.get(req));
           if (authorized) await collect(context.project,context.page,origin,core ? 'core':'fallback');
           res.writeHead(result==='capacity' ? 429 : 204).end();
           void layers(context,origin,core?'core':'fallback',result==='capacity').catch(()=>{});
