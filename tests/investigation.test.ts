@@ -8,7 +8,7 @@ import { TOTP, Secret } from 'otpauth';
 import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
 import { investigation } from '../apps/investigation.js';
-import { observe } from '../apps/detection.js';
+import { observe, observeCanary, cleanup } from '../apps/detection.js';
 import { assessObservation, evaluateRisk, recordRisk } from '../apps/risk.js';
 
 test('investigation isolates projects, preserves first receipt and marks claims and daily aggregates', async () => {
@@ -19,12 +19,24 @@ test('investigation isolates projects, preserves first receipt and marks claims 
   const db = new Pool({connectionString:process.env.TEST_DATABASE_URL, options:`-c search_path=${schema}`});
   try {
     for (const file of ['001_initial','002_alerts','004_observation_sources','005_canaries','008_traffic_observations','009_risk_assessments','024_risk_evidence','018_notification_budget','019_alert_outbox_expiry']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
-    await observe(db,'a','https://original.test','https://copy.test','core');
+    await observe(db,'a','https://original.test','https://copy.test','core',{});
     const first = (await investigation(db,'a'))[0];
+    await observe(db,'a','https://original.test','https://copy.test','core',{medium:'cpc'});
+    await observe(db,'a','https://original.test','https://copy.test','core',{medium:'cpc'});
+    await observeCanary(db,'a','https://copy.test/resource','html_canary');
+    await observeCanary(db,'a','https://copy.test/resource','html_canary');
+    await observeCanary(db,'a',undefined,'css_canary');
+    await observeCanary(db,'a','https://unlinked.test','css_canary');
     await Promise.all([observe(db,'a','https://original.test','https://copy.test','fallback'), observe(db,'b','https://original.test','https://copy.test','core')]);
     await recordRisk(db,'a','copy.test',evaluateRisk(false),{source:'browser',reliability:'uncorroborated',trafficClass:'DIRECT_UNKNOWN',kind:'none'});
     const rows = await investigation(db,'a');
     assert.equal(rows.length,1);
+    assert.ok(rows[0].history.first_direct_unknown_at! < rows[0].history.first_paid_at!);
+    assert.equal(rows[0].history.chronology.filter((e: {description:string;source:string;precision:string;at:string})=>e.description.startsWith('Tráfego declarado')).length,2);
+    assert.equal(rows[0].history.chronology.filter((e: {description:string;source:string;precision:string;at:string})=>e.source==='html_canary').length,1);
+    assert.equal(rows[0].history.chronology.filter((e: {description:string;source:string;precision:string;at:string})=>e.source==='css_canary').length,0);
+    assert.equal(rows[0].history.chronology.filter((e: {description:string;source:string;precision:string;at:string})=>e.precision==='day').length,2);
+    assert.ok(rows[0].history.chronology.filter((e: {description:string;source:string;precision:string;at:string})=>e.precision==='day').every((e: {at:string})=>/^\d{4}-\d{2}-\d{2}$/.test(e.at)));
     assert.deepEqual(rows[0].first_observed_at,first.first_observed_at);
     assert.deepEqual(rows[0].observation_sources.map((s: {source:string})=>s.source),['core','fallback']);
     assert.equal(rows[0].assessments[0].evidence_provenance,'browser');
@@ -48,6 +60,8 @@ test('investigation isolates projects, preserves first receipt and marks claims 
     assert.equal(extended.degradation.inference.state,'POSSIBLE_DEGRADATION');
     assert.equal(extended.degradation.received_claims.length,1);
     assert.equal(extended.collection_gap.scope,'project'); assert.ok(extended.collection_gap.last_dropped_at);
+    assert.ok(extended.history.project_gap_at);
+    assert.equal(extended.history.chronology.some((e: {source:string;description:string})=>e.source==='project_gap'),false);
     await db.query(`INSERT INTO degradation_audit(project_id,host,state,window_start,observed_at) VALUES('a','copy.test','UNKNOWN',now(),clock_timestamp()+interval '1 second')`);
     assert.equal((await investigation(db,'a'))[0].degradation.inference.state,'UNKNOWN');
     assert.equal((await investigation(db,'b'))[0].collection_gap.last_dropped_at,null);
@@ -86,6 +100,13 @@ test('investigation isolates projects, preserves first receipt and marks claims 
       await db.query('ALTER TABLE incidents RENAME TO unavailable_incidents');
       assert.equal((await fetch(base+path,{headers})).status,503);
       await db.query('ALTER TABLE unavailable_incidents RENAME TO incidents');
+      await db.query("DELETE FROM incidents WHERE project_id='a' AND host ~ '^copy-[0-9]+\\.test$'");
+      await db.query("UPDATE traffic_observation_days SET observed_at=now()-interval '8 days' WHERE project_id='a'");
+      await cleanup(db,'a');
+      const expired=(await investigation(db,'a')).find(row=>row.host==='copy.test')!;
+      assert.equal(expired.history.first_paid_at,null);
+      assert.equal(expired.history.coverage,'Coleta incompleta');
+      assert.deepEqual(expired.first_observed_at,first.first_observed_at);
     } finally { server.close(); await once(server,'close'); }
     assert.ok(rows[0].limitations.some((s:string)=>s.includes('daily aggregates')));
   } finally { await db.end(); await root.query(`DROP SCHEMA ${schema} CASCADE`); await root.end(); }

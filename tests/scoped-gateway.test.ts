@@ -15,6 +15,7 @@ import { managePages, PageConflict } from '../apps/protected-pages.js';
 import { createAdminServer } from '../apps/admin-auth.js';
 import { publishCtaPolicy } from '../apps/cta-policy.js';
 import { TOTP, Secret } from 'otpauth';
+import { investigation } from '../apps/investigation.js';
 
 test('scoped browser observations isolate projects on one origin and preserve copied installation', {timeout:60000}, async () => {
   assert.ok(process.env.TEST_DATABASE_URL);
@@ -52,6 +53,8 @@ test('scoped browser observations isolate projects on one origin and preserve co
     await db.query(await readFile('infra/048_observed_receipts.sql','utf8'));
     await db.query(await readFile('infra/033_clone_delivery_attempts.sql','utf8'));
     await db.query(await readFile('infra/049_isolated_runtime_drift.sql','utf8'));
+    await db.query((await readFile('infra/017_notification_settings.sql','utf8')).replace(/^\uFEFF/,''));
+    for(const file of ['030_infrastructure_dns','031_investigation_timeline']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
     await db.query(await readFile('infra/015_cta_alert_deliveries.sql','utf8'));
     await db.query('CREATE TABLE admin_totp_replay(factor_id text PRIMARY KEY,last_counter bigint NOT NULL)');
     await db.query('CREATE TABLE admin_totp_codes(factor_id text NOT NULL,digest text NOT NULL,valid_until bigint NOT NULL,PRIMARY KEY(factor_id,digest))');
@@ -158,6 +161,17 @@ test('scoped browser observations isolate projects on one origin and preserve co
     await deliverOne(db,'health',smtpAddress.port);
     let accepted=false;for(let i=0;i<100;i++){const sent=await db.query("SELECT count(*)::int n FROM alert_outbox a JOIN incidents i ON i.id=a.incident_id WHERE i.project_id='health' AND a.sent_at IS NOT NULL");if(sent.rows[0].n===1){accepted=true;break;}await new Promise(r=>setTimeout(r,50));}
     assert.ok(accepted);assert.equal(messages.length,1);await deliverOne(db,'health',smtpAddress.port);assert.equal(messages.length,1);
+    const initialCase=(await investigation(db,'health'))[0];
+    assert.equal(initialCase.host,'localhost');
+    assert.ok(initialCase.history.first_direct_unknown_at);
+    assert.deepEqual(initialCase.history.sources,['core','fallback']);
+    assert.equal(initialCase.notification.history.length,1);
+    assert.equal((await investigation(db,'finance')).length,0);
+    // Controlled resolver records, not a DNS lookup or a claim about real hosting.
+    await db.query(`INSERT INTO infrastructure_dns_observations(incident_id,project_id,host,record_type,result,source,state,valid_until,limitations,observed_at)
+      SELECT id,project_id,host,'A',v.result::jsonb,'controlled-lab','OK',now(),'Simulated resolver; no network lookup',v.at FROM incidents CROSS JOIN
+      (VALUES ('["8.8.8.8"]',now()-interval '2 minutes'),('["1.1.1.1"]',now()-interval '1 minute')) v(result,at) WHERE project_id='health'`);
+    assert.ok((await investigation(db,'health'))[0].history.chronology.some((e: {source:string;description:string})=>e.source==='DNS'&&e.description.includes('mudança')));
     let clicks=0;for(let i=0;i<100;i++){clicks=(await db.query("SELECT count(*)::int n FROM observed_action_facts WHERE page_id=$1 AND action='CTA_CLICK_OBSERVED'",[hp])).rows[0].n;if(clicks===2)break;await new Promise(r=>setTimeout(r,50));}assert.equal(clicks,2);
     await configureEstimate(db,'health',10000,250,'BRL');
     const metrics=await observedMetrics(db,'health',hp,new Date(Date.now()-60000).toISOString(),new Date(Date.now()+60000).toISOString());assert.equal(metrics.estimate?.amount_minor_numerator,'5000000');assert.equal(metrics.recovered_revenue,null);assert.equal(metrics.external_load_confirmed,null);
@@ -207,6 +221,17 @@ test('scoped browser observations isolate projects on one origin and preserve co
     await once(admin,'listening'); const adminAddress=admin.address(); assert.ok(adminAddress && typeof adminAddress!=='string');
     const panel=await browser.newPage(); await panel.goto(`http://127.0.0.1:${adminAddress.port}/admin/ui/`);
     await panel.getByLabel('Senha administrativa').fill('password'); await panel.getByLabel('Código TOTP').fill(new TOTP({secret:Secret.fromBase32(secret)}).generate()); await panel.getByRole('button',{name:'Entrar',exact:true}).click();
+    await panel.locator('#incident-query select option').first().waitFor({state:'attached'});
+    await panel.locator('#incident-query select').selectOption('health'); await panel.getByRole('button',{name:'Consultar incidentes',exact:true}).click();
+    await panel.getByRole('list',{name:'Linha do tempo investigativa'}).waitFor();
+    assert.match(await panel.locator('#incident-list').innerText(),/Coleta incompleta/);
+    assert.match(await panel.locator('#incident-list').innerText(),/DIRECT_UNKNOWN/);
+    assert.match(await panel.locator('#incident-list').innerText(),/mudança entre respostas comparáveis/);
+    assert.equal(await panel.locator('#incident-list details[open]').count(),0);
+    await panel.locator('#incident-query select').selectOption('finance');
+    assert.equal(await panel.locator('#incident-list h3').count(),0);
+    await panel.getByRole('button',{name:'Consultar incidentes',exact:true}).click();
+    await panel.getByText('Nenhum incidente observado.',{exact:true}).waitFor();
     const form=panel.locator('#pages-form'); await form.locator('[name=project]').fill('health'); await form.locator('[name=page]').fill(hp); await form.getByRole('button',{name:'Consultar políticas da página'}).click();
     await panel.locator('#page-approval input[type=checkbox]').check(); await panel.getByRole('button',{name:'Confirmar aprovação de políticas'}).click();
     await panel.getByText('Políticas aprovadas para a geração 3.').waitFor();
@@ -231,6 +256,11 @@ test('scoped browser observations isolate projects on one origin and preserve co
     let restarted=false;for(let i=0;i<100;i++){try{if((await fetch('http://127.0.0.1:3000/healthz')).ok){restarted=true;break;}}catch{/* startup */}await new Promise(r=>setTimeout(r,50));}assert.ok(restarted);
     assert.equal((await db.query('SELECT count(*)::int n FROM observed_action_facts')).rows[0].n,retained);
     assert.equal((await db.query("SELECT count(*)::int n FROM incidents WHERE project_id='health'")).rows[0].n,1);assert.equal(messages.length,1);
+    const persistedCase=(await investigation(db,'health'))[0];
+    assert.deepEqual(persistedCase.first_observed_at,initialCase.first_observed_at);
+    assert.equal(persistedCase.notification.history.length,1);
+    assert.equal(persistedCase.infrastructure.dns.length,2);
+    assert.equal((await investigation(db,'finance')).length,0);
 
   } finally {
     if (browser) await browser.close(); if (admin) await new Promise<void>(resolve=>admin!.close(()=>resolve()));
