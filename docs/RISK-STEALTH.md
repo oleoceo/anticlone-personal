@@ -1,3 +1,9 @@
+# Contrato vigente: Stealth opcional v2
+
+D05 foi atualizada pelo proprietário em 2026-11-09. Para novas políticas com `stealth_version:2`, vale [OPTIONAL-STEALTH.md](OPTIONAL-STEALTH.md): OFF ignora risco; ON suprime apenas evidência forte de operador; UNCERTAIN conserva a política. Gates de segurança e laboratório são independentes. O texto abaixo documenta a implementação anterior e os limites investigativos ainda aplicáveis; suas regras de supressão de UNCERTAIN e bloqueio por persistência de risco valem apenas para políticas legadas. Nenhuma versão publicada foi reescrita.
+
+## Histórico anterior à decisão atualizada
+
 # Risco e Stealth conservadores
 
 F13/F14/F43 e GS05/GS19 permanecem parciais. A decisao recebe categoria de atribuicao declarada pelo navegador; ela e nao corroborada mesmo quando sintaticamente valida. A avaliacao versionada retorna UNCERTAIN por insuficiencia. O unico LOW e uma fixture de laboratorio explicitamente configurada para duas origens loopback; nao comprova classificacao operacional. HIGH, UNCERTAIN, erro e PILOT_OBSERVE bloqueiam mitigacao antes das politicas de pagina e CTA. LOW apenas permite avaliar as politicas independentes, destinos, selecao e revisao comercial.

@@ -1,3 +1,5 @@
+Contrato atual de Stealth: [OPTIONAL-STEALTH.md](OPTIONAL-STEALTH.md), D05 atualizada em 2026-11-09. A exigência de Stealth nesta fatia histórica refere-se às versões legadas; a nova semântica exige publicação explícita.
+
 # Publicação de política no laboratório
 
 Aplique, em ordem numérica, as migrações de `infra/001_initial.sql` até `infra/010_policy_allocation.sql` em um banco de laboratório. O serviço administrativo existente exige sessão autenticada; todos os pedidos abaixo usam JSON, bearer token e não aceitam Origin de navegador.

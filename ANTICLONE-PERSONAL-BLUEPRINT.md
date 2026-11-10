@@ -30,7 +30,7 @@ O sistema não impede toda clonagem, não pode garantir que scripts sobrevivam q
 | Redirecionamento de página | Destino oficial validado, por classe de tráfego e porcentagem; decisão de entrada com limite temporal e liberação em falha. |
 | Substituição de CTA | Inventário e seleção de pontos diferentes (planos distintos, WhatsApp, botões, formulário e CTA dinâmico), mapeamento para destino oficial, ação local quando política pronta, sem consulta de rede no clique. |
 | Tráfego e percentuais | PAID_ATTRIBUTED, ORGANIC, REFERRAL e DIRECT_UNKNOWN; percentuais independentes por ação/classe, 0–100% em passos de 10; alocação determinística por sessão/regra, sem novo sorteio a cada clique. |
-| Modo Invisível | Controle administrativo: preservar aparência/ações originais para sessões avaliadas como provável operador ou de risco incerto; continua observando dentro das limitações. Nunca prometer invisibilidade infalível. |
+| Modo Invisível | Opcional por política: OFF ignora risco na seleção; ON preserva ações originais diante de evidência forte de possível operador. UNCERTAIN conserva política e registra incerteza. Investigação independente e limitada; sem promessa de invisibilidade infalível. |
 | Monitoramento de checkout | Registro de destinos encontrados, alterações relevantes, múltiplas ofertas/planos, matching com marcadores estáveis e fallback estrutural com nível de confiança. |
 | Drift comercial | Alteração material exige REVIEW_REQUIRED do ponto afetado; os demais CTAs continuam funcionais. Alertas sem spam. |
 | Alertas | Clone confirmado, alteração de CTA/checkout, instalação inativa quando habilitado, falha operacional; e-mail com deduplicação, retry, histórico e destinatário único configurado. |
@@ -139,7 +139,7 @@ Adicionar índices e unicidade especialmente em `(project_id, normalized_unautho
 2. Na página, o runtime observa `location` e características mínimas do ambiente. No servidor, validar/normalizar o contexto com sinais da requisição e os IDs públicos da instalação. Uma string de hostname enviada pelo navegador é **evidência não confiável**, nunca prova isolada.
 3. Na origem autorizada, não aplicar mitigação visível; realizar verificação de instalação, descoberta de pontos de conversão e métricas configuradas.
 4. Em origem não autorizada, coletar observações e obter decisão de sessão sob limites estritos de tamanho/tempo. Armazenar evidências e incidentes no backend; processar trabalho pesado no worker.
-5. Se risco de operador `HIGH` ou `UNCERTAIN`, aplicar `OBSERVE_ONLY` no contexto conforme estratégia Stealth First. `LOW` permite avaliação de página/CTA com percentuais. Calibrar o limiar com cenários controlados e aceitar incerteza.
+5. D05 atualizada (2026-11-09): Stealth é opcional por política versionada de página/CTA. OFF ignora LOW/HIGH/UNCERTAIN na seleção comercial. ON suprime mitigação visível apenas com evidência forte verificável de possível operador e confiança documentada; UNCERTAIN mantém a política por padrão e registra incerteza. Segurança, origem, elegibilidade, aprovação, destino e percentuais continuam obrigatórios. Legado preservado até republicação/reaprovação explícitas; demonstração somente em laboratório, sem ativação em domínios reais.
 6. `PAGE_REDIRECT`: decisão de entrada com render gate temporário **limitado**; timeout libera a página (*fail-open*), sem travá-la. Não prometer 0 ms/100% de acerto.
 7. `REPLACE_CONVERSION`: quando política e ponto estão prontos, decidir **localmente**, sem `fetch()` no momento do clique. Cobrir âncoras, formulários, janelas, mobile e DOM dinâmico onde a plataforma permitir.
 8. Separar inventário de conversões, mapeamento e alteração material. Alterações que invalidem mapeamento colocam apenas o ponto afetado em `REVIEW_REQUIRED`, em vez de mandar um comprador para oferta errada.
@@ -160,7 +160,7 @@ policy_version
 page_redirect_enabled
 page_redirect_destination_id
 conversion_replacement_enabled
-stealth_enabled
+stealth_enabled // explícito por política; stealth_version=2 na nova semântica
 allocation[PAID_ATTRIBUTED]   = 0..100 step 10
 allocation[ORGANIC]          = 0..100 step 10
 allocation[REFERRAL]         = 0..100 step 10
@@ -213,7 +213,7 @@ Não chamar uma entrega de concluída por frontend bonito ou endpoints mockados.
 | GS02 Clone | Execução fora da whitelist cria observação/incidente; dois acessos não geram dois incidentes/e-mails. |
 | GS03 CTA múltiplos | Plano Básico e Premium distintos, mapeamento correto e WhatsApp não afetado indevidamente. |
 | GS04 Política 0/50/100 | Bucketing determinístico por sessão e categoria; proporções estatísticas verificáveis em grande amostra. |
-| GS05 Modo invisível | HIGH e UNCERTAIN não recebem mitigação visível; LOW pode receber. Exibir incerteza, não identidade. |
+| GS05 Modo invisível | Stealth OFF: risco não interfere na seleção. ON: evidência forte de operador suprime; UNCERTAIN conserva política e registra incerteza. Sem identidade garantida; legado exige migração explícita. |
 | GS06 Página | Redirecionamento com URL aprovada; render gate sempre solto no prazo em erro/timeout. |
 | GS07 Dynamic DOM | Popup/sticky CTA aparece após carregamento e é inventariado/tratado quando compatível. |
 | GS08 Drift | Checkout alterado gera alerta/review, sem desabilitar outras opções. |
@@ -315,3 +315,7 @@ Preservar a **semântica de proteção** de `11-PRODUCT-DEFINITION`, `12-MVP-SCO
 - MDN CORS: https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CORS
 - Cloudflare Workers Static Assets (somente se edge adotado futuramente): https://developers.cloudflare.com/workers/static-assets/
 - Poracode: https://poracode.com/
+
+### Atualização derivada de D05 — 2026-11-09
+
+Este blueprint Personal incorpora a decisão atualizada do proprietário. A regra inicial Stealth First suprimia HIGH e UNCERTAIN; esse histórico permanece em docs/DECISIONS.md e nos documentos originais de referência. A nova semântica é opt-in, versionada, independente entre página e CTA e exige republicação/reaprovação. Detalhes e limites em docs/OPTIONAL-STEALTH.md. Nenhuma evidência disponível neste recorte sustenta classificação operacional de operador; o caso forte é uma fixture sintética loopback.

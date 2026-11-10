@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { Pool } from 'pg';
-import { assessObservation, evaluateRisk, recordRisk, safeEvaluateRisk, stealthEligible } from '../apps/risk.js';
+import { assessObservation, evaluateRisk, recordRisk, safeEvaluateRisk, legacyStealthEligible } from '../apps/risk.js';
 import { cleanup } from '../apps/detection.js';
 
 test('assessment defaults to uncertainty; controlled LOW is explicitly a fixture', () => {
@@ -20,12 +20,12 @@ test('uncorroborated attribution does not determine operational risk', () => {
 
 test('shared stealth gate permits only the controlled fixture outside pilot', () => {
   const fixture = evaluateRisk(true);
-  assert.equal(stealthEligible(fixture, false), true);
-  assert.equal(stealthEligible(fixture, true), false);
-  assert.equal(stealthEligible(undefined, false), false);
-  assert.equal(stealthEligible(evaluateRisk(false), false), false);
-  assert.equal(stealthEligible({...fixture, level:'HIGH'}, false), false);
-  assert.equal(stealthEligible({...fixture, level:'UNCERTAIN'}, false), false);
+  assert.equal(legacyStealthEligible(fixture, false), true);
+  assert.equal(legacyStealthEligible(fixture, true), false);
+  assert.equal(legacyStealthEligible(undefined, false), false);
+  assert.equal(legacyStealthEligible(evaluateRisk(false), false), false);
+  assert.equal(legacyStealthEligible({...fixture, level:'HIGH'}, false), false);
+  assert.equal(legacyStealthEligible({...fixture, level:'UNCERTAIN'}, false), false);
 });
 
 test('risk migration preserves legacy rows and permits old writes on code rollback', async () => {

@@ -14,8 +14,8 @@ export async function publishPagePolicy(db: Pool, project: string, body: unknown
     const row = await client.query('SELECT origin FROM projects WHERE id=$1 FOR UPDATE', [project]);
     if (!row.rowCount) throw new TypeError('invalid project');
     const draft = validateDraft(body, row.rows[0].origin);
-    const inserted = await client.query(`INSERT INTO protection_policy_versions(project_id,version,enabled,approved_destination,stealth,allocation)
-      SELECT $1,COALESCE(MAX(version),0)+1,$2,$3,$4,$5 FROM protection_policy_versions WHERE project_id=$1 RETURNING version`, [project,draft.enabled,draft.approved_destination,draft.stealth,JSON.stringify(draft.allocation)]);
+    const inserted = await client.query(`INSERT INTO protection_policy_versions(project_id,version,enabled,approved_destination,stealth,allocation${draft.stealth_version === 2 ? ",stealth_version" : ""})
+      SELECT $1,COALESCE(MAX(version),0)+1,$2,$3,$4,$5${draft.stealth_version === 2 ? ",2" : ""} FROM protection_policy_versions WHERE project_id=$1 RETURNING version`, [project,draft.enabled,draft.approved_destination,draft.stealth,JSON.stringify(draft.allocation)]);
     const version = inserted.rows[0].version as number;
     await client.query('INSERT INTO active_protection_policies VALUES($1,$2) ON CONFLICT(project_id) DO UPDATE SET version=EXCLUDED.version', [project,version]);
     await client.query('COMMIT');
