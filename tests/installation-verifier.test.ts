@@ -75,6 +75,7 @@ test('network-none sandboxed Chromium + mediated real TLS/PostgreSQL: FULL, CSP 
     await db.query('INSERT INTO protected_pages(id,project_id,installation_id,name) VALUES($1,$2,$3,$4)',[page,'owner',installation,'LP']);
     await db.query('INSERT INTO protected_page_urls(page_id,origin,pathname) VALUES($1,$2,$3)',[page,original,'/page']);
     const distribution=(await distributionAdmin(db,{action:'publish',project:'owner',page},{RUNTIME_PUBLIC_ORIGIN:gateway})).distribution!;
+    for(const invalid of [{status:null},{},{status:'SIMULATED'}])await assert.rejects(db.query('INSERT INTO controlled_installation_checks(id,project_id,page_id,distribution_version,url_generation,config_generation,result) VALUES($1,$2,$3,$4,$5,$6,$7)',[randomUUID(),'owner',page,distribution.version,0,0,invalid]),{code:'23514'});
     const snippets=distributionSnippets(distribution);html=snippets.html;css=snippets.css;
     const spec={target:original+'/page',distribution},image='anticlone-verifier:test';
     const run=(input:typeof spec,selectedImage:string)=>runControlledCheck(input,selectedImage,broker);

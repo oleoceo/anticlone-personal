@@ -6,7 +6,7 @@ CREATE TABLE controlled_installation_checks (
  url_generation bigint NOT NULL,
  config_generation bigint NOT NULL,
  checked_at timestamptz NOT NULL DEFAULT clock_timestamp(),
- result jsonb NOT NULL CHECK (jsonb_typeof(result)='object' AND result ? 'status' AND result->>'status' IN ('FULL','PARTIAL','UNSUPPORTED','NOT_VERIFIED')),
+ result jsonb NOT NULL CHECK (jsonb_typeof(result)='object' AND result ? 'status' AND jsonb_typeof(result->'status')='string' AND result->>'status' IN ('FULL','PARTIAL','UNSUPPORTED','NOT_VERIFIED')),
  FOREIGN KEY (page_id,project_id) REFERENCES protected_pages(id,project_id)
 );
 CREATE INDEX ON controlled_installation_checks(page_id,checked_at DESC);
