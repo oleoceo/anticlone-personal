@@ -58,6 +58,16 @@ class DocumentChecksTest(unittest.TestCase):
         self.write('STATUS.md', '- **F01 parcial:** atual.\n- **F01 planejada:** histórico.\n')
         self.assertEqual(check_documents(self.root), [])
 
+    def test_single_control_matrix_requires_all_functions_and_exact_classification(self):
+        header='| Função | Comportamento pretendido | Estado final |\n'
+        rows=[f'| F{n:02d} | comportamento | CONCLUÍDA EM LABORATÓRIO COM PROVA |\n' for n in range(1,46)]
+        self.write('docs/FUNCTIONAL-MATRIX.md',header+''.join(rows))
+        self.assertEqual(check_documents(self.root), [])
+        self.write('docs/FUNCTIONAL-MATRIX.md',header+''.join(rows[:-1]))
+        self.assertTrue(any('exatamente F01' in error for error in check_documents(self.root)))
+        self.write('docs/FUNCTIONAL-MATRIX.md',header+''.join(rows).replace('COM PROVA','SEM PROVA',1))
+        self.assertTrue(any('classificação principal inválida' in error for error in check_documents(self.root)))
+
 
 if __name__ == '__main__':
     unittest.main()

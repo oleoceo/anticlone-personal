@@ -37,7 +37,20 @@ def check_documents(root):
             elif re.search(r'[^\W\d_]\?{2,}[^\W\d_]',prose):
                 problems.append(f'{path.relative_to(root)}:{number}: possivel texto corrompido')
     matrix=contents.get('docs/FUNCTIONAL-MATRIX.md','')
-    statuses=dict(re.findall(r'^\| (F\d{2,}) \|.*\| (P|PARCIAL|V|B) \|\s*$',matrix,re.M))
+    final_labels={
+        'CONCLUÍDA EM LABORATÓRIO COM PROVA':'V',
+        'INCOMPLETA — IMPLEMENTAR PRÉ-VPS':'PARCIAL',
+        'IMPLEMENTADA — HOMOLOGAÇÃO EXTERNA PENDENTE':'PARCIAL',
+        'BLOQUEADA POR DECISÃO OU IMPEDIMENTO COMPROVADO':'B',
+        'NÃO IMPLEMENTADA':'P',
+    }
+    statuses={ident:final_labels.get(status,status) for ident,status in re.findall(r'^\| (F\d{2,}) \|.*\| ([^|]+) \|\s*$',matrix,re.M)}
+    if '| Comportamento pretendido |' in matrix:
+        actual=re.findall(r'^\| (F\d{2,}) \|.*\| ([^|]+) \|\s*$',matrix,re.M)
+        if len(actual)!=45 or {ident for ident,_ in actual}!={f'F{n:02d}' for n in range(1,46)}:
+            problems.append('Matriz de controle deve conter exatamente F01–F45 uma vez')
+        if any(status not in final_labels for _,status in actual):
+            problems.append('Matriz de controle tem classificação principal inválida')
     seen=set()
     for number,line in enumerate(contents.get('STATUS.md','').splitlines(),1):
         match=re.match(r'^- \*\*((?:F\d{2,})(?:/F\d{2,})*)\s+(parcial|parciais|validada(?:s)?|bloqueada(?:s)?|planejada(?:s)?)(?=\s|[:—*])',line,re.I)

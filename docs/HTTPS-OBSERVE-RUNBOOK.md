@@ -1,5 +1,7 @@
 # Gateway HTTPS de observacao
 
+Perfil OPERATIONAL pré-VPS atual: [OPERATIONAL-PRE-VPS.md](OPERATIONAL-PRE-VPS.md). As etapas abaixo são históricas do piloto; afirmações de ausência de SMTP externo referem-se àquele recorte. O transporte configurável de clone atual está em CLONE-SMTP.md; CTA/saúde externos ainda não estão integrados. O opt-in operacional não autoriza deploy, não transforma sinais em instalação verificada e não publica o admin.
+
 Estado: IMPLEMENTADO PARCIALMENTE. Perfil Linux para preparacao de PILOT_OBSERVE; nao conclui operacao VPS, GS01/GS11/GS16 integrais ou protecao ativa. Executar publicacao somente depois de autorizacao humana. Sem deploy automatico na CI.
 
 ## Fronteira e configuracao

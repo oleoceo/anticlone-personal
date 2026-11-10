@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import { assertProjectAdministrativeWrite, assertPageAdministrativeWrite } from './admin-project-write.js';
+import {runControlledCheck,type VerificationSpec,type ControlledCheck} from './installation-verifier.js';
 
 export const distributionRoles = ['SCRIPT','TELEMETRY','STATIC_ASSETS'] as const;
 type Role = typeof distributionRoles[number];
@@ -42,7 +43,11 @@ export function distributionSnippets(distribution:Distribution) {
 export async function distributionAdmin(db:Pool,body:unknown,env=process.env) {
   if (!body || typeof body!=='object' || Array.isArray(body)) throw new TypeError('invalid distribution');
   const data=body as Record<string,unknown>;
-  if (Object.keys(data).sort().join(',')!=='action,page,project' || typeof data.project!=='string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(data.project) || typeof data.page!=='string' || !/^[a-f0-9-]{36}$/i.test(data.page) || !['inspect','publish','rotate'].includes(String(data.action))) throw new TypeError('invalid distribution');
+  if (Object.keys(data).sort().join(',')!=='action,page,project' || typeof data.project!=='string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(data.project) || typeof data.page!=='string' || !/^[a-f0-9-]{36}$/i.test(data.page) || !['inspect','publish','rotate','verify'].includes(String(data.action))) throw new TypeError('invalid distribution');
+  if(data.action==='verify'){
+    await verifyPublishedInstallation(db,data.project,data.page,env);
+    return distributionAdmin(db,{...data,action:'inspect'},env);
+  }
   const client=await db.connect();
   try {
     await client.query('BEGIN');
@@ -71,8 +76,41 @@ export async function distributionAdmin(db:Pool,body:unknown,env=process.env) {
     const history=await client.query(`SELECT version,contract_version,created_at,to_jsonb(d)->>'publication_reason' AS reason FROM runtime_distributions d WHERE installation_id=$1 ORDER BY version DESC LIMIT 100`,[page.installation_id]);
     const activityInstalled=(await client.query("SELECT to_regclass('runtime_alias_activity') IS NOT NULL AS installed")).rows[0].installed;
     const aliasActivity=activityInstalled ? (await client.query(`SELECT a.alias,a.version,a.role,s.source,s.last_received_at FROM runtime_alias_activity s JOIN runtime_aliases a USING(alias) WHERE a.installation_id=$1 AND s.last_received_at>=now()-interval '7 days' ORDER BY s.last_received_at DESC LIMIT 100`,[page.installation_id])).rows : [];
+    const checksInstalled=(await client.query("SELECT to_regclass('controlled_installation_checks') IS NOT NULL AS installed")).rows[0].installed;
+    const controlled=checksInstalled?(await client.query(`SELECT c.result FROM controlled_installation_checks c JOIN protected_pages p ON p.id=c.page_id JOIN projects pr ON pr.id=p.project_id WHERE c.page_id=$1 AND c.project_id=$2 AND c.distribution_version=$3 AND c.url_generation=p.url_generation AND c.config_generation=p.config_generation AND p.enabled AND p.lifecycle_state='ACTIVE' AND p.deleted_at IS NULL AND pr.lifecycle_state='ACTIVE' AND pr.deleted_at IS NULL AND c.checked_at>now()-interval '7 days' ORDER BY c.checked_at DESC LIMIT 1`,[data.page,data.project,distribution?.version??0])).rows[0]?.result as ControlledCheck|undefined:undefined;
     await client.query('COMMIT');
     return {contractVersion:1,state:distribution?'PUBLISHED':'NOT_PUBLISHED',distribution,history:history.rows,aliasActivity,snippets:distribution?distributionSnippets(distribution):null,
-      diagnostic:{status:'NOT_VERIFIED',confidence:'UNAUTHENTICATED_CLAIM',controlledVerification:{status:'NOT_VERIFIED',reason:'ISOLATED_VERIFIER_UNAVAILABLE'},capabilities:{observation:'UNKNOWN',activeMitigation:'UNKNOWN'},correlation:'ALIAS_ROUTE_AND_DECLARED_CONTEXT_ONLY',signals:signals.rows,layers:['bootstrap','core','fallback','html_canary','css_canary'].map(layer=>({layer,status:aliasActivity.some(row=>row.source===layer)?'ROUTE_OBSERVED':signals.rows.some(row=>row.source===layer)?'CLAIM_OBSERVED':'UNKNOWN'}))}};
+      diagnostic:{status:controlled?.status??'NOT_VERIFIED',confidence:controlled?'CONTROLLED_CURRENT_LOAD_ONLY':'UNAUTHENTICATED_CLAIM',controlledVerification:controlled??{status:'NOT_VERIFIED',reason:'ISOLATED_VERIFIER_UNAVAILABLE'},capabilities:{observation:'UNKNOWN',activeMitigation:'UNKNOWN'},correlation:'ALIAS_ROUTE_AND_DECLARED_CONTEXT_ONLY',signals:signals.rows,layers:['bootstrap','core','fallback','html_canary','css_canary'].map(layer=>({layer,status:aliasActivity.some(row=>row.source===layer)?'ROUTE_OBSERVED':signals.rows.some(row=>row.source===layer)?'CLAIM_OBSERVED':'UNKNOWN'}))}};
   } catch(error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+}
+
+// No URL is accepted from the request. Snapshot the persisted approved page,
+// release database locks for browser/network I/O, then revalidate before storing.
+export async function verifyPublishedInstallation(db:Pool,project:string,page:string,env:NodeJS.ProcessEnv=process.env,run:(spec:VerificationSpec,image:string)=>Promise<ControlledCheck>=runControlledCheck){
+  const image=env.INSTALLATION_VERIFIER_IMAGE;
+  if(!image)throw new TypeError('isolated verifier not configured');
+  const client=await db.connect();
+  let snapshot:{installation_id:string;url_generation:string;config_generation:string;origin:string;pathname:string};
+  let distribution:Distribution|null;
+  try{
+    await client.query('BEGIN');await assertProjectAdministrativeWrite(client,project,'SHARE');await assertPageAdministrativeWrite(client,project,page);
+    if(!(await client.query("SELECT to_regclass('controlled_installation_checks') IS NOT NULL AS installed")).rows[0].installed)throw new TypeError('verification requires migration 056');
+    const rows=await client.query(`SELECT p.installation_id,p.url_generation::text,p.config_generation::text,u.origin,u.pathname FROM protected_pages p JOIN protected_page_urls u ON u.page_id=p.id JOIN projects pr ON pr.id=p.project_id WHERE p.id=$1 AND p.project_id=$2 AND pr.lifecycle_state='ACTIVE' AND p.lifecycle_state='ACTIVE' AND p.enabled AND p.deleted_at IS NULL`,[page,project]);
+    if(rows.rowCount!==1)throw new TypeError('one active authorized URL required');
+    snapshot=rows.rows[0];distribution=await readDistribution(client,snapshot.installation_id);
+    if(!distribution)throw new TypeError('publish installation first');
+    await client.query('COMMIT');
+  }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
+  const check=await run({target:snapshot.origin+snapshot.pathname,distribution},image);
+  const final=await db.connect();
+  try{
+    await final.query('BEGIN');await assertProjectAdministrativeWrite(final,project,'SHARE');await assertPageAdministrativeWrite(final,project,page);
+    const current=(await final.query('SELECT p.url_generation::text,p.config_generation::text,p.enabled,p.deleted_at,p.lifecycle_state,pr.lifecycle_state AS project_state FROM protected_pages p JOIN projects pr ON pr.id=p.project_id WHERE p.id=$1',[page])).rows[0];
+    const latest=await readDistribution(final,snapshot.installation_id);
+    if(current.url_generation!==snapshot.url_generation||current.config_generation!==snapshot.config_generation||!current.enabled||current.deleted_at||current.lifecycle_state!=='ACTIVE'||current.project_state!=='ACTIVE'||latest?.version!==distribution.version){check.status='NOT_VERIFIED';check.reason='CONFIGURATION_CHANGED';}
+    await final.query('INSERT INTO controlled_installation_checks(id,project_id,page_id,distribution_version,url_generation,config_generation,result) VALUES($1,$2,$3,$4,$5,$6,$7)',[randomUUID(),project,page,distribution.version,snapshot.url_generation,snapshot.config_generation,check]);
+    await final.query("DELETE FROM controlled_installation_checks WHERE project_id=$1 AND checked_at<now()-interval '7 days'",[project]);
+    await final.query('DELETE FROM controlled_installation_checks WHERE page_id=$1 AND id NOT IN (SELECT id FROM controlled_installation_checks WHERE page_id=$1 ORDER BY checked_at DESC LIMIT 10)',[page]);
+    await final.query('COMMIT');return check;
+  }catch(error){await final.query('ROLLBACK');throw error;}finally{final.release();}
 }

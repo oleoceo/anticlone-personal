@@ -17,7 +17,7 @@ import { handleAdminUi } from './admin-ui.js';
 import { configureHealth } from './health-alerts.js';
 import { disableInstallation, enableInstallation, installationDiagnostic, InstallationOriginConflict } from './installation.js';
 
-// Laboratory-only: one process, one owner, ephemeral sessions and rate limit.
+// Private loopback process, one owner, ephemeral sessions and rate limit.
 export function createAdminServer(passwordRecord: string, totpSecret: string, db: Pool, now: () => number = Date.now) {
   if (!/^[A-Z2-7]{32}$/.test(totpSecret)) throw new Error('invalid TOTP configuration');
   const totp = new TOTP({ secret: Secret.fromBase32(totpSecret), algorithm: 'SHA1', digits: 6, period: 30 });
@@ -27,9 +27,14 @@ export function createAdminServer(passwordRecord: string, totpSecret: string, db
   const salt = Buffer.from(match[1], 'hex'), expected = Buffer.from(match[2], 'hex');
   const sessions = new Map<string, { expiry: number; kind: 'bearer' | 'web'; csrf: string }>();
   let attempts = 0, windowStart = now(), pending = false;
-  return http.createServer((req, res) => {
+  const server = http.createServer({headersTimeout:10000,requestTimeout:15000,connectionsCheckingInterval:1000,maxHeaderSize:8192},(req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
+    // Applies to bearer API as well as the UI. No reverse proxy is authorized
+    // for this private listener; forwarded headers cannot grant local authority.
+    if (req.socket.localAddress !== '127.0.0.1' || req.socket.remoteAddress !== '127.0.0.1' || req.headers.host !== `127.0.0.1:${req.socket.localPort}` || ['forwarded','x-forwarded-for','x-forwarded-host','x-forwarded-proto','x-real-ip'].some(name=>req.headers[name] !== undefined)) {
+      res.writeHead(403).end(); return;
+    }
     const uiLogin = req.url === '/admin/ui/login' && req.method === 'POST';
     if (req.url?.startsWith('/admin/ui/')) {
       if (!handleAdminUi(req, res, db, sessions, now, uiLogin)) return;
@@ -243,4 +248,8 @@ export function createAdminServer(passwordRecord: string, totpSecret: string, db
       res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ token, expiresIn: 900 }));
     });
   });
+  server.maxConnections=64;
+  server.maxRequestsPerSocket=100;
+  server.keepAliveTimeout=5000;
+  return server;
 }

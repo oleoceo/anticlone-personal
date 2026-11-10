@@ -1,0 +1,6 @@
+# Explicit opt-in overlay; does not authorize any project or page.
+# docker compose -f compose.yaml -f operational.yaml ...
+services:
+  gateway:
+    environment:
+      GATEWAY_MODE: OPERATIONAL
