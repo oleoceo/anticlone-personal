@@ -74,7 +74,7 @@ test('local notification UI: browser, session boundaries, CSRF, concurrency and 
     assert.equal(await page.locator('#settings').evaluate(element=>(element as HTMLElement).inert),false);
     await page.unroute('**/admin/ui/settings');
     await page.getByRole('button',{name:'Solicitar habilitação'}).click();
-    await page.getByText('Habilitação solicitada — envio não operacional').waitFor();
+    await page.getByText('Habilitação solicitada — conferir transporte').waitFor();
     await page.getByLabel('Destinatário').fill('new@example.test');
     await page.getByRole('button',{name:'Desativar solicitação'}).click();
     await page.getByText('Solicitação desativada.',{exact:true}).waitFor();
@@ -91,7 +91,7 @@ test('local notification UI: browser, session boundaries, CSRF, concurrency and 
     assert.equal(await enable.isEnabled(),true);
     assert.equal(await page.locator('#unsaved').isHidden(),true);
     await enable.click();
-    await page.getByText('Habilitação solicitada — envio não operacional').waitFor();
+    await page.getByText('Habilitação solicitada — conferir transporte').waitFor();
     assert.equal(enableRequests,1);
     assert.equal((await db.query('SELECT recipient FROM notification_settings')).rows[0].recipient,'new@example.test');
     const current=await (await fetch(base+'/admin/ui/settings',{headers:{'sec-fetch-site':'same-origin',cookie:`admin_session=${cookie.value}`}})).json() as Record<string,unknown>;

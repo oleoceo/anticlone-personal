@@ -10,6 +10,7 @@ import { invalidateInactivity, evaluateInactivity, deliverHealth, maintainHealth
 import { authorizedHosts, realResolver, collectInfrastructure } from './infrastructure-dns.js';
 import { smtpProvider } from './smtp-provider.js';
 import { scopedCorrelationOrigin } from './runtime-layer-observations.js';
+import {deliverProviderCta} from './cta-delivery.js';
 
 // One serialized sweep, keyset batches, independent failure/backoff state per project.
 // Paused projects retain cleanup, but cannot collect or reconcile operations.
@@ -22,7 +23,7 @@ export function projectMaintenance(db: Pool, env: NodeJS.ProcessEnv, exclude?: s
   async function createState() {
     const failures=new OperationalObservations();
     const optional=await optionalSchemas(db,(source,failed,code)=>failures.observe(source,failed,code));
-    return {failures,optional,version:1,persisted:0,pending:0,claimAfter:new Map<string,number>(),claims:new Set<string>(),retention:0,healthRetention:0,dnsRetention:0,dnsAfter:0,dnsIndex:0};
+    return {failures,optional,version:1,persisted:0,pending:0,claimAfter:new Map<string,number>(),claims:new Set<string>(),retention:0,healthRetention:0,dnsRetention:0,dnsAfter:0,dnsIndex:0,ctaAfter:0};
   }
   async function getState(id:string) {
     if (!states.has(id)) {
@@ -49,6 +50,8 @@ export function projectMaintenance(db: Pool, env: NodeJS.ProcessEnv, exclude?: s
               if(aliases.rows[0].installed)await db.query("DELETE FROM runtime_alias_activity s USING runtime_aliases a,protected_pages p WHERE s.alias=a.alias AND a.installation_id=p.installation_id AND p.project_id=$1 AND s.last_received_at<now()-interval '7 days'",[id]);
               const checks=await db.query("SELECT to_regclass('controlled_installation_checks') IS NOT NULL AS installed");
               if(checks.rows[0].installed)await db.query("DELETE FROM controlled_installation_checks WHERE project_id=$1 AND checked_at<now()-interval '7 days'",[id]);
+              const reviews=await db.query("SELECT to_regclass('notification_reviews') IS NOT NULL AS installed");
+              if(reviews.rows[0].installed)await db.query("DELETE FROM notification_reviews WHERE project_id=$1 AND occurred_at<now()-interval '30 days'",[id]);
               pageRetention.set(id,Date.now()+3600_000);
             }
             if (id===exclude) continue;
@@ -58,6 +61,7 @@ export function projectMaintenance(db: Pool, env: NodeJS.ProcessEnv, exclude?: s
             await optional.degradation.run('maintenance',async()=>maintainDegradation(db,id,await scopedCorrelationOrigin(db,id,env),optional.canaryDegradation.state!=='NOT_INSTALLED'));
             try { await cleanup(db,id); if (active) await deliverOne(db,id,smtp ?? Number(env.SMTP_PORT)); failures.observe('maintenance',false); }
             catch { failures.observe('maintenance',true,'UNKNOWN'); }
+            if(active&&smtp&&Date.now()>=state.ctaAfter){try{await deliverProviderCta(db,id,smtp);failures.observe('cta_delivery',false);}catch{state.ctaAfter=Date.now()+60000;failures.observe('cta_delivery',true,'UNKNOWN');}}
             if (active) {
             await optional.health.run('maintenance',async()=>{
               if (state.persisted!==state.version) { const version=state.version; await invalidateInactivity(db,id,version>1); state.persisted=version; }
@@ -68,7 +72,7 @@ export function projectMaintenance(db: Pool, env: NodeJS.ProcessEnv, exclude?: s
               const version=state.version;
               const current=()=>state.persisted===state.version && version===state.version && state.pending===0;
               if (current()) await evaluateInactivity(db,id,current);
-              if (!smtp && current()) await deliverHealth(db,id,Number(env.SMTP_PORT),current);
+              if (current()) await deliverHealth(db,id,smtp??Number(env.SMTP_PORT),current);
             });
             }
             await optional.health.run('retention',async()=>{

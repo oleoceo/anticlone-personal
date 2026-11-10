@@ -2,8 +2,9 @@ import { assertProjectAdministrativeWrite } from './admin-project-write.js';
 import type { Pool, PoolClient } from 'pg';
 import { sendLocalMail } from './alerts.js';
 import { budgetMayBeAvailable, lockBudget, recordBudget } from './notification-budget.js';
-import { notificationAdmission, notificationRetention } from './notification-lifecycle.js';
+import { notificationAdmission, notificationRetention,reviewedRelease } from './notification-lifecycle.js';
 import { operationallyEligible } from './operational-eligibility.js';
+import {providerAuthorized,sendProviderNotice,type SmtpProvider} from './smtp-provider.js';
 
 // Claims are unauthenticated; inactivity describes only a lack of observed claims.
 export async function configureHealth(db: Pool, project: string, enabled: boolean, seconds: number, operationalEnabled: boolean) {
@@ -110,13 +111,14 @@ export async function evaluateInactivity(db: Pool, project: string, isCurrent: (
   } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
 }
 
-export async function recordOperationalState(db: Pool, project: string, source: string, nature: string, active: boolean, observedAt?: Date) {
+export async function recordOperationalState(db: Pool, project: string, source: string, nature: string, active: boolean, observedAt?: Date,contextCurrent?:(client:PoolClient)=>Promise<boolean>) {
   if (!/^[a-z_]{1,40}$/.test(source) || !/^[A-Z0-9_]{1,40}$/.test(nature)) throw new TypeError('invalid operational state');
   const client = await db.connect();
   try {
     await client.query('BEGIN');
     if (!await operationallyEligible(client,project,undefined,true)) { await client.query('ROLLBACK'); return; }
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1), 45)',[project]);
+    if(contextCurrent&&!await contextCurrent(client)){await client.query('ROLLBACK');return;}
     await transition(client,project,'OPERATIONAL',source,nature,active,observedAt);
     await client.query('COMMIT');
   } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
@@ -163,27 +165,34 @@ export async function recoverOperationalSource(db: Pool, project: string, source
   } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
 }
 
-export async function deliverHealth(db: Pool, project: string, port: number, isCurrent: () => boolean = () => true) {
+export async function deliverHealth(db: Pool, project: string, port: number|SmtpProvider, isCurrent: () => boolean = () => true,onlyOperational=false) {
   const client = await db.connect();
   try {
     await client.query('BEGIN');
     const cutoff=await notificationAdmission(client,project);
     if (cutoff===false) return;
+    const released=await reviewedRelease(client,'HEALTH','$2');
+    const history=(await client.query("SELECT to_regclass('health_delivery_attempts') IS NOT NULL AS installed")).rows[0].installed;
+    if(typeof port!=='number'&&(!history||!await providerAuthorized(client,port)))return;
     const locked = (await client.query('SELECT pg_try_advisory_xact_lock(hashtext($1), 45) AS locked', [project])).rows[0].locked;
     if (!locked || !budgetMayBeAvailable(db)) return;
-    let item: {episode_id:string;kind:string} | undefined;
+    let item: {episode_id:string;kind:string;source:string;attempts:number} | undefined;
     try {
       if (await lockBudget(client,db) && isCurrent()) {
-        const result = await client.query(`SELECT d.episode_id,e.kind FROM health_delivery d JOIN health_episodes e ON e.id=d.episode_id
+        const result = await client.query(`SELECT d.episode_id,e.kind,e.source,d.attempts FROM health_delivery d JOIN health_episodes e ON e.id=d.episode_id
           JOIN installation_health_settings s ON s.project_id=e.project_id
           JOIN installations i ON i.project_id=e.project_id JOIN projects p ON p.id=i.project_id
-          WHERE ($2::timestamptz IS NULL OR e.opened_at>$2) AND ((e.kind='INACTIVE' AND s.enabled AND i.enabled AND i.origin=p.origin) OR (e.kind='OPERATIONAL' AND s.operational_enabled)) AND e.project_id=$1 AND e.recovered_at IS NULL AND e.invalidated_at IS NULL AND (e.kind='OPERATIONAL' OR NOT EXISTS (SELECT 1 FROM installation_last_signal l WHERE l.project_id=e.project_id AND l.last_observed_at>e.opened_at)) AND d.sent_at IS NULL AND d.expired_at IS NULL
+          WHERE ($2::timestamptz IS NULL OR e.opened_at>$2 OR ${released}) AND ((e.kind='INACTIVE' AND s.enabled AND i.enabled AND i.origin=p.origin) OR (e.kind='OPERATIONAL' AND s.operational_enabled)) AND e.project_id=$1 AND e.recovered_at IS NULL AND e.invalidated_at IS NULL AND (e.kind='OPERATIONAL' OR NOT EXISTS (SELECT 1 FROM installation_last_signal l WHERE l.project_id=e.project_id AND l.last_observed_at>e.opened_at)) AND d.sent_at IS NULL AND d.expired_at IS NULL
           AND d.attempts<3 AND d.next_attempt<=clock_timestamp() AND e.opened_at>clock_timestamp()-interval '24 hours'
+          ${history?"AND NOT EXISTS(SELECT 1 FROM health_delivery_attempts h WHERE h.episode_id=d.episode_id AND h.finished_at IS NULL)":''}
+          ${history&&typeof port!=='number'?"AND (d.attempts=0 OR EXISTS(SELECT 1 FROM health_delivery_attempts h WHERE h.episode_id=d.episode_id AND h.attempt=d.attempts AND h.transport='SMTP_PROVIDER' AND h.finished_at IS NOT NULL))":''}
+          ${onlyOperational?"AND e.kind='OPERATIONAL'":''}
           ORDER BY d.episode_id LIMIT 1 FOR UPDATE OF d SKIP LOCKED`, [project,cutoff]);
         item = result.rows[0];
         if (item) {
           await client.query("UPDATE health_delivery SET attempts=attempts+1,next_attempt=clock_timestamp()+make_interval(secs=>60 * (1 << attempts)) WHERE episode_id=$1", [item.episode_id]);
           await client.query("INSERT INTO health_history(episode_id,event) VALUES($1,'ATTEMPT')", [item.episode_id]);
+          if(history)await client.query('INSERT INTO health_delivery_attempts(episode_id,attempt,transport) VALUES($1,$2,$3)',[item.episode_id,item.attempts+1,typeof port==='number'?'SMTP_LOCAL':'SMTP_PROVIDER']);
           await recordBudget(client);
         }
       }
@@ -196,19 +205,26 @@ export async function deliverHealth(db: Pool, project: string, port: number, isC
       try {
         await client.query("UPDATE health_delivery SET attempts=attempts-1,next_attempt=clock_timestamp() WHERE episode_id=$1",[item.episode_id]);
         await client.query("INSERT INTO health_history(episode_id,event) VALUES($1,'DEFERRED')",[item.episode_id]);
+        if(history)await client.query('DELETE FROM health_delivery_attempts WHERE episode_id=$1 AND attempt=$2',[item.episode_id,item.attempts+1]);
         await client.query('COMMIT');
       } catch (error) { await client.query('ROLLBACK'); throw error; }
       return;
     }
+    let accepted=false;
     try {
-      await sendLocalMail(port,{from:'anticlone@example.test',to:'owner@example.test',subject:'AntiClone health observation',text:`Health episode ${item.episode_id}: ${item.kind}. This observation is not proof of tampering.`,messageId:`<anticlone-health-${item.episode_id}@example.test>`});
+      if(typeof port==='number')await sendLocalMail(port,{from:'anticlone@example.test',to:'owner@example.test',subject:'AntiClone health observation',text:`Health episode ${item.episode_id}: ${item.kind}. This observation is not proof of tampering.`,messageId:`<anticlone-health-${item.episode_id}@example.test>`});
+      else await sendProviderNotice(port,'health-'+item.episode_id,'AntiClone: health observation',`Project ${project}: health episode ${item.episode_id}, source ${item.source}, ${item.kind}. This observation is not proof of tampering, public availability or identity.`);
+      accepted=true;
       await client.query('BEGIN');
       await client.query('UPDATE health_delivery SET sent_at=clock_timestamp() WHERE episode_id=$1', [item.episode_id]);
       await client.query("INSERT INTO health_history(episode_id,event) VALUES($1,'SENT')", [item.episode_id]);
+      if(history)await client.query("UPDATE health_delivery_attempts SET finished_at=clock_timestamp(),outcome='ACCEPTED' WHERE episode_id=$1 AND attempt=$2",[item.episode_id,item.attempts+1]);
       await client.query('COMMIT');
-    } catch {
+    } catch(error) {
       await client.query('ROLLBACK');
+      if(accepted)throw error; // A persistence failure cannot turn SMTP acceptance into rejection.
       await client.query("INSERT INTO health_history(episode_id,event) VALUES($1,'FAILED_UNCERTAIN')", [item.episode_id]);
+      if(history)await client.query("UPDATE health_delivery_attempts SET finished_at=clock_timestamp(),outcome='FAILED' WHERE episode_id=$1 AND attempt=$2 AND finished_at IS NULL",[item.episode_id,item.attempts+1]);
     }
   } finally {
     await client.query('ROLLBACK');
@@ -221,10 +237,11 @@ export async function maintainHealthHistory(db: Pool, project: string) {
   try {
     await client.query('BEGIN');
     const retention=await notificationRetention(client,project);
+    const released=await reviewedRelease(client,'HEALTH','$3');
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1), 45)',[project]);
     const expired = await client.query(`UPDATE health_delivery d SET expired_at=clock_timestamp()
       FROM health_episodes e WHERE e.id=d.episode_id AND e.project_id=$1 AND d.sent_at IS NULL AND d.expired_at IS NULL
-      AND $2 AND ($3::timestamptz IS NULL OR e.opened_at>$3)
+      AND $2 AND ($3::timestamptz IS NULL OR e.opened_at>$3 OR ${released})
       AND (d.attempts=0 OR d.next_attempt<=clock_timestamp()) AND (e.opened_at<=clock_timestamp()-interval '24 hours' OR d.attempts>=3) RETURNING d.episode_id`,[project,retention.active,retention.cutoff]);
     for (const row of expired.rows) await client.query("INSERT INTO health_history(episode_id,event) VALUES($1,'EXPIRED')",[row.episode_id]);
     await client.query("DELETE FROM health_operational_keys k USING health_episodes e WHERE k.episode_id=e.id AND e.project_id=$1 AND k.created_at<clock_timestamp()-interval '30 days'",[project]);

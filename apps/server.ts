@@ -13,6 +13,7 @@ import { Pool } from 'pg';
 import { configuredOrigin, hostFromUrl, cleanup, observe, observeCanary } from './detection.js';
 import { deliverOne } from './alerts.js';
 import { smtpProvider } from './smtp-provider.js';
+import {deliverProviderCta} from './cta-delivery.js';
 import { classifyTraffic } from './traffic.js';
 import { entryDecision, approvedDestination } from './page-redirect.js';
 import { validateAllocation } from './allocation.js';
@@ -31,6 +32,7 @@ const boundary = gatewayBoundary(process.env);
 const connectionString = process.env.DATABASE_URL, project = process.env.PROJECT_ID;
 const smtpPort = Number(process.env.SMTP_PORT), port = Number(process.env.PORT ?? 3000);
 const cloneSmtp = smtpProvider(process.env);
+let ctaDeliveryAfter=0;
 if (!connectionString || (project !== undefined && !/^[a-zA-Z0-9_-]{1,64}$/.test(project)) || !Number.isInteger(smtpPort) || smtpPort < 1 || smtpPort > 65535 || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('invalid local test configuration');
 const activeProject: string = project ?? '';
 // Multiproject observation is currently a laboratory-only checkpoint.
@@ -322,6 +324,7 @@ async function maintenance() {
       observeFailure('maintenance',true,safeCode);
       process.stderr.write('maintenance MAINTENANCE_ERROR; persistence pending\n');
     }
+    if(active&&cloneSmtp&&Date.now()>=ctaDeliveryAfter){try{await deliverProviderCta(pool,activeProject,cloneSmtp);observeFailure('cta_delivery',false);}catch{ctaDeliveryAfter=Date.now()+60000;observeFailure('cta_delivery',true,'UNKNOWN');}}
     if (active) {
     await optional.health.run('maintenance', async () => {
       if (healthBaselineVersion !== healthBaselinePersisted) {
@@ -333,7 +336,7 @@ async function maintenance() {
       const version=healthBaselineVersion;
       if (version === healthBaselinePersisted && claimPending.size === 0)
         await evaluateInactivity(pool, activeProject, () => version===healthBaselineVersion && claimPending.size===0);
-      if (!cloneSmtp && version === healthBaselineVersion && version === healthBaselinePersisted) await deliverHealth(pool, activeProject, smtpPort, () => version===healthBaselineVersion);
+      if (version === healthBaselineVersion && version === healthBaselinePersisted) await deliverHealth(pool, activeProject, cloneSmtp??smtpPort, () => version===healthBaselineVersion);
     });
     }
     await optional.health.run('retention',async()=>{

@@ -47,10 +47,11 @@ sem promessa de exactly-once. Um incidente preserva sinal não verificado até
 triagem explícita; o e-mail não confirma identidade nem autoria.
 
 Sem `SMTP_PROVIDER`, preserva-se o laboratório anterior: loopback e endereços
-sintéticos fixos. O provedor desta entrega atende alertas de clone; envio de
-saúde e CTA continua exclusivamente laboratorial. Com provedor de clone
-configurado, o gateway não tenta enviar alertas de saúde para uma porta local
-derivada do provedor. Episódios e histórico de saúde continuam preservados.
+sintéticos fixos. As migrations 057/058 e a [Frente 2](PRE-VPS-FRONT2.md)
+estendem o mesmo provedor para CTA/saúde, com histórico de tentativas e revisão
+auditada de backlog. Com provedor configurado, saúde não usa uma porta local
+derivada do provedor. O worker independente pode alertar sobre falha do backend
+local; isso não comprova disponibilidade pública nem entrega na caixa postal.
 
 Prova reproduzível: `npm run build` e
 `node --test dist/tests/smtp-provider.test.js`, com `TEST_DATABASE_URL` de
