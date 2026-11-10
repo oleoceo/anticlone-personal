@@ -2,8 +2,8 @@
 # STATUS — AntiClone Personal
 - **Investigação pré-VPS / PR #65:** recibos opcionais 054 ligam LP/instalação/recurso/alias ao painel existente; importação administrativa de logs minimizados, sem identidade de visitante.
 - **Verdade observável:** importação atestada não verifica acesso; horário original UNKNOWN, fontes não conectadas NOT_OBSERVABLE. Risco contextual UNCERTAIN e D05 preservados; contratos em docs/INVESTIGATION-CHAIN.md.
-- **Validação:** testes PostgreSQL/Chromium, Nginx/TLS e CI oficial em execução; resultados e SHA final no PR. Não declarar capacidade integral validada antes dos gates.
-- **Revisão:** sessão independente /root/evidence_review corrigiu dois P2, favorável ao código f26927e; delta final requer conferência. F08 BLOCKED por laboratório network=host; sem merge/deploy/coleta real.
+- **Validação:** focados PostgreSQL/Chromium 3 PASS/0 FAIL/0 SKIP em f17b6ad; regressão Nginx/TLS, gates oficiais e SHA final vinculados ao PR. F11/F13/F14 permanecem PARCIAIS.
+- **Revisão:** sessão independente /root/evidence_review corrigiu dois P2, favorável ao código bdb09a5; delta de fixtures e gates finais registrados no PR. F08 BLOCKED por laboratório network=host; sem merge/deploy/coleta real.
 - **F07/F03 PARCIAIS — distribuição v1 após PR #63:** três papéis em um hostname, aliases persistidos/imutáveis por instalação/LP e revisão, HTML/CSS no painel; consulta sem rotação, Fallback independente e URLs anteriores preservadas. Contrato: docs/RUNTIME-DISTRIBUTION-CONTRACT.md; migration 051 somente laboratorial.
 - **Integração preservada:** handlers de Page Redirect/CTA/Stealth e investigação existentes; canários passivos atualizam F45 e correlação F44 scoped autorizada conserva UNKNOWN após reinício/perda, sem novo HIGH operacional.
 - **Provas locais:** Linux/PostgreSQL/Chromium/Nginx HTTPS, regressão integral 104 PASS/0 FAIL/0 SKIP e complemento TLS final 2/2 PASS; lint/typecheck/build e 9 testes Python PASS. Cenário legado+alias, instalação do painel, F44/F45, versões antigas e falha real de coleta exercitados.
