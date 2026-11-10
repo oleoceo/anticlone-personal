@@ -63,8 +63,14 @@ test('authorized original requests and partial copy: contextual evidence without
     await assert.rejects(importOriginalRequest(db,'one',{...payload,resource:'SCRIPT'}),TypeError);
     await assert.rejects(importOriginalRequest(db,'two',{...payload,id:randomUUID()}),TypeError);
     for(const bad of [{...payload,ip:'192.0.2.1'},{...payload,url:'http://127.0.0.1/private'},{...payload,authorized:false},{...payload,cookies:'private'}])await assert.rejects(importOriginalRequest(db,'one',bad),TypeError);
+    const point=randomUUID();await db.query("INSERT INTO cta_points(project_id,id,surface,kind) VALUES('one',$1,'/second','a')",[point]);
+    await db.query("INSERT INTO cta_drift_alerts(project_id,point_id,reason) VALUES('one',$1,'DESTINATION_CHANGED')",[point]);
     const rows=await investigation(db,'one');assert.equal(rows.length,1);const row=rows[0];
-    assert.equal(row.linked_evidence.events.filter((e:{kind:string})=>e.kind==='runtime_receipt').length,1);
+    assert.equal(row.project_cta_context.relation,'PROJECT_ONLY');
+    assert.ok(row.history.chronology.some((e:{source:string;limitation:string})=>e.source==='cta_drift'&&e.limitation.includes('sem vínculo')));
+    const runtimeEvents=row.linked_evidence.events.filter((e:{kind:string})=>e.kind==='runtime_receipt');
+    assert.ok(runtimeEvents.length>=1);
+    assert.equal(new Set(runtimeEvents.map((e:{first_received_at:Date})=>Math.floor(new Date(e.first_received_at).getTime()/60000))).size,runtimeEvents.length,'one receipt per minute/context; crossing a minute is legitimate');
     assert.ok(row.linked_evidence.events.some((e:{kind:string})=>e.kind==='original_request'));
     assert.ok(row.linked_evidence.events.every((e:{page_id:string})=>e.page_id===page));
     assert.ok(row.history.chronology.some((e:{description:string})=>e.description.includes('Importação')));

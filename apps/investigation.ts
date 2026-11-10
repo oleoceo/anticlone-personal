@@ -9,11 +9,13 @@ export async function investigation(pool: Pool, project: string) {
     to_regclass('infrastructure_dns_observations') IS NOT NULL AS infrastructure,
     to_regclass('investigation_timeline') IS NOT NULL AS timeline,
     to_regclass('investigation_receipts') IS NOT NULL AS receipts,
+    to_regclass('cta_drift_alerts') IS NOT NULL AS cta,
     to_regclass('incident_status_audit') IS NOT NULL AS audit,
     to_regclass('alert_outbox') IS NOT NULL AS notifications,
     to_regclass('notification_lifecycle_queue') IS NOT NULL AS notification_holds,
     to_regclass('clone_delivery_attempts') IS NOT NULL AS notification_history`);
   const available = schema.rows[0];
+  const cta=available.cta?await pool.query('SELECT id,point_id,reason,created_at FROM cta_drift_alerts WHERE project_id=$1 AND created_at>=clock_timestamp()-interval \'30 days\' ORDER BY created_at,id LIMIT 100',[project]):{rows:[]};
   const receipts=available.receipts?await pool.query(`SELECT id,page_id,installation_id,kind,source,resource,alias,claimed_host,first_received_at,last_received_at FROM investigation_receipts WHERE project_id=$1 AND last_received_at>=clock_timestamp()-interval '7 days' ORDER BY first_received_at,id LIMIT 10000`,[project]):{rows:[]};
   const pagesByHost=new Map<string,Set<string>>();
   for(const receipt of receipts.rows)if(receipt.claimed_host){const pages=pagesByHost.get(receipt.claimed_host)??new Set<string>();pages.add(receipt.page_id);pagesByHost.set(receipt.claimed_host,pages);}
@@ -54,6 +56,7 @@ export async function investigation(pool: Pool, project: string) {
   const notificationHistory = available.notification_history ? await pool.query(`SELECT h.outbox_id,h.attempt,h.transport,h.started_at,h.finished_at,h.outcome
     FROM clone_delivery_attempts h JOIN alert_outbox a ON a.id=h.outbox_id JOIN incidents i ON i.id=a.incident_id WHERE i.project_id=$1 ORDER BY h.outbox_id,h.attempt`,[project]) : {rows:[]};
   return result.rows.map(row => ({ ...row,
+    project_cta_context:{available:available.cta,events:cta.rows,relation:'PROJECT_ONLY',limitation:'CTA drift belongs to this project; no host, visitor or incident causality is established.'},
     contextual_assessment:assessEvidence([
       ...receipts.rows.filter(item=>item.claimed_host===row.host || (!item.claimed_host && pagesByHost.get(row.host)?.has(item.page_id))).map(item=>({
         type:item.kind==='original_request'?'original_request_import' as const:'runtime_resource' as const,
