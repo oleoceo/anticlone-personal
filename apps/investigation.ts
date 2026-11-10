@@ -54,9 +54,22 @@ export async function investigation(pool: Pool, project: string) {
   const notificationHistory = available.notification_history ? await pool.query(`SELECT h.outbox_id,h.attempt,h.transport,h.started_at,h.finished_at,h.outcome
     FROM clone_delivery_attempts h JOIN alert_outbox a ON a.id=h.outbox_id JOIN incidents i ON i.id=a.incident_id WHERE i.project_id=$1 ORDER BY h.outbox_id,h.attempt`,[project]) : {rows:[]};
   return result.rows.map(row => ({ ...row,
+    contextual_assessment:assessEvidence([
+      ...receipts.rows.filter(item=>item.claimed_host===row.host || (!item.claimed_host && pagesByHost.get(row.host)?.has(item.page_id))).map(item=>({
+        type:item.kind==='original_request'?'original_request_import' as const:'runtime_resource' as const,
+        provenance:item.kind==='original_request'?'administrator' as const:'gateway' as const,
+        reliability:item.kind==='original_request'?'uncorroborated' as const:'observed' as const,validity:'unknown' as const})),
+      ...dns.rows.filter(item=>item.host===row.host).map(()=>({type:'dns_observation' as const,provenance:'infrastructure' as const,reliability:'observed' as const,validity:'unknown' as const})),
+      ...(row.status==='confirmed_copy'?[{type:'administrative_copy_confirmation' as const,provenance:'administrator' as const,reliability:'uncorroborated' as const,validity:'unknown' as const}]:[]),
+      ...(gaps.rows.length?[{type:'collection_gap' as const,provenance:'gateway' as const,reliability:'unknown' as const,validity:'unknown' as const}]:[])
+    ],false),
     linked_evidence: {
       available:available.receipts,original_access_coverage:'NOT_OBSERVABLE_UNLESS_IMPORTED',
-      events:receipts.rows.filter(item=>item.claimed_host===row.host || (!item.claimed_host && pagesByHost.get(row.host)?.has(item.page_id))),
+      events:receipts.rows.filter(item=>item.claimed_host===row.host || (!item.claimed_host && pagesByHost.get(row.host)?.has(item.page_id))).map(item=>({...item,
+        confidence:item.kind==='original_request'?'ADMINISTRATOR_ATTESTED_LOG':'SERVER_RECEIPT_ONLY',
+        provenance:item.kind==='original_request'?'administrator_import':'gateway',
+        relation:item.claimed_host===row.host?'claimed_host_and_page':'page_context_only',
+        original_access_at:'UNKNOWN',operator_identity:'UNKNOWN'})),
       limitation:'LP/installation and claimed hostname are context links only. Shared LP, alias, time or resource does not link visitors or identify an operator. Import time is not original access time. Missing or saturated collection remains unknown.'
     },
     notification: {available:available.notifications,history_available:available.notification_history,

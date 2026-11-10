@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {randomUUID} from 'node:crypto';
+import {randomUUID,scryptSync} from 'node:crypto';
 import {readFile,readdir} from 'node:fs/promises';
 import {createServer} from 'node:http';
 import {once} from 'node:events';
@@ -11,6 +11,8 @@ import {importOriginalRequest,recordRuntimeReceipt,retainInvestigationReceipts} 
 import {scopedGateway} from '../apps/scoped-gateway.js';
 import {investigation} from '../apps/investigation.js';
 import {assessEvidence} from '../apps/risk.js';
+import {createAdminServer} from '../apps/admin-auth.js';
+import {TOTP,Secret} from 'otpauth';
 
 test('authorized original requests and partial copy: contextual evidence without visitor identity',{timeout:60000},async()=>{
   assert.ok(process.env.TEST_DATABASE_URL);
@@ -29,11 +31,24 @@ test('authorized original requests and partial copy: contextual evidence without
   }).listen(0,'127.0.0.1');await once(site,'listening');
   const origin='http://127.0.0.1:'+(site.address() as AddressInfo).port,copy=origin.replace('127.0.0.1','localhost');
   const browser=await chromium.launch();
+  const salt='0123456789abcdef0123456789abcdef',secret='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+  const admin=createAdminServer(`scrypt$${salt}$${scryptSync('password',Buffer.from(salt,'hex'),64).toString('hex')}`,secret,db).listen(0,'127.0.0.1');await once(admin,'listening');
+  const adminBase='http://127.0.0.1:'+(admin.address() as AddressInfo).port;
   try {
     for(const file of (await readdir('infra')).filter(file=>/^\d{3}_.+\.sql$/.test(file)).sort())await db.query((await readFile('infra/'+file,'utf8')).replace(/^\uFEFF/,''));
     await db.query("INSERT INTO projects VALUES('one','One',$1),('two','Two','https://other.test')",[origin]);
     await db.query("INSERT INTO protected_pages(id,project_id,installation_id,name) VALUES($1,'one',$2,'First'),($3,'one',$4,'Second')",[page,installation,other,otherInstallation]);
     await db.query("INSERT INTO protected_page_urls(page_id,origin,pathname) VALUES($1,$2,'/'),($3,$2,'/second')",[page,origin,other]);
+    await db.query('CREATE TABLE admin_totp_replay(factor_id text PRIMARY KEY,last_counter bigint NOT NULL)');
+    await db.query('CREATE TABLE admin_totp_codes(factor_id text NOT NULL,digest text NOT NULL,valid_until bigint NOT NULL,PRIMARY KEY(factor_id,digest))');
+    const endpoint=adminBase+'/admin/projects/one/original-requests';
+    assert.equal((await fetch(endpoint,{method:'POST'})).status,401);
+    assert.equal((await fetch(endpoint,{method:'POST',headers:{origin:'https://untrusted.test'}})).status,403);
+    const login=await fetch(adminBase+'/admin/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:'password',code:new TOTP({secret:Secret.fromBase32(secret)}).generate()})});
+    const token=(await login.json() as {token:string}).token;assert.ok(token);
+    const headers={authorization:'Bearer '+token,'content-type':'application/json'};
+    assert.equal((await fetch(endpoint,{method:'POST',headers,body:JSON.stringify({id:randomUUID(),page,resource:'HTML',source:'owned_access_log',authorized:true})})).status,200);
+    assert.equal((await fetch(endpoint,{method:'POST',headers,body:'x'.repeat(2049)})).status,413);
     const tab=await browser.newPage();await tab.goto(origin);await Promise.all(imports);
     assert.equal((await db.query('SELECT count(*)::int n FROM incidents')).rows[0].n,0);
     const response=tab.waitForResponse(r=>r.url().endsWith('/observe/fallback'));await tab.goto(copy);await response;
@@ -53,11 +68,13 @@ test('authorized original requests and partial copy: contextual evidence without
     assert.ok(row.linked_evidence.events.some((e:{kind:string})=>e.kind==='original_request'));
     assert.ok(row.linked_evidence.events.every((e:{page_id:string})=>e.page_id===page));
     assert.ok(row.history.chronology.some((e:{description:string})=>e.description.includes('Importação')));
+    assert.equal(row.contextual_assessment.level,'UNCERTAIN');
+    assert.ok(row.contextual_assessment.sources.some((e:{type:string})=>e.type==='original_request_import'));
     assert.equal((await db.query('SELECT count(*)::int n FROM incidents')).rows[0].n,1);
     assert.equal(assessEvidence([{type:'gateway_receipt',provenance:'gateway',reliability:'observed',validity:'current'}],false).level,'UNCERTAIN');
     await tab.route(base+'/**',route=>route.abort());await tab.goto(copy);assert.equal(await tab.locator('a').getAttribute('href'),'/checkout');
     await db.query("UPDATE investigation_receipts SET last_received_at=clock_timestamp()-interval '8 days' WHERE project_id='one'");
     await retainInvestigationReceipts(db,'two');assert.ok((await db.query('SELECT 1 FROM investigation_receipts')).rowCount);
     await retainInvestigationReceipts(db,'one');assert.equal((await db.query('SELECT 1 FROM investigation_receipts')).rowCount,0);
-  }finally{await browser.close();site.close();gateway.close();await db.end();await root.query(`DROP SCHEMA ${schema} CASCADE`);await root.end();}
+  }finally{await browser.close();site.close();gateway.close();admin.close();await db.end();await root.query(`DROP SCHEMA ${schema} CASCADE`);await root.end();}
 });

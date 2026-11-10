@@ -22,8 +22,8 @@ export function legacyStealthEligible(assessment: RiskAssessment | undefined, pi
 // inputs to the classification; in particular paid attribution is not identity.
 export type RiskEvidence = { source: 'browser'; reliability: 'uncorroborated'; trafficClass: string; kind?: 'paid_click_id' | 'paid_utm' | 'organic_referrer' | 'external_referrer' | 'none' };
 export type StructuredEvidence = {
-  type: 'traffic_claim' | 'no_attribution' | 'gateway_receipt' | 'collection_gap' | 'contradiction';
-  provenance: 'browser' | 'gateway'; reliability: 'uncorroborated' | 'observed' | 'unknown';
+  type: 'traffic_claim' | 'no_attribution' | 'gateway_receipt' | 'collection_gap' | 'contradiction' | 'original_request_import' | 'runtime_resource' | 'dns_observation' | 'administrative_copy_confirmation';
+  provenance: 'browser' | 'gateway' | 'administrator' | 'infrastructure'; reliability: 'uncorroborated' | 'observed' | 'unknown';
   validity: 'current' | 'stale' | 'unknown';
 };
 export type EvidenceLimitation = 'INDEPENDENT_EVIDENCE_NOT_AVAILABLE' | 'PROVENANCE_NOT_VERIFIABLE' | 'EVIDENCE_EXPIRED_OR_UNKNOWN' | 'COLLECTION_GAP' | 'CONTRADICTORY_EVIDENCE' | 'NO_EVIDENCE';
