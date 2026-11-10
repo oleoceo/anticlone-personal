@@ -101,7 +101,7 @@ test('distribution v1: persistent revisions, admin HTML/CSS, real browser layers
     await page.goto(origin);await responses;
     const signals=(await db.query('SELECT source FROM page_installation_signals WHERE page_id=$1 ORDER BY source',[pageId])).rows.map(row=>row.source);
     assert.deepEqual(signals,['core','fallback']);
-    assert.equal((await db.query("SELECT last_activity_at FROM installation_last_signal WHERE project_id='one'")).rows[0].last_activity_at,null,'origin-only canaries cannot prove this LP activity');
+    assert.ok((await db.query("SELECT last_activity_at FROM installation_last_signal WHERE project_id='one'")).rows[0].last_activity_at,'F45 retains origin-level alleged activity without certifying a LP');
     const state=await distributionAdmin(db,request,env);assert.equal(state.diagnostic?.status,'NOT_VERIFIED');
     assert.equal(state.diagnostic?.layers.find(layer=>layer.layer==='bootstrap')?.status,'UNKNOWN');
     assert.equal(state.diagnostic?.controlledVerification.status,'NOT_VERIFIED');
@@ -181,7 +181,8 @@ test('distribution v1: persistent revisions, admin HTML/CSS, real browser layers
     const modernLayers=Promise.all(['e','f','m.gif','n.gif'].map(path=>page.waitForResponse(r=>r.url().endsWith('/'+path)&&r.ok())));
     await page.goto(origin);await modernLayers;
     const routed=await distributionAdmin(db,request,env);
-    assert.equal(routed.aliasActivity?.length,1,'two canary endpoints share a routing alias');
+    assert.equal(routed.aliasActivity?.length,2,'sources remain distinct even sharing a routing alias');
+    for(const layer of ['html_canary','css_canary'])assert.equal(routed.diagnostic?.layers.find(l=>l.layer===layer)?.status,'ROUTE_OBSERVED');
     assert.equal(routed.diagnostic?.status,'NOT_VERIFIED');
     for(const target of ['http://127.0.0.1/','http://169.254.169.254/','https://unapproved.test/'])await assert.rejects(distributionAdmin(db,{...request,action:'verify',url:target},env),TypeError);
     await assert.rejects(db.query('UPDATE runtime_aliases SET origin=$1 WHERE installation_id=$2',[base,installation]));

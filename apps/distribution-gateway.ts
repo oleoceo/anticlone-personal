@@ -46,16 +46,12 @@ export function distributionGateway(db:Pool,scripts:Record<string,Buffer>,dispat
           if (await operationallyEligible(client,context.project,context.page,true)) {
             await recordCanaryClaim(client,context.project,req.headers.referer,source);
             const activity=(await client.query("SELECT to_regclass('runtime_alias_activity') IS NOT NULL AS installed")).rows[0].installed;
-            if(activity) await client.query(`INSERT INTO runtime_alias_activity(alias) VALUES($1) ON CONFLICT(alias) DO UPDATE SET last_received_at=clock_timestamp() WHERE runtime_alias_activity.last_received_at<clock_timestamp()-interval '1 minute'`,[match[1]]);
+            if(activity) await client.query(`INSERT INTO runtime_alias_activity(alias,source) VALUES($1,$2) ON CONFLICT(alias,source) DO UPDATE SET last_received_at=clock_timestamp() WHERE runtime_alias_activity.last_received_at<clock_timestamp()-interval '1 minute'`,[match[1],source]);
             let origin:string|undefined;
             try {origin=configuredOrigin(new URL(req.headers.referer??'').origin);} catch { /* Unknown remains unknown. */ }
-            let pathname:string|undefined;
-            try {pathname=new URL(req.headers.referer??'').pathname;}catch{/* Unknown. */}
-            // A matching route/header is still an unauthenticated claim. An
-            // origin-only Referer cannot distinguish LPs sharing a hostname.
-            if (origin && pathname!=='/' && context.urls.some(url=>url.origin===origin && url.pathname===pathname)) {
-              // Only a more specific claim may contribute to origin-level F45.
-              // It still does not assert installation or integrity of this LP.
+            // F45 is an origin-level aggregate, not LP integrity. Preserve that
+            // unauthenticated activity claim without attributing a pathname.
+            if (origin && context.urls.some(url=>url.origin===origin)) {
               const health=(await client.query("SELECT to_regclass('installation_last_signal') IS NOT NULL AS installed")).rows[0].installed;
               if(health) await recordInstallationActivity(client,context.project,origin);
             }

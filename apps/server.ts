@@ -163,7 +163,7 @@ const server = http.createServer((req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Access-Control-Allow-Origin', '*'); res.setHeader('Cache-Control', 'no-store');
   if (req.method === 'GET' && req.url === '/healthz') {
-    void pool.query('SELECT 1').then(() => res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify({status:'ready', mode:mode.pilot ? 'PILOT_OBSERVE' : 'LAB', action:'OBSERVE_ONLY'}))).catch(() => res.writeHead(503).end()); return;
+    void pool.query('SELECT 1').then(() => res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify({status:'ready', mode:process.env.GATEWAY_MODE==='OPERATIONAL'?'OPERATIONAL':mode.pilot ? 'PILOT_OBSERVE' : 'LAB', action:process.env.GATEWAY_MODE==='OPERATIONAL'?'SCOPED_AUTHORIZATION_REQUIRED':'OBSERVE_ONLY'}))).catch(() => res.writeHead(503).end()); return;
   }
   if (req.method === 'GET' && (req.url === '/runtime.js' || req.url === '/core.js' || req.url === '/fallback.js' || req.url === '/cta-inventory.js')) {
     res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
