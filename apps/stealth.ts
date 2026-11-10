@@ -13,3 +13,10 @@ export function permitsMitigation(policy: StealthPolicy, risk: string | undefine
   // Strong evidence is demonstrated only with a server-configured lab fixture.
   return !(risk === 'HIGH' && assessment?.source === 'lab_configuration' && assessment.reason === 'controlled_fixture' && assessment.confidence === 'test_only');
 }
+
+// A single CTA response cannot both wait for legacy investigative history and
+// make v2 independent of that wait. Require an explicit coherent migration.
+export function assertCtaStealthCompatibility(policies:readonly StealthPolicy[]):void {
+  for (const policy of policies) validateStealth(policy);
+  if (new Set(policies.map(policy=>policy.stealth_version ?? 1)).size>1) throw Error('mixed CTA Stealth contracts require migration and reapproval');
+}

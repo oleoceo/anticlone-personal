@@ -8,8 +8,8 @@ import {Pool} from 'pg';
 import {chromium} from 'playwright';
 import {scopedGateway} from '../apps/scoped-gateway.js';
 import {publishPagePolicy} from '../apps/protection-admin.js';
-import {publishCtaPolicy} from '../apps/cta-policy.js';
-import {managePages} from '../apps/protected-pages.js';
+import {publishCtaPolicy,ctaDecision} from '../apps/cta-policy.js';
+import {managePages,PageConflict} from '../apps/protected-pages.js';
 import {saveDraft,activatePolicy,validateDraft} from '../apps/protection-policy.js';
 import {permitsMitigation} from '../apps/stealth.js';
 import {evaluateRisk,assessObservation,preserveLegacyRiskHistory} from '../apps/risk.js';
@@ -115,6 +115,25 @@ test('GS05/GS19 optional Stealth: PostgreSQL and Chromium, two projects/two LPs,
     await page.unroute('**/entry-decision');await page.unroute('**/cta-refresh');
     await page.goto(copy+'/two');await page.waitForURL(original+'/beta-page');
     await context.close();
+    // A partial migration must be rejected before risk selection; no legacy
+    // history prerequisite may condition OFF mappings in the same envelope.
+    const legacySurface=await publishCtaPolicy(db,'alpha',{enabled:true,surface:'legacy',pathname:'/one',allocation});
+    const point=randomUUID(),dest=randomUUID();
+    await db.query("INSERT INTO cta_points(project_id,id,surface,marker,kind,offer) VALUES('alpha',$1,'legacy','legacy01','a','legacy')",[point]);
+    await db.query("INSERT INTO cta_destinations(project_id,offer,id,url) VALUES('alpha','legacy',$1,$2)",[dest,original+'/legacy-cta']);
+    await db.query("INSERT INTO cta_mappings VALUES('alpha',$1,'legacy',$2)",[point,dest]);
+    const mainVersion=(await db.query("SELECT version FROM active_cta_surface_policies WHERE project_id='alpha' AND surface='main'")).rows[0].version as number;
+    await assert.rejects(approve(pages[0],null,[mainVersion,legacySurface]),PageConflict);
+    for(const risk of ['LOW','HIGH','UNCERTAIN']) assert.equal((await ctaDecision(db,'alpha',original,copy,copy,risk,'a'.repeat(32),'PAID_ATTRIBUTED','/one')).action,'OBSERVE_ONLY');
+    const migrated=await publishCtaPolicy(db,'alpha',{enabled:true,surface:'legacy',pathname:'/one',stealth:false,stealth_version:2,allocation});
+    await approve(pages[0],null,[mainVersion,migrated]);
+    for(const risk of ['LOW','HIGH','UNCERTAIN']) {
+      const result=await ctaDecision(db,'alpha',original,copy,copy,risk,'a'.repeat(32),'PAID_ATTRIBUTED','/one');
+      assert.equal(result.mappings?.length,2);assert.equal(result.stealthVersion,2);
+      assert.equal((await preserveLegacyRiskHistory(result,new Promise<boolean>(()=>{}))).action,'REPLACE_CONVERSION');
+      assert.equal((await preserveLegacyRiskHistory(result,Promise.resolve(false))).action,'REPLACE_CONVERSION');
+    }
+
     await db.query("UPDATE projects SET lifecycle_state='PAUSED' WHERE id='alpha'");assert.equal((await decide(pages[0])).action,'OBSERVE_ONLY');assert.equal((await decide(pages[1])).action,'PAGE_REDIRECT');
     const risks=await db.query('SELECT DISTINCT level FROM risk_assessment_days');assert.ok(risks.rows.some(r=>r.level==='UNCERTAIN'));assert.ok(risks.rows.some(r=>r.level==='HIGH'));
   } finally {

@@ -1,4 +1,4 @@
-import { permitsMitigation, validateStealth, type StealthPolicy } from './stealth.js';
+import { permitsMitigation, validateStealth, assertCtaStealthCompatibility, type StealthPolicy } from './stealth.js';
 import type { RiskAssessment } from './risk.js';
 import { assertProjectAdministrativeWrite } from './admin-project-write.js';
 import type { Pool, PoolClient } from 'pg';
@@ -49,6 +49,7 @@ export async function ctaDecision(db:Pool, project:string, original:string, orig
     const path=pathname ?? all[0].pathname;
     if (!/^\/[a-zA-Z0-9/_-]{0,200}$/.test(path)) return {action:'OBSERVE_ONLY',ctaVersion:version};
     if (observedPathname !== undefined && !/^\/[a-zA-Z0-9/_-]{0,200}$/.test(observedPathname)) return {action:'OBSERVE_ONLY',ctaVersion:version};
+    assertCtaStealthCompatibility(all.filter(policy=>policy.pathname===path && policy.enabled));
     const selectedPolicies=all.filter(policy=>policy.pathname===path && permitsMitigation(policy,risk,assessment) && validate(policyWithoutVersion(policy)).enabled && selected(session,'REPLACE_CONVERSION',policy.version,validateAllocation(policy.allocation),trafficClass));
     if (!selectedPolicies.length) return {action:'OBSERVE_ONLY',ctaVersion:version};
     const rows=await client.query(`SELECT p.surface,p.marker,p.kind,d.url FROM cta_points p JOIN cta_mappings m ON m.project_id=p.project_id AND m.point_id=p.id AND m.offer=p.offer JOIN cta_destinations d ON d.project_id=m.project_id AND d.offer=m.offer AND d.id=m.destination_id LEFT JOIN cta_commercial_references r ON r.project_id=p.project_id AND r.point_id=p.id WHERE p.project_id=$1 AND p.surface=ANY($2::text[]) AND p.kind='a' AND p.marker IS NOT NULL AND p.review_required=false AND r.suspension IS NULL ORDER BY p.id LIMIT 101`,[project,selectedPolicies.map(p=>p.surface)]);

@@ -1,3 +1,4 @@
+import { assertCtaStealthCompatibility } from './stealth.js';
 ﻿import type { PoolClient } from 'pg';
 import { approvedDestination } from './page-redirect.js';
 import { validateAllocation } from './allocation.js';
@@ -16,6 +17,7 @@ export async function approvalConfiguration(client: PoolClient, project: string,
     if (!row.enabled || row.pathname!==original.pathname || (row.bound_page && row.bound_page!==page)) throw new Error('CTA policy incompatible with page');
     validateAllocation(row.allocation);
   }
+  assertCtaStealthCompatibility(policies.rows);
   const surfaces=policies.rows.map(row=>row.surface);
   const points=await client.query(`SELECT p.id,p.surface,p.marker,p.kind,p.offer,p.review_required,m.destination_id,d.url,r.destination_id AS commercial_destination,r.offer AS commercial_offer,r.amount,r.currency,r.version AS commercial_version,r.suspension FROM cta_points p LEFT JOIN cta_mappings m ON m.project_id=p.project_id AND m.point_id=p.id AND m.offer=p.offer LEFT JOIN cta_destinations d ON d.project_id=m.project_id AND d.offer=m.offer AND d.id=m.destination_id LEFT JOIN cta_commercial_references r ON r.project_id=p.project_id AND r.point_id=p.id WHERE p.project_id=$1 AND p.surface=ANY($2::text[]) ORDER BY p.surface,p.id`,[project,surfaces]);
   for (const surface of surfaces) {
