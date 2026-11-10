@@ -20,7 +20,7 @@
       } catch (_) { /* Missing or invalid referrer. */ }
     }
     const scoped = !!distribution || new URL(source).pathname.startsWith('/i/');
-    fetch(new URL('observe', distribution ? distribution.bases.TELEMETRY : source).href, {
+    fetch(new URL(distribution?.paths?.['observe'] ?? 'observe', distribution ? distribution.bases.TELEMETRY : source).href, {
       method: 'POST', headers: { 'Content-Type': 'text/plain' },
       body: JSON.stringify(scoped ? {origin: location.origin, pathname: location.pathname, signals} : {origin: location.origin, signals}), keepalive: true
     }).catch(() => {});

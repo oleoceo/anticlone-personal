@@ -45,6 +45,8 @@ export function projectMaintenance(db: Pool, env: NodeJS.ProcessEnv, exclude?: s
             if (Date.now()>=(pageRetention.get(id) ?? 0)) {
               const installed=await db.query("SELECT to_regclass('page_installation_signals') IS NOT NULL AS installed");
               if (installed.rows[0].installed) await db.query("DELETE FROM page_installation_signals WHERE project_id=$1 AND last_observed_at<now()-interval '7 days'",[id]);
+              const aliases=await db.query("SELECT to_regclass('runtime_alias_activity') IS NOT NULL AS installed");
+              if(aliases.rows[0].installed)await db.query("DELETE FROM runtime_alias_activity s USING runtime_aliases a,protected_pages p WHERE s.alias=a.alias AND a.installation_id=p.installation_id AND p.project_id=$1 AND s.last_received_at<now()-interval '7 days'",[id]);
               pageRetention.set(id,Date.now()+3600_000);
             }
             if (id===exclude) continue;

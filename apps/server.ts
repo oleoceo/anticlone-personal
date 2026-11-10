@@ -34,7 +34,7 @@ const cloneSmtp = smtpProvider(process.env);
 if (!connectionString || (project !== undefined && !/^[a-zA-Z0-9_-]{1,64}$/.test(project)) || !Number.isInteger(smtpPort) || smtpPort < 1 || smtpPort > 65535 || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('invalid local test configuration');
 const activeProject: string = project ?? '';
 // Multiproject observation is currently a laboratory-only checkpoint.
-if (!project && (process.env.GATEWAY_MODE === 'PILOT_OBSERVE' || process.env.GATEWAY_TRANSPORT || process.env.ALLOWED_ORIGIN || process.env.LAB_CONTROLLED_ORIGIN || process.env.LAB_CONTROLLED_RISK)) throw Error('multiproject pilot configuration unavailable');
+if (!project && process.env.GATEWAY_MODE!=='OPERATIONAL' && (process.env.GATEWAY_MODE === 'PILOT_OBSERVE' || process.env.GATEWAY_TRANSPORT || process.env.ALLOWED_ORIGIN || process.env.LAB_CONTROLLED_ORIGIN || process.env.LAB_CONTROLLED_RISK)) throw Error('multiproject pilot configuration unavailable');
 const pool = new Pool({ connectionString, max: 5, connectionTimeoutMillis: 2000, statement_timeout: 3000, query_timeout: 4000 });
 if (cloneSmtp) await pool.query('SELECT outbox_id,attempt,transport,started_at,finished_at,outcome FROM clone_delivery_attempts LIMIT 0');
 pool.on('error', () => process.stderr.write('database connection failed\n'));
@@ -49,7 +49,7 @@ await pool.query('SELECT project_id,host,day,level,evaluator_version,source,reas
 const projectRow = project ? await pool.query('SELECT origin FROM projects WHERE id=$1', [activeProject]) : null;
 if (project && projectRow?.rowCount !== 1) throw new Error('unknown project');
 const normalizedOrigin = projectRow ? configuredOrigin(projectRow.rows[0].origin) : 'http://localhost';
-const mode = project ? gatewayMode(process.env, normalizedOrigin) : {pilot:true,origins:[]};
+const mode = project || process.env.GATEWAY_MODE==='OPERATIONAL' ? gatewayMode(process.env, normalizedOrigin) : {pilot:true,origins:[]};
 let healthBaselineVersion = 1, healthBaselinePersisted = 0;
 const failures = new OperationalObservations();
 function observeFailure(source: string, failed: boolean, code?: string) {

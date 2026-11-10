@@ -137,3 +137,11 @@ PR #59 - contrato multiprojeto (laboratorio):
 - Revisao independente /root/final_review e CI HTTPS do SHA final: parecer/resultados vinculados ao SHA na descricao do PR #59.
 - URLs duplas OBSERVE_ONLY; sinais agregados nao verificam nova URL: conferir script/requisicoes no navegador, remover antiga e reaprovar pelo painel.
 - Sem merge/deploy, mitigacao operacional ou ciclo pausa/arquivo/exclusao; transicao e limites em docs/MULTIPROJECT-TRANSITION.md.
+
+## PR #64 — revisão corretiva em andamento
+- OPERATIONAL: opt-in persistido por LP/aprovação/geração, suspensão e auditoria; HTTPS sintético PostgreSQL/Chromium/Nginx passou no teste focado.
+- Aliases: rotação explícita, histórico estável e recursos neutros v2; v1 e legados preservados; validação final pendente.
+- F44/F45: chegada por alias separada de presença individual; Referer raiz ambíguo; sinais continuam alegações.
+- F08/diagnóstico BLOCKED: verificador sem isolamento de rede comprovado; URLs arbitrárias recusadas e capacidades UNKNOWN/NOT_VERIFIED.
+- Consolidação PARCIAL. Regressão integral, revisão independente consolidada e CI do novo SHA pendentes.
+- Sem merge/deploy/DNS público/migration de produção ou ativação real.

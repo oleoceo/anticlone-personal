@@ -36,3 +36,9 @@ Um hostname público operacional inicial atende SCRIPT, TELEMETRY e STATIC_ASSET
 ## Histórico de D05
 
 A redação inicial aprovada para início era: “Stealth com risco alto ou explicitamente incerto prevalece sobre mitigação visível; sinais não provam identidade.” Foi superada para novas versões explícitas pela decisão do proprietário em 2026-11-09. Versões publicadas legadas conservam esse comportamento; nenhuma fonte histórica SaaS foi modificada.
+
+## Correção operacional do PR #64
+
+Opt-in comercial persistido por projeto/LP, contexto HTTPS explícito, revisão concorrente e vínculo à aprovação/gerações (052). Configurar OPERATIONAL não ativa LP. Origem declarada não comprova cópia: servidor exclui origens oficiais cadastradas e Bootstrap confere contexto real. Suspensão impede novas admissões após commit, preservando D09 para snapshots entregues. D05–D15 preservados.
+
+Rotação na mesma origem cria revisão explícita auditável (053); recursos neutros v2 preservam v1. Canários registram chegada por alias separada da presença alegada da LP; Referer raiz não distingue LPs. Verificador navegável BLOCKED por falta de isolamento de rede demonstrado; URLs arbitrárias são recusadas, sem estados positivos. Esta pendência impede declarar consolidação integral.

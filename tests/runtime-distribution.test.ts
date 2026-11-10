@@ -60,7 +60,7 @@ test('distribution v1: persistent revisions, admin HTML/CSS, real browser layers
   const browser=await chromium.launch();
   const request={project:'one',page:pageId,action:'inspect'};
   try{
-    for(const file of (await readdir('infra')).filter(file=>/^\d{3}_.+\.sql$/.test(file)).sort())await db.query((await readFile('infra/'+file,'utf8')).replace(/^\uFEFF/,''));
+    for(const file of (await readdir('infra')).filter(file=>/^\d{3}_.+\.sql$/.test(file) && Number(file.slice(0,3))<53).sort())await db.query((await readFile('infra/'+file,'utf8')).replace(/^\uFEFF/,''));
     await db.query('CREATE TABLE admin_totp_replay(factor_id text PRIMARY KEY,last_counter bigint NOT NULL)');
     await db.query('CREATE TABLE admin_totp_codes(factor_id text NOT NULL,digest text NOT NULL,valid_until bigint NOT NULL,PRIMARY KEY(factor_id,digest))');
     await db.query("INSERT INTO projects VALUES('one','One',$1),('two','Two','http://localhost:10001')",[origin]);
@@ -83,6 +83,7 @@ test('distribution v1: persistent revisions, admin HTML/CSS, real browser layers
     assert.equal((await fetch(first.bases.SCRIPT+'runtime.js',{method:'POST'})).status,405);
     // Authenticated panel generates exactly the persisted snippets; reads never rotate.
     assert.equal((await fetch(adminBase+'/admin/ui/distribution',{method:'POST'})).status,403);
+    assert.equal((await fetch(adminBase+'/admin/ui/operational',{method:'POST'})).status,403);
     const panel=await browser.newPage();await panel.goto(adminBase+'/admin/ui/');
     await panel.getByLabel('Senha administrativa').fill('password');
     await panel.getByLabel('Código TOTP').fill(new TOTP({secret:Secret.fromBase32(secret)}).generate());
@@ -99,10 +100,27 @@ test('distribution v1: persistent revisions, admin HTML/CSS, real browser layers
     const responses=Promise.all(['observe','observe/fallback','html.gif','css.gif'].map(path=>page.waitForResponse(response=>response.url().endsWith('/'+path)&&response.ok())));
     await page.goto(origin);await responses;
     const signals=(await db.query('SELECT source FROM page_installation_signals WHERE page_id=$1 ORDER BY source',[pageId])).rows.map(row=>row.source);
-    assert.deepEqual(signals,['core','css_canary','fallback','html_canary']);
-    assert.ok((await db.query("SELECT last_activity_at FROM installation_last_signal WHERE project_id='one'")).rows[0].last_activity_at,'distributed canaries preserve F45 activity');
+    assert.deepEqual(signals,['core','fallback']);
+    assert.equal((await db.query("SELECT last_activity_at FROM installation_last_signal WHERE project_id='one'")).rows[0].last_activity_at,null,'origin-only canaries cannot prove this LP activity');
     const state=await distributionAdmin(db,request,env);assert.equal(state.diagnostic?.status,'NOT_VERIFIED');
     assert.equal(state.diagnostic?.layers.find(layer=>layer.layer==='bootstrap')?.status,'UNKNOWN');
+    assert.equal(state.diagnostic?.controlledVerification.status,'NOT_VERIFIED');
+    assert.equal(state.diagnostic?.capabilities.activeMitigation,'UNKNOWN');
+    // Another LP on the same host cannot be inferred from an origin-only
+    // Referer or a copied snippet. Alias routing is not execution evidence.
+    const sibling=randomUUID(),siblingInstallation=randomUUID();
+    await db.query("INSERT INTO protected_pages(id,project_id,installation_id,name) VALUES($1,'one',$2,'Sibling')",[sibling,siblingInstallation]);
+    await db.query("INSERT INTO protected_page_urls(page_id,origin,pathname) VALUES($1,$2,'/second')",[sibling,origin]);
+    const siblingDistribution=await distributionAdmin(db,{project:'one',page:sibling,action:'publish'},env);
+    assert.ok(siblingDistribution.distribution);
+    for(const referer of [undefined,origin+'/',origin+'/wrong','https://forged.test/second']){
+      const r:Response=await fetch(siblingDistribution.distribution.bases.STATIC_ASSETS+'html.gif',{headers:referer?{referer}:{}});assert.equal(r.status,200);
+    }
+    assert.equal((await db.query('SELECT count(*)::int n FROM page_installation_signals WHERE page_id=$1',[sibling])).rows[0].n,0);
+    await fetch(siblingDistribution.distribution.bases.STATIC_ASSETS+'html.gif',{headers:{referer:origin+'/second'}});
+    const forged=await distributionAdmin(db,{project:'one',page:sibling,action:'inspect'},env);
+    assert.equal(forged.diagnostic?.status,'NOT_VERIFIED','even an exact forged header proves no execution');
+    assert.equal(forged.diagnostic?.confidence,'UNAUTHENTICATED_CLAIM');
     // Remove Bootstrap and Core: the independently installed Fallback still sends.
     await page.route('**/runtime.js',route=>route.abort());await page.route('**/core.js',route=>route.abort());
     const fallback=page.waitForResponse(response=>response.url()===first.bases.TELEMETRY+'observe/fallback'&&response.status()===204);
@@ -144,6 +162,28 @@ test('distribution v1: persistent revisions, admin HTML/CSS, real browser layers
     assert.deepEqual(await readDistribution(db,installation,1),first);
     const oldBundle=await (await fetch(first.bases.SCRIPT+'runtime.js')).text();
     assert.ok(oldBundle.includes(first.bases.TELEMETRY));assert.ok(!oldBundle.includes('https://signals.owner.test'));
+    await db.query(await readFile('infra/053_distribution_rotation.sql','utf8'));
+    const rotationEnv={...env,RUNTIME_TELEMETRY_ORIGIN:'https://signals.owner.test'};
+    const rotated=await distributionAdmin(db,{...request,action:'rotate'},rotationEnv);
+    assert.equal(rotated.distribution?.version,3);
+    assert.ok(rotated.distribution?.paths);
+    assert.equal((await fetch(rotated.distribution!.bases.SCRIPT+'a.js')).status,200);
+    assert.equal((await fetch(base+new URL(rotated.distribution!.bases.TELEMETRY).pathname+'a.js')).status,404);
+    assert.equal((await fetch(rotated.distribution!.bases.STATIC_ASSETS+'g')).status,404);
+    assert.notEqual(rotated.distribution?.bases.SCRIPT,second.distribution?.bases.SCRIPT);
+    assert.equal(new URL(rotated.distribution!.bases.SCRIPT).origin,new URL(second.distribution!.bases.SCRIPT).origin);
+    assert.equal(rotated.history?.[0].reason,'rotate');
+    assert.deepEqual((await distributionAdmin(db,request,rotationEnv)).distribution,rotated.distribution);
+    assert.deepEqual(await readDistribution(db,installation,2),second.distribution);
+    const modern=await distributionAdmin(db,{...request,action:'rotate'},env);assert.ok(modern.snippets);assert.ok(modern.distribution);
+    html=modern.snippets.html;css=modern.snippets.css;
+    await page.unroute('**/runtime.js');await page.unroute('**/core.js');
+    const modernLayers=Promise.all(['e','f','m.gif','n.gif'].map(path=>page.waitForResponse(r=>r.url().endsWith('/'+path)&&r.ok())));
+    await page.goto(origin);await modernLayers;
+    const routed=await distributionAdmin(db,request,env);
+    assert.equal(routed.aliasActivity?.length,1,'two canary endpoints share a routing alias');
+    assert.equal(routed.diagnostic?.status,'NOT_VERIFIED');
+    for(const target of ['http://127.0.0.1/','http://169.254.169.254/','https://unapproved.test/'])await assert.rejects(distributionAdmin(db,{...request,action:'verify',url:target},env),TypeError);
     await assert.rejects(db.query('UPDATE runtime_aliases SET origin=$1 WHERE installation_id=$2',[base,installation]));
     await db.query("UPDATE projects SET lifecycle_state='PAUSED' WHERE id='one'");
     const paused=await fetch(first.bases.TELEMETRY+'observe/fallback',{method:'POST',headers:{origin,'content-type':'text/plain'},body:JSON.stringify({origin,pathname:'/'})});assert.equal(paused.status,204);

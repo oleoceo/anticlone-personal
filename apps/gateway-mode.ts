@@ -4,7 +4,11 @@ import { configuredOrigin } from './detection.js';
 // Operator configuration, never inferred from a browser claim or forwarding header.
 export function gatewayMode(env: NodeJS.ProcessEnv, primary: string): {pilot: boolean; origins: readonly string[]} {
   const mode = env.GATEWAY_MODE ?? 'LAB';
-  if (mode !== 'LAB' && mode !== 'PILOT_OBSERVE') throw Error('invalid gateway mode');
+  if (mode !== 'LAB' && mode !== 'PILOT_OBSERVE' && mode !== 'OPERATIONAL') throw Error('invalid gateway mode');
+  if (mode === 'OPERATIONAL') {
+    if (Object.keys(env).some(key=>/^(SCOPED_LAB_|LAB_CONTROLLED_)/.test(key)&&env[key]) || env.ALLOWED_ORIGIN) throw Error('laboratory configuration forbidden operationally');
+    return {pilot:true,origins:[primary]};
+  }
   if (mode === 'LAB') {
     if (env.PILOT_ORIGINS) throw Error('pilot origins require pilot mode');
     return {pilot:false, origins:[primary]};

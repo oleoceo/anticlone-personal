@@ -52,3 +52,7 @@ PR #36 / F21 temporal: GS08 sem relogio virtual retarda resposta REPLACE_CONVERS
 Estados: IMPLEMENTADO E TESTADO — renovação laboratorial de CTA no PR #38; IMPLEMENTADO PARCIALMENTE — GS03/GS08 laboratoriais; REDUZIDO POR DECISÃO DOCUMENTADA — formulários (D07); PENDENTE — reconhecimento comercial hostil e checkout externo; BLOQUEADO — nenhum bloqueio geral estabelecido.
 
 D05 atualizada em 2026-11-09 supera a expectativa inicial de GS05/GS19 para novas versões explícitas; referências a UNCERTAIN nos relatos históricos continuam descrevendo a semântica legada testada naquele momento.
+
+Correção PR #64: operational-authorization.test.ts acrescenta HTTPS sintético não-loopback com PostgreSQL/Chromium e Nginx quando HTTPS_GATE_TEST=1. Sem SCOPED_LAB_RISK/ORIGIN; dois projetos/três LPs, autorização, suspensão/reautorização, concorrência, geração, lifecycle, instalação inválida e destino divergente. Suítes anteriores mantêm classes/percentuais, tempos/refresh, D05–D15, métricas, SMTP e recuperação.
+
+runtime-distribution.test.ts cobre rotação na mesma origem, histórico estável, revisões anteriores, recursos neutros v2, papéis, camadas e duas LPs no mesmo hostname/pathnames distintos. Headers ausentes/forjados e snippets copiados não certificam execução. verify com loopback/metadata/não autorizados é recusado; diagnóstico NOT_VERIFIED/UNKNOWN. GS10/F08 integral BLOCKED até isolamento deny-by-default comprovado; não há navegador de verificação no backend.

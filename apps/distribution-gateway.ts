@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Pool } from 'pg';
-import { readDistribution } from './runtime-distribution.js';
+import { readDistribution,neutralPaths } from './runtime-distribution.js';
 import { resolvePageContext } from './page-context.js';
 import { configuredOrigin, recordCanaryClaim } from './detection.js';
 import { operationallyEligible } from './operational-eligibility.js';
@@ -12,8 +12,8 @@ const allowed:Record<string,readonly string[]>={SCRIPT:['runtime.js','core.js','
 export function distributionGateway(db:Pool,scripts:Record<string,Buffer>,dispatch:(req:IncomingMessage,res:ServerResponse)=>void,layers:LayerObserver=async()=>{}) {
   let start=Date.now(),count=0;
   return (req:IncomingMessage,res:ServerResponse):boolean=>{
-    if (!(req.url??'').startsWith('/d/')) return false;
-    const match=/^\/d\/v1\/([a-f0-9-]{36})\/(runtime\.js|core\.js|fallback\.js|observe(?:\/fallback)?|entry-decision|cta-refresh|observed-session|observed-action|html\.gif|css\.gif|cta-inventory\.js)$/.exec(req.url??'');
+    if (!(req.url??'').startsWith('/d/') && !(req.url??'').startsWith('/r/')) return false;
+    const match=/^\/(?:d\/v1|r\/v2)\/([a-f0-9-]{36})\/([a-z.-]+(?:\/fallback)?)$/.exec(req.url??'');
     res.setHeader('Cache-Control','no-store');res.setHeader('Access-Control-Allow-Origin','*');res.setHeader('X-Content-Type-Options','nosniff');
     if (Date.now()-start>=60000) {start=Date.now();count=0;}
     if (++count>1200) {res.writeHead(429).end();return true;}
@@ -22,10 +22,12 @@ export function distributionGateway(db:Pool,scripts:Record<string,Buffer>,dispat
       const installed=(await db.query("SELECT to_regclass('runtime_aliases') IS NOT NULL AS installed")).rows[0].installed;
       if (!installed) {res.writeHead(404).end();return;}
       const row=(await db.query('SELECT installation_id,version,role FROM runtime_aliases WHERE alias=$1',[match[1]])).rows[0];
-      const endpoint=match[2];
+      const modern=(req.url??'').startsWith('/r/v2/');
+      const endpoint=modern ? Object.keys(neutralPaths).find(name=>neutralPaths[name]===match[2])??'' : match[2];
       if (!row || !allowed[row.role]?.includes(endpoint)) {res.writeHead(404).end();return;}
       const distribution=await readDistribution(db,row.installation_id,row.version);
       if (!distribution) {res.writeHead(503).end();return;}
+      if(Boolean(distribution.paths)!==modern){res.writeHead(404).end();return;}
       if (scripts[endpoint]) {
         if (req.method!=='GET') {res.writeHead(405).end();return;}
         const content=scripts[endpoint].toString('utf8').replace('const distribution = null;',()=>`const distribution = ${JSON.stringify(distribution)};`);
@@ -43,10 +45,17 @@ export function distributionGateway(db:Pool,scripts:Record<string,Buffer>,dispat
           await client.query('BEGIN');
           if (await operationallyEligible(client,context.project,context.page,true)) {
             await recordCanaryClaim(client,context.project,req.headers.referer,source);
+            const activity=(await client.query("SELECT to_regclass('runtime_alias_activity') IS NOT NULL AS installed")).rows[0].installed;
+            if(activity) await client.query(`INSERT INTO runtime_alias_activity(alias) VALUES($1) ON CONFLICT(alias) DO UPDATE SET last_received_at=clock_timestamp() WHERE runtime_alias_activity.last_received_at<clock_timestamp()-interval '1 minute'`,[match[1]]);
             let origin:string|undefined;
             try {origin=configuredOrigin(new URL(req.headers.referer??'').origin);} catch { /* Unknown remains unknown. */ }
-            if (origin && context.urls.some(url=>url.origin===origin)) {
-              await client.query(`INSERT INTO page_installation_signals(project_id,page_id,source) VALUES($1,$2,$3) ON CONFLICT(project_id,page_id,source) DO UPDATE SET last_observed_at=clock_timestamp() WHERE page_installation_signals.last_observed_at<clock_timestamp()-interval '1 minute'`,[context.project,context.page,source]);
+            let pathname:string|undefined;
+            try {pathname=new URL(req.headers.referer??'').pathname;}catch{/* Unknown. */}
+            // A matching route/header is still an unauthenticated claim. An
+            // origin-only Referer cannot distinguish LPs sharing a hostname.
+            if (origin && pathname!=='/' && context.urls.some(url=>url.origin===origin && url.pathname===pathname)) {
+              // Only a more specific claim may contribute to origin-level F45.
+              // It still does not assert installation or integrity of this LP.
               const health=(await client.query("SELECT to_regclass('installation_last_signal') IS NOT NULL AS installed")).rows[0].installed;
               if(health) await recordInstallationActivity(client,context.project,origin);
             }
