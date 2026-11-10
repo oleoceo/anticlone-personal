@@ -1,5 +1,6 @@
 import { copyHistory } from './copy-history.js';
 import { assessEvidence } from './risk.js';
+import {receiptColumns,presentReceipt} from './investigation-receipts.js';
 ﻿import type { Pool } from 'pg';
 
 // These are retained observations, not an identity or a session decision.
@@ -8,11 +9,17 @@ export async function investigation(pool: Pool, project: string) {
     to_regclass('degradation_collection_gaps') IS NOT NULL AS gaps,
     to_regclass('infrastructure_dns_observations') IS NOT NULL AS infrastructure,
     to_regclass('investigation_timeline') IS NOT NULL AS timeline,
+    to_regclass('investigation_receipts') IS NOT NULL AS receipts,
+    to_regclass('cta_drift_alerts') IS NOT NULL AS cta,
     to_regclass('incident_status_audit') IS NOT NULL AS audit,
     to_regclass('alert_outbox') IS NOT NULL AS notifications,
     to_regclass('notification_lifecycle_queue') IS NOT NULL AS notification_holds,
     to_regclass('clone_delivery_attempts') IS NOT NULL AS notification_history`);
   const available = schema.rows[0];
+  const cta=available.cta?await pool.query('SELECT id,point_id,reason,created_at FROM cta_drift_alerts WHERE project_id=$1 AND created_at>=clock_timestamp()-interval \'30 days\' ORDER BY created_at,id LIMIT 100',[project]):{rows:[]};
+  const receipts=available.receipts?await pool.query(`SELECT ${receiptColumns} FROM investigation_receipts r WHERE project_id=$1 AND last_received_at>=clock_timestamp()-interval '7 days' AND ((to_jsonb(r)->>'accessed_at') IS NULL OR (to_jsonb(r)->>'accessed_at')::timestamptz>=clock_timestamp()-interval '7 days') ORDER BY id LIMIT 10000`,[project]):{rows:[]};
+  const pagesByHost=new Map<string,Set<string>>();
+  for(const receipt of receipts.rows)if(receipt.claimed_host){const pages=pagesByHost.get(receipt.claimed_host)??new Set<string>();pages.add(receipt.page_id);pagesByHost.set(receipt.claimed_host,pages);}
   const result = await pool.query(`SELECT i.id AS incident_id, i.host, i.status, ${available.audit ? 'i.triage_version' : 'NULL AS triage_version'}, i.first_seen AS first_observed_at, i.last_seen AS last_observed_at,
     COALESCE((SELECT jsonb_agg(jsonb_build_object('source',s.source,'day',s.day) ORDER BY s.day,s.source)
       FROM observation_source_days s WHERE s.project_id=i.project_id AND s.host=i.host AND s.day >= (now() AT TIME ZONE 'UTC')::date-7), '[]'::jsonb) AS observation_sources,
@@ -49,7 +56,33 @@ export async function investigation(pool: Pool, project: string) {
     FROM alert_outbox a JOIN incidents i ON i.id=a.incident_id WHERE i.project_id=$1`,[project]) : {rows:[]};
   const notificationHistory = available.notification_history ? await pool.query(`SELECT h.outbox_id,h.attempt,h.transport,h.started_at,h.finished_at,h.outcome
     FROM clone_delivery_attempts h JOIN alert_outbox a ON a.id=h.outbox_id JOIN incidents i ON i.id=a.incident_id WHERE i.project_id=$1 ORDER BY h.outbox_id,h.attempt`,[project]) : {rows:[]};
-  return result.rows.map(row => ({ ...row,
+  return result.rows.map(row => {
+    const direct=receipts.rows.filter(item=>item.claimed_host===row.host);
+    const shared=receipts.rows.filter(item=>!item.claimed_host&&pagesByHost.get(row.host)?.has(item.page_id));
+    // Keep the first retained event and the most recent events, without repeating
+    // the entire LP log for each incident. Full evidence remains paginated.
+    const preview=(items:typeof receipts.rows,limit:number)=>{
+      if(items.length<=limit)return items;
+      const earliest=items.reduce((a,b)=>new Date(a.accessed_at??a.first_received_at).getTime()<=new Date(b.accessed_at??b.first_received_at).getTime()?a:b);
+      return [earliest,...items.filter(item=>item.id!==earliest.id).slice(-(limit-1))];
+    };
+    const linked=[...preview(direct,10),...preview(shared,3)];
+    const kinds=new Set([...direct,...shared].map(item=>item.kind));
+    return { ...row,
+    project_cta_context:{available:available.cta,events:cta.rows,relation:'PROJECT_ONLY',limitation:'CTA drift belongs to this project; no host, visitor or incident causality is established.'},
+    contextual_assessment:assessEvidence([
+      ...(kinds.has('original_request')?[{type:'original_request_import' as const,provenance:'administrator' as const,reliability:'uncorroborated' as const,validity:'unknown' as const}]:[]),
+      ...(kinds.has('runtime_receipt')?[{type:'runtime_resource' as const,provenance:'gateway' as const,reliability:'observed' as const,validity:'unknown' as const}]:[]),
+      ...(dns.rows.some(item=>item.host===row.host)?[{type:'dns_observation' as const,provenance:'infrastructure' as const,reliability:'observed' as const,validity:'unknown' as const}]:[]),
+      ...(row.status==='confirmed_copy'?[{type:'administrative_copy_confirmation' as const,provenance:'administrator' as const,reliability:'uncorroborated' as const,validity:'unknown' as const}]:[]),
+      ...(gaps.rows.length?[{type:'collection_gap' as const,provenance:'gateway' as const,reliability:'unknown' as const,validity:'unknown' as const}]:[])
+    ],false),
+    linked_evidence: {
+      available:available.receipts,original_access_coverage:'NOT_OBSERVABLE_UNLESS_IMPORTED',
+      events:linked.map(item=>presentReceipt(item,row.host)),total:direct.length+shared.length,preview_limit:13,
+      omitted:direct.length+shared.length-linked.length,history_endpoint:`/admin/projects/${project}/investigation-receipts`,
+      limitation:'LP/installation and claimed hostname are context links only. Shared LP, alias, time or resource does not link visitors or identify an operator. Import time is not original access time. Missing or saturated collection remains unknown.'
+    },
     notification: {available:available.notifications,history_available:available.notification_history,
       outbox:notifications.rows.find(item=>item.incident_id===row.incident_id) ?? null,
       history:notificationHistory.rows.filter(item=>item.outbox_id===notifications.rows.find(notification=>notification.incident_id===row.incident_id)?.outbox_id),
@@ -68,7 +101,7 @@ export async function investigation(pool: Pool, project: string) {
       const reconstruction = known ? assessEvidence([
         {type:assessment.evidence_kind === 'none' ? 'no_attribution' : 'traffic_claim',provenance:'browser',reliability:'uncorroborated',validity:'current'},
         {type:'gateway_receipt',provenance:'gateway',reliability:'observed',validity:'current'}], assessment.source === 'lab_configuration') : null;
-      return {...assessment, reconstructed_at_decision: reconstruction && {sources:reconstruction.sources, limitations:assessment.version === 'conservative-risk-v3' ? ['Browser claims are manipulable; endpoints do not establish independence.', 'Gateway receipt does not verify the claimed host or identify a visitor.', 'No independent session-bound operator evidence is available.'] : reconstruction.limitations},
+      return {...assessment, reconstructed_at_decision: reconstruction && {sources:reconstruction.sources, hypothesis:reconstruction.hypothesis, limitations:assessment.version === 'conservative-risk-v3' ? ['Browser claims are manipulable; endpoints do not establish independence.', 'Gateway receipt does not verify the claimed host or identify a visitor.', 'No independent session-bound operator evidence is available.'] : reconstruction.limitations},
         synthetic_high_fixture: assessment.level === 'HIGH' && assessment.source === 'lab_configuration' && assessment.confidence === 'test_only'};
     }),
     degradation: {available: available.degradation, inference: states.rows.find(state => state.host === row.host) ?? null, received_claims: events.rows.filter(event => event.host === row.host)},
@@ -77,5 +110,5 @@ export async function investigation(pool: Pool, project: string) {
       'Sources may share one browser context; temporal proximity does not establish independence.',
       'Absence of a signal is not evidence of absence; collection may be incomplete. A project gap is not attributed to this host.',
       'First observation is not the creation date; history is subject to retention.',
-      'Assessments are daily aggregates: evidence can be overwritten and does not determine another session.'] })).map(row=>({...row, history:copyHistory(row)}));
+      'Assessments are daily aggregates: evidence can be overwritten and does not determine another session.'] };}).map(row=>({...row, history:copyHistory(row)}));
 }

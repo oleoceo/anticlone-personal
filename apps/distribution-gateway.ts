@@ -6,6 +6,7 @@ import { configuredOrigin, recordCanaryClaim } from './detection.js';
 import { operationallyEligible } from './operational-eligibility.js';
 import { recordInstallationActivity } from './health-alerts.js';
 import type { LayerObserver } from './runtime-layer-observations.js';
+import {receiveRuntimeReceipt,receiveDistributionScript,receiptAliases} from './investigation-receipts.js';
 
 const allowed:Record<string,readonly string[]>={SCRIPT:['runtime.js','core.js','fallback.js'],TELEMETRY:['observe','observe/fallback','entry-decision','cta-refresh','observed-session','observed-action'],STATIC_ASSETS:['html.gif','css.gif','cta-inventory.js']};
 // Dispatch through existing domain handlers; distribution never authorizes actions.
@@ -31,6 +32,7 @@ export function distributionGateway(db:Pool,scripts:Record<string,Buffer>,dispat
       if (scripts[endpoint]) {
         if (req.method!=='GET') {res.writeHead(405).end();return;}
         const content=scripts[endpoint].toString('utf8').replace('const distribution = null;',()=>`const distribution = ${JSON.stringify(distribution)};`);
+        receiveDistributionScript(db,row.installation_id,endpoint,match[1]);
         res.writeHead(200,{'Content-Type':'application/javascript; charset=utf-8'}).end(content);return;
       }
       if (endpoint==='html.gif'||endpoint==='css.gif') {
@@ -40,6 +42,7 @@ export function distributionGateway(db:Pool,scripts:Record<string,Buffer>,dispat
         const source=endpoint==='html.gif'?'html_canary':'css_canary';
         let claimedOrigin:string|undefined;
         try{claimedOrigin=configuredOrigin(new URL(req.headers.referer??'').origin);}catch{ /* Unknown. */ }
+        receiveRuntimeReceipt(db,context,endpoint,source,claimedOrigin?new URL(claimedOrigin).hostname:undefined,match[1]);
         const client=await db.connect().catch(error=>{if(claimedOrigin)void layers(context,claimedOrigin,source,true).catch(()=>{});throw error;});
         try {
           await client.query('BEGIN');
@@ -62,6 +65,7 @@ export function distributionGateway(db:Pool,scripts:Record<string,Buffer>,dispat
         if(claimedOrigin)void layers(context,claimedOrigin,source).catch(()=>{});
         return;
       }
+      receiptAliases.set(req,match[1]);
       req.url='/i/'+row.installation_id+'/'+endpoint;
       dispatch(req,res);
     })().catch(()=>{if(!res.headersSent)res.writeHead(503).end();});
