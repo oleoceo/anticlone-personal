@@ -8,7 +8,7 @@ import { resolvePageContext } from './page-context.js';
 import { ctaDecision } from './cta-policy.js';
 import { entryDecision, approvedDestination } from './page-redirect.js';
 import { validateAllocation } from './allocation.js';
-import { assessObservation, recordRisk, safeEvaluateRisk, stealthEligible } from './risk.js';
+import { assessObservation, investigateRisk, preserveLegacyRiskHistory, safeEvaluateRisk } from './risk.js';
 import { currentApproval } from './page-policy-approval.js';
 import { projectMaintenance } from './project-maintenance.js';
 import { operationallyEligible } from './operational-eligibility.js';
@@ -21,6 +21,7 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>, collect
   if (fixtureIds.length>100 || fixtureIds.some(id=>!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(id))) throw Error("invalid scoped lab installations");
   const fixtureOrigin=process.env.SCOPED_LAB_ORIGIN ? configuredOrigin(process.env.SCOPED_LAB_ORIGIN) : undefined;
   if ((fixtureIds.length || fixtureOrigin) && (!fixtureIds.length || !fixtureOrigin || !['localhost','127.0.0.1'].includes(new URL(fixtureOrigin).hostname))) throw Error('invalid scoped lab fixture');
+  if (process.env.SCOPED_LAB_RISK && (!fixtureIds.length || !['LOW','HIGH','UNCERTAIN','ERROR'].includes(process.env.SCOPED_LAB_RISK))) throw Error('invalid scoped laboratory risk');
   let start = Date.now(), count = 0;
   return (req: IncomingMessage, res: ServerResponse): boolean => {
     const match = /^\/i\/([0-9a-f-]{36})\/(runtime\.js|core\.js|fallback\.js|observe|observe\/fallback|entry-decision|cta-refresh)$/i.exec(req.url ?? '');
@@ -59,23 +60,27 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>, collect
           const original=context.urls[0];
           const evidence={source:'browser' as const,reliability:'uncorroborated' as const,trafficClass:traffic.trafficClass,kind:traffic.evidence};
           const controlled=fixtureIds.some(id=>id.toLowerCase()===match[1].toLowerCase()) && origin===fixtureOrigin && ['localhost','127.0.0.1'].includes(new URL(original.origin).hostname) && origin!==original.origin;
-          const assessment=safeEvaluateRisk(controlled,fixture=>assessObservation(evidence,fixture));
-          if (!assessment) { fallback(); return; }
-          const finish=async (result:unknown) => {
-            await recordRisk(db,context.project,new URL(origin).hostname,assessment,evidence);
+          const assessment=safeEvaluateRisk(controlled && !['UNCERTAIN','HIGH','ERROR'].includes(process.env.SCOPED_LAB_RISK ?? ''),fixture=>{
+            if (controlled && process.env.SCOPED_LAB_RISK==='ERROR') throw Error('controlled evaluator failure');
+            return controlled && process.env.SCOPED_LAB_RISK==='HIGH' ? {...assessObservation(evidence,true),level:'HIGH'} : assessObservation(evidence,fixture);
+          });
+          const recorded=investigateRisk(db,context.project,new URL(origin).hostname,assessment,evidence);
+          const finish=async (decision:{action:string;stealthVersion?:number}) => {
+            const eligible=await preserveLegacyRiskHistory(decision,recorded);
+            const result=await issueObservedReceipt(db,context.project,context.page,origin,fields.session,traffic.trafficClass,withAttribution(eligible,context.project,context.page,original.origin));
             res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result));
             await client.query('COMMIT'); client.release(); released=true;
           };
-          if (!stealthEligible(assessment,false)) { await finish({action:'OBSERVE_ONLY'}); return; }
+          if (!controlled) { await finish({action:'OBSERVE_ONLY'}); return; }
           if (endpoint==='entry-decision' && approval.entryVersion!==null) {
-            const result=await client.query('SELECT v.version,v.enabled,v.approved_destination,v.allocation FROM page_entry_policy_bindings b JOIN protection_policy_versions v ON v.project_id=b.project_id AND v.version=b.version WHERE b.project_id=$1 AND b.page_id=$2 AND v.stealth=true',[context.project,context.page]);
+            const result=await client.query(`SELECT v.version,v.enabled,v.approved_destination,v.allocation,to_jsonb(v)->'stealth' AS stealth,to_jsonb(v)->'stealth_version' AS stealth_version FROM page_entry_policy_bindings b JOIN protection_policy_versions v ON v.project_id=b.project_id AND v.version=b.version WHERE b.project_id=$1 AND b.page_id=$2`,[context.project,context.page]);
             const policy=result.rows[0];
             if (policy?.enabled) { approvedDestination(policy.approved_destination,original.origin); validateAllocation(policy.allocation); }
-            const entry=entryDecision(policy,original.origin,origin,fixtureOrigin,assessment.level,fields.session,traffic.trafficClass);
-            if (entry.action==='PAGE_REDIRECT') { await finish(await issueObservedReceipt(db,context.project,context.page,origin,fields.session,traffic.trafficClass,withAttribution(entry,context.project,context.page,original.origin))); return; }
+            const entry=entryDecision(policy,original.origin,origin,fixtureOrigin,assessment?.level ?? 'UNCERTAIN',fields.session,traffic.trafficClass,assessment);
+            if (entry.action==='PAGE_REDIRECT') { await finish(entry); return; }
           }
-          const result=await ctaDecision(db,context.project,original.origin,origin,fixtureOrigin,assessment.level,fields.session,traffic.trafficClass,original.pathname,fields.pathname,context.page,client);
-          await finish(await issueObservedReceipt(db,context.project,context.page,origin,fields.session,traffic.trafficClass,withAttribution(result,context.project,context.page,original.origin))); return;
+          const result=await ctaDecision(db,context.project,original.origin,origin,fixtureOrigin,assessment?.level ?? 'UNCERTAIN',fields.session,traffic.trafficClass,original.pathname,fields.pathname,context.page,client,assessment);
+          await finish(result); return;
           } finally { if (!released) { try { await client.query('ROLLBACK'); client.release(); } catch { client.release(true); } } }
         }
         const core = endpoint === 'observe';

@@ -15,7 +15,7 @@ import { classifyTraffic } from './traffic.js';
 import { entryDecision, approvedDestination } from './page-redirect.js';
 import { validateAllocation } from './allocation.js';
 import { ctaDecision } from './cta-policy.js';
-import { safeEvaluateRisk, assessObservation, recordRisk, stealthEligible, type RiskEvidence } from './risk.js';
+import { safeEvaluateRisk, assessObservation, investigateRisk, preserveLegacyRiskHistory, type RiskEvidence } from './risk.js';
 import { gatewayMode } from './gateway-mode.js';
 import { gatewayBoundary } from './gateway-boundary.js';
 import { recordInstallationClaim } from './installation.js';
@@ -218,12 +218,12 @@ const server = http.createServer((req, res) => {
         const result = assessObservation(evidence, fixture);
         return controlled && process.env.LAB_CONTROLLED_RISK === 'HIGH' ? {...assessObservation(evidence,true),level:'HIGH'} : result;
       });
-      if (!assessment) return {action:'OBSERVE_ONLY'};
-      await recordRisk(pool, activeProject, new URL(origin).hostname, assessment, evidence);
-      if (!stealthEligible(assessment, mode.pilot)) return {action:'OBSERVE_ONLY'};
+      const recorded=investigateRisk(pool,activeProject,new URL(origin).hostname,assessment,evidence);
+      if (mode.pilot || !controlled) { await recorded; return {action:'OBSERVE_ONLY'}; }
+      const decisionRisk=assessment?.level ?? 'UNCERTAIN';
       // Entry selection has no authority over a later interaction.
-      if (refresh) return await ctaDecision(pool, activeProject, normalizedOrigin, origin, controlledOrigin, assessment.level, session, trafficClass, pathname);
-      const result = await pool.query('SELECT v.version,v.enabled,v.approved_destination,v.allocation FROM active_protection_policies a JOIN protection_policy_versions v ON v.project_id=a.project_id AND v.version=a.version WHERE a.project_id=$1 AND v.stealth=true', [activeProject]);
+      if (refresh) return preserveLegacyRiskHistory(await ctaDecision(pool, activeProject, normalizedOrigin, origin, controlledOrigin, decisionRisk, session, trafficClass, pathname, undefined, undefined, undefined, assessment),recorded);
+      const result = await pool.query(`SELECT v.version,v.enabled,v.approved_destination,v.allocation,to_jsonb(v)->'stealth' AS stealth,to_jsonb(v)->'stealth_version' AS stealth_version FROM active_protection_policies a JOIN protection_policy_versions v ON v.project_id=a.project_id AND v.version=a.version WHERE a.project_id=$1`, [activeProject]);
       const entryPolicy = result.rows[0];
       // Invalid enabled entry policy is an evaluation failure, not permission to continue.
       if (entryPolicy && entryPolicy.enabled) {
@@ -231,9 +231,9 @@ const server = http.createServer((req, res) => {
         approvedDestination(entryPolicy.approved_destination, normalizedOrigin);
         validateAllocation(entryPolicy.allocation);
       }
-      const entry = entryDecision(entryPolicy, normalizedOrigin, origin, controlledOrigin, assessment.level, session, trafficClass);
-      if (entry.action === 'PAGE_REDIRECT') return entry;
-      return await ctaDecision(pool, activeProject, normalizedOrigin, origin, controlledOrigin, assessment.level, session, trafficClass, pathname);
+      const entry = entryDecision(entryPolicy, normalizedOrigin, origin, controlledOrigin, decisionRisk, session, trafficClass, assessment);
+      if (entry.action === 'PAGE_REDIRECT') return preserveLegacyRiskHistory(entry,recorded);
+      return preserveLegacyRiskHistory(await ctaDecision(pool, activeProject, normalizedOrigin, origin, controlledOrigin, decisionRisk, session, trafficClass, pathname, undefined, undefined, undefined, assessment),recorded);
     }).then(decision => res.writeHead(200, {'Content-Type': 'application/json'}).end(JSON.stringify(withAttribution(decision ?? {action:'OBSERVE_ONLY'}, activeProject, 'legacy', normalizedOrigin))))
       .catch(() => res.writeHead(200, {'Content-Type': 'application/json'}).end(JSON.stringify({action:'OBSERVE_ONLY'}))); }); return;
   }

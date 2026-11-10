@@ -87,9 +87,12 @@ test('protection admin: real PostgreSQL/Chromium policies, classes, mappings, ap
       const destination=(await db.query('SELECT id FROM cta_destinations WHERE project_id=$1 AND offer=$2',[project,offer])).rows[0].id;
       await page.locator('#cta-select [name=destination]').selectOption(destination);await page.getByRole('button',{name:'Mapear CTA ao destino aprovado'}).click();await page.getByText('Mapeamento aprovado registrado. Consulte novamente; a política CTA controla sua aplicação.',{exact:true}).waitFor();
     }
+    await db.query(await readFile('infra/050_optional_stealth.sql','utf8'));
+    await page.locator('#protection-page [name=stealthMode]').selectOption('ON');
     await page.getByLabel('Habilitar PAGE_REDIRECT laboratorial').check();await page.getByLabel('Destino da página').selectOption(original+'/official-basic');
     await page.getByLabel('Página PAID_ATTRIBUTED (%)').fill('0');await page.getByLabel('Página ORGANIC (%)').fill('50');await page.getByLabel('Página REFERRAL (%)').fill('100');await page.getByLabel('Página DIRECT_UNKNOWN (%)').fill('0');
     await page.getByRole('button',{name:'Publicar PAGE_REDIRECT',exact:true}).click();await page.getByText('PAGE_REDIRECT publicado. Versão 1.',{exact:true}).waitFor();
+    await page.locator('#protection-cta [name=stealthMode]').selectOption('ON');
     await page.getByLabel('Habilitar REPLACE_CONVERSION laboratorial').check();await page.getByLabel('Superfície da política').fill('landing');await page.getByLabel('Caminho da página').fill('/clone');
     for(const kind of classes)await page.getByLabel('CTA '+kind+' (%)').fill('100');await page.getByRole('button',{name:'Publicar REPLACE_CONVERSION',exact:true}).click();await page.getByText('REPLACE_CONVERSION publicado. Versão 1.',{exact:true}).waitFor();
     const state=await (await post({project,action:'inspect',data:null})).json();assert.equal(state.page.allocation.PAID_ATTRIBUTED,0);assert.equal(state.cta.allocation.PAID_ATTRIBUTED,100);

@@ -135,3 +135,7 @@ GS03 laboratorial recorte A demonstrado: `tests/gs03.test.ts`, CI 41911761424 em
 Interpretador comercial isolado (recorte F25/F41): `tests/commercial-interpreter.test.ts` demonstra parsing monetario exato e significado limitado em Chromium localhost; sem associacao, persistencia ou integracao de protecao. Limites em `docs/COMMERCIAL-INTERPRETER-LAB.md`. Nao conclui F25/F41 nem GS17; prototipo contextual anterior permanece BLOCKED. Revisao e CI do SHA final no PR.
 
 Consolidacao pre-VPS (F29/F30/F42, recorte laboratorial): suite integral Linux PostgreSQL/Chromium/HTTPS com 98 PASS, 0 FAIL, 0 SKIP, lint/typecheck/build e revisao independente aprovados no codigo f0dd974. Provas e limites em PRE-VPS-FUNCTIONAL-LAB.md. Estados PARCIAL preservam os limites operacionais do blueprint; nao ha LOW operacional, atribuicao comprovada de receita ou comprovacao de carregamento externo.
+
+### D05 atualizada: F14/F43, GS05/GS19 em laboratório
+
+Stealth é opcional por política v2: OFF independe de LOW/HIGH/UNCERTAIN; ON conserva UNCERTAIN e suprime apenas evidência forte de possível operador. `tests/optional-stealth.test.ts` cobre configuração inequívoca, migração sem reescrever versões/aprovações, republicação/reaprovação, PAID 100%/DIRECT_UNKNOWN 0%, página/CTA independentes, duas LPs/projetos, original, lifecycle e falha de backend em PostgreSQL/Chromium. A evidência forte é sintética e controlada; F13/F14/F43 e GS05/GS19 integrais continuam PARCIAL. F42/F29/F30 e drift permanecem sujeitos às provas e limites existentes. Não autoriza mitigação em domínios reais.

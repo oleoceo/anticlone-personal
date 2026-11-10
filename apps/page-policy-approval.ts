@@ -7,10 +7,10 @@ export async function approvalConfiguration(client: PoolClient, project: string,
   const urls=await client.query('SELECT origin,pathname FROM protected_page_urls WHERE page_id=$1 ORDER BY origin,pathname',[page]);
   if (urls.rowCount!==1) throw new Error('ambiguous page URLs');
   const original=urls.rows[0];
-  const entries=entry===null ? {rows:[]} : await client.query(`SELECT v.version,v.enabled,v.stealth,v.approved_destination,v.allocation FROM protection_policy_versions v WHERE v.project_id=$1 AND v.version=$2`,[project,entry]);
-  if (entry!==null && (entries.rows.length!==1 || !entries.rows[0].enabled || !entries.rows[0].stealth)) throw new Error('inactive page policy');
+  const entries=entry===null ? {rows:[]} : await client.query(`SELECT v.version,v.enabled,v.stealth,v.approved_destination,v.allocation,to_jsonb(v)->'stealth_version' AS stealth_version FROM protection_policy_versions v WHERE v.project_id=$1 AND v.version=$2`,[project,entry]);
+  if (entry!==null && (entries.rows.length!==1 || !entries.rows[0].enabled || (!entries.rows[0].stealth && entries.rows[0].stealth_version!==2))) throw new Error('inactive page policy');
   for (const row of entries.rows) { approvedDestination(row.approved_destination,original.origin); validateAllocation(row.allocation); }
-  const policies=await client.query(`SELECT v.version,v.enabled,v.surface,v.pathname,v.allocation,b.page_id AS bound_page FROM cta_policy_versions v JOIN active_cta_surface_policies a ON a.project_id=v.project_id AND a.surface=v.surface AND a.version=v.version LEFT JOIN page_cta_policy_bindings b ON b.project_id=v.project_id AND b.surface=v.surface WHERE v.project_id=$1 AND v.version=ANY($2::int[]) ORDER BY v.surface`,[project,versions]);
+  const policies=await client.query(`SELECT v.version,v.enabled,v.surface,v.pathname,v.allocation,to_jsonb(v)->'stealth' AS stealth,to_jsonb(v)->'stealth_version' AS stealth_version,b.page_id AS bound_page FROM cta_policy_versions v JOIN active_cta_surface_policies a ON a.project_id=v.project_id AND a.surface=v.surface AND a.version=v.version LEFT JOIN page_cta_policy_bindings b ON b.project_id=v.project_id AND b.surface=v.surface WHERE v.project_id=$1 AND v.version=ANY($2::int[]) ORDER BY v.surface`,[project,versions]);
   if (policies.rows.length!==versions.length || new Set(policies.rows.map(row=>row.surface)).size!==versions.length) throw new Error('inactive or ambiguous CTA policies');
   for (const row of policies.rows) {
     if (!row.enabled || row.pathname!==original.pathname || (row.bound_page && row.bound_page!==page)) throw new Error('CTA policy incompatible with page');
@@ -25,7 +25,7 @@ export async function approvalConfiguration(client: PoolClient, project: string,
     for (const row of selected) approvedDestination(row.url,original.origin);
   }
   // Binding is recorded independently; do not let creating it change the snapshot.
-  return {urls:urls.rows,entry:entries.rows,ctas:policies.rows.map(row=>({version:row.version,enabled:row.enabled,surface:row.surface,pathname:row.pathname,allocation:row.allocation})),points:runtime ? points.rows.map(row=>({...row,review_required:false,suspension:null})) : points.rows};
+  return {urls:urls.rows,entry:entries.rows.map(row=>{const copy={...row};if(copy.stealth_version==null)delete copy.stealth_version;return copy;}),ctas:policies.rows.map(row=>({... (row.stealth_version==null ? {} : {stealth:row.stealth,stealth_version:row.stealth_version}),version:row.version,enabled:row.enabled,surface:row.surface,pathname:row.pathname,allocation:row.allocation})),points:runtime ? points.rows.map(row=>({...row,review_required:false,suspension:null})) : points.rows};
 }
 
 export async function currentApproval(client: PoolClient, project: string, page: string) {

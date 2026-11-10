@@ -15,7 +15,7 @@ export function evaluateRisk(controlledFixture: boolean): RiskAssessment {
     : {level:'UNCERTAIN', version:'conservative-risk-v2', source:'server_default', reason:'insufficient_evidence', confidence:'insufficient'};
 }
 // This gate grants eligibility only; each action still validates its own policy.
-export function stealthEligible(assessment: RiskAssessment | undefined, pilot: boolean): boolean {
+export function legacyStealthEligible(assessment: RiskAssessment | undefined, pilot: boolean): boolean {
   return !pilot && assessment?.level === 'LOW' && (assessment.version === 'conservative-risk-v2' || assessment.version === 'conservative-risk-v3' || assessment.version === 'conservative-risk-v4') && assessment.source === 'lab_configuration' && assessment.reason === 'controlled_fixture' && assessment.confidence === 'test_only';
 }
 // Browser-supplied observations are uncorroborated. They are deliberately not
@@ -81,4 +81,15 @@ export async function recordRisk(pool: Pool, project: string, host: string, asse
     await client.query('COMMIT');
   } catch (error) { await client.query('ROLLBACK'); throw error; }
   finally { client.release(); }
+}
+
+// New semantics never await investigative persistence. Legacy versions retain
+// their historical persistence prerequisite. The marker describes policy semantics.
+export async function preserveLegacyRiskHistory<T extends {action:string;stealthVersion?:number}>(decision:T, recorded:Promise<boolean>):Promise<T | {action:string}> {
+  if ((decision.action==='PAGE_REDIRECT' || decision.action==='REPLACE_CONVERSION') && decision.stealthVersion!==2 && !await recorded) return {action:'OBSERVE_ONLY'};
+  return decision;
+}
+export function investigateRisk(pool:Pool,project:string,host:string,assessment:RiskAssessment|undefined,evidence:RiskEvidence):Promise<boolean> {
+  if (!assessment) return Promise.resolve(false);
+  return recordRisk(pool,project,host,assessment,evidence).then(()=>true,()=>{process.stderr.write('Risk investigation unavailable\n');return false;});
 }

@@ -8,7 +8,7 @@ Todos usam **ambientes, cópias simuladas e domínios autorizados** sob controle
 | GS02 | Cópia simulada em hostname diferente: observação + incidente único + e-mail único após múltiplas visitas e reinício. |
 | GS03 | Multiplos CTAs e ofertas variaveis: cada ponto selecionado segue exclusivamente ao destino aprovado. Nomes comerciais e canais sao exemplos. |
 | GS04 | 0/50/100% e classes por ação: bucketing estável por sessão; distribuição estatística em conjunto grande. |
-| GS05 | Stealth: provável operador/risco incerto em observe-only, sem fingir identidade certa. |
+| GS05 | Stealth v2 OFF ignora risco; ON suprime operador com evidência forte e conserva política para UNCERTAIN. Legado preservado até republicação/reaprovação. Laboratório em tests/optional-stealth.test.ts; classificação operacional continua indisponível. |
 | GS06 | Page Redirect com destino aprovado; timeout de decisão libera navegação e não prende tela. |
 | GS07 | CTAs criados tardiamente, SPA, formulários e popups suportados conforme matriz de compatibilidade. |
 | GS08 | Drift material do checkout gera revisão/alerta e não desabilita outros mapeamentos válidos. |
@@ -22,7 +22,7 @@ Todos usam **ambientes, cópias simuladas e domínios autorizados** sob controle
 | GS16 | Dois projetos isolados logicamente, login/MFA, backup restaurável e deploy/rollback com smoke test. |
 | GS17 | Dois CTAs com texto igual permanecem distintos; alteração de texto preserva identidade válida; candidato novo ou de baixa confiança não é substituído automaticamente. |
 | GS18 | Em redirecionamento de página e CTA, somente parâmetros de atribuição configurados e permitidos chegam ao destino; parâmetros arbitrários não são repassados. |
-| GS19 | Com stealth ativo e risco alto ou incerto, a mitigação visível é suprimida mesmo com atribuição paga; entrada e interação usam suas fases, versões publicadas são imutáveis e conflito ambíguo impede publicação. |
+| GS19 | Stealth v2 explícito e independente em PAGE_REDIRECT/REPLACE_CONVERSION; OFF com PAID 100% e DIRECT_UNKNOWN 0% independe de risco. ON suprime evidência forte, UNCERTAIN mantém política. Segurança, fases, versões, aprovação, isolamento e fail-open preservados; configurações ambíguas rejeitadas. tests/optional-stealth.test.ts em laboratório; GS19 integral permanece parcial. |
 | GS20 | Em cópia autorizada, Core interrompido enquanto fallback ou canário ainda envia sinal produz registro de possível degradação com fonte e horário; ausência de todos os sinais permanece desconhecida. |
 | GS21 | Com alerta de inatividade habilitado, ausência de sinais além do prazo configurado e falha operacional geram alertas rastreáveis, com deduplicação, retry e histórico; retomada e nova falha são registradas. |
 
@@ -50,3 +50,5 @@ GS03 laboratorial, recorte A demonstrado: `tests/gs03.test.ts`, CI 41911761424 e
 PR #36 / F21 temporal: GS08 sem relogio virtual retarda resposta REPLACE_CONVERSION em mais de 150 ms, aguarda processamento antes do clique e exige checkout aprovado apenas no CTA elegivel, preservando o ponto sob revisao. PAGE_REDIRECT mantem prazo de entrada (GS06: resposta valida retida 250 ms, pagina e link nativos). Negativos GS08: percentual zero, regra desabilitada, risco UNCERTAIN no servidor; resposta invalida, pagehide e transicoes de pathname/query (inclusive ida e volta) no browser. Naquele PR nao havia renovacao em abas abertas; o PR #38 acrescentou renovacao limitada. Selecao e risco permanecem laboratoriais e probabilisticos. Gates do HEAD final no PR.
 
 Estados: IMPLEMENTADO E TESTADO — renovação laboratorial de CTA no PR #38; IMPLEMENTADO PARCIALMENTE — GS03/GS08 laboratoriais; REDUZIDO POR DECISÃO DOCUMENTADA — formulários (D07); PENDENTE — reconhecimento comercial hostil e checkout externo; BLOQUEADO — nenhum bloqueio geral estabelecido.
+
+D05 atualizada em 2026-11-09 supera a expectativa inicial de GS05/GS19 para novas versões explícitas; referências a UNCERTAIN nos relatos históricos continuam descrevendo a semântica legada testada naquele momento.

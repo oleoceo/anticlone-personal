@@ -1,3 +1,5 @@
+import { permitsMitigation, type StealthPolicy } from './stealth.js';
+import type { RiskAssessment } from './risk.js';
 ﻿import { selected, validateAllocation } from './allocation.js';
 import { configuredOrigin } from './detection.js';
 import { isIP } from 'node:net';
@@ -36,8 +38,8 @@ export function approvedDestination(value: string, projectOrigin: string): strin
   return url.href;
 }
 
-export function entryDecision(policy: {version: number; enabled: boolean; approved_destination: string; allocation: unknown} | undefined, original: string, origin: string, controlledOrigin: string | undefined, risk: string | undefined, session: unknown, trafficClass: string) {
-  if (origin === original || !controlledOrigin || origin !== controlledOrigin || risk !== 'LOW' || !policy || policy.enabled !== true || !Number.isSafeInteger(policy.version) || policy.version < 1) return { action: 'OBSERVE_ONLY' };
-  try { if (!selected(session, 'PAGE_REDIRECT', policy.version, validateAllocation(policy.allocation), trafficClass)) return { action: 'OBSERVE_ONLY' }; return { action: 'PAGE_REDIRECT', version: policy.version, destination: approvedDestination(policy.approved_destination, original) }; }
+export function entryDecision(policy: {version: number; enabled: boolean; approved_destination: string; allocation: unknown} & StealthPolicy | undefined, original: string, origin: string, controlledOrigin: string | undefined, risk: string | undefined, session: unknown, trafficClass: string, assessment?: RiskAssessment) {
+  if (origin === original || !controlledOrigin || origin !== controlledOrigin || !policy || policy.enabled !== true || !Number.isSafeInteger(policy.version) || policy.version < 1 || !permitsMitigation(policy,risk,assessment)) return { action: 'OBSERVE_ONLY' };
+  try { if (!selected(session, 'PAGE_REDIRECT', policy.version, validateAllocation(policy.allocation), trafficClass)) return { action: 'OBSERVE_ONLY' }; return { action: 'PAGE_REDIRECT', ...(policy.stealth_version===2?{stealthVersion:2}:{}), version: policy.version, destination: approvedDestination(policy.approved_destination, original) }; }
   catch { return { action: 'OBSERVE_ONLY' }; }
 }
