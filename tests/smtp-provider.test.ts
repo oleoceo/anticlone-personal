@@ -133,7 +133,7 @@ test('provider TLS, durable attempts, browser clone dedup, retry/restart and aut
     await page.getByRole('button',{name:'Entrar'}).click();
     await page.locator('#incident-query select').selectOption('one');
     await page.getByRole('button',{name:'Consultar incidentes'}).click();
-    await page.locator('#incident-list').getByText('ACCEPTED_BY_TRANSPORT',{exact:false}).waitFor();
+    await page.locator('#incident-list p').filter({hasText:'Alerta inicial: ACCEPTED_BY_TRANSPORT'}).waitFor();
     const content=await page.locator('#incident-list').textContent();
     assert.match(content ?? '',/FAILED/);assert.match(content ?? '',/ACCEPTED/);
     assert.ok(!content?.includes(privateEnv.SMTP_PASSWORD));assert.ok(!content?.includes(privateEnv.SMTP_USER));

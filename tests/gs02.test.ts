@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { createServer, type Server } from 'node:http';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
@@ -63,6 +66,21 @@ test('GS02: browser visits, durable incident and test SMTP alert after restart',
     assert.equal((await db.query("SELECT id FROM observations WHERE project_id=$1 AND host='legacy.test'", [project])).rowCount, 1);
     await db.query("DELETE FROM incidents WHERE project_id=$1 AND host='legacy.test'", [project]);
     await db.query("DELETE FROM observations WHERE project_id=$1 AND host='legacy.test'", [project]);
+    // Exercise a local saved page without bypassing Chromium network restrictions.
+    // Only a response actually received and committed can count as evidence.
+    const directory=await mkdtemp(join(tmpdir(),'anticlone-file-context-'));
+    const local=await browser.newPage();
+    const received:string[]=[];
+    local.on('response',response=>{if(response.url().includes('/canary/')&&response.ok())received.push(response.url());});
+    try {
+      const file=join(directory,'saved.html');
+      await writeFile(file,'<h1>Controlled saved page</h1><script src="http://127.0.0.1:3000/runtime.js"></script><img src="http://127.0.0.1:3000/canary/html.gif">');
+      await local.goto(pathToFileURL(file).href,{waitUntil:'networkidle'});
+      if(received.length) await until(async()=>!!(await db.query("SELECT 1 FROM canary_observations WHERE project_id=$1 AND host=''",[project])).rowCount,'file canary receipt');
+      assert.equal((await db.query("SELECT 1 FROM canary_observations WHERE project_id=$1 AND host<>''",[project])).rowCount,0);
+      assert.equal((await db.query('SELECT 1 FROM incidents WHERE project_id=$1',[project])).rowCount,0);
+      process.stderr.write('GS02 file context: '+received.length+' canary response(s); no attributable hostname or download evidence\n');
+    } finally {await local.close();await rm(directory,{recursive:true,force:true});}
     // Canary-only requests remain passive and carry an untrusted Referer claim.
     for (const available of ['both', 'html', 'css', 'none']) {
       await db.query('DELETE FROM canary_observations WHERE project_id=$1', [project]);
