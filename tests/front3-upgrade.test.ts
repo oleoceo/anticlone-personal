@@ -48,6 +48,9 @@ test('Front3: checksummed versioned upgrade, atomic failure, real baseline resto
   const reserve=createServer().listen(0,'127.0.0.1');await once(reserve,'listening');const ra=reserve.address();assert.ok(ra&&typeof ra!=='string');await new Promise<void>(r=>reserve.close(()=>r()));api='http://127.0.0.1:'+ra.port;
   browser=await chromium.launch({args:['--host-resolver-rules=MAP localhost 127.0.0.1']});
   for(const executable of ['dist/apps/server.js',join(previous,'dist/apps/server.js')]){
+   // Require NEW receipts from each executable; retain the incident to prove
+   // deduplication across rollback rather than passing on the current process.
+   await db.query('DELETE FROM observations; DELETE FROM observation_source_days');
    child=spawn(process.execPath,[executable],{env:{...process.env,...recovered.configuration,DATABASE_URL:url(sourceName),PROJECT_ID:'upgrade',ALLOWED_ORIGIN:original,PORT:String(ra.port)},stdio:'ignore'});
    let ready=false;for(let n=0;n<100;n++){try{if((await fetch(api+'/healthz')).ok){ready=true;break;}}catch{}await new Promise(r=>setTimeout(r,100));}assert.ok(ready,'current/rollback process ready');
    assert.equal((await fetch(api+'/runtime.js')).status,200);
