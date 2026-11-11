@@ -100,7 +100,11 @@ test('GS16: real backup, isolated restore, complete data integrity and restarted
     let offline=false;
     for(let i=0;i<100;i++){const remaining=await root.query('SELECT count(*)::int n FROM pg_stat_activity WHERE datname=$1',[targetName]);if(remaining.rows[0].n===0){offline=true;break;}await new Promise(r=>setTimeout(r,10));}
     assert.ok(offline,'restore target has no server-side sessions');
+    await assert.rejects(readFile(join(directory,'restore-verified.json')),{code:'ENOENT'});
     assert.ok((await restore(targetUrl,directory,targetName,tool)).verified);
+    const receipt=JSON.parse(await readFile(join(directory,'restore-verified.json'),'utf8'));
+    assert.equal(receipt.archive_sha256,manifest.archive_sha256);
+    assert.equal(receipt.format,1);assert.ok(Number.isFinite(Date.parse(receipt.verified_at)));
     await assert.rejects(restore(targetUrl,directory,targetName,tool),/empty and offline/);
     const restored=new Pool({connectionString:targetUrl});
     try {
