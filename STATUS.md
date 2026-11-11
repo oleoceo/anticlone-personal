@@ -1,4 +1,13 @@
 # STATUS — AntiClone Personal
+## Nucleo operacional apos estabilizacao CI
+- Base 8834bf3 + PR tecnico #71 verde em 29c2a06; branch consolidada fix/operational-core-closure, sem merge/deploy.
+- Defeito comprovado: consulta/mapping CTA no painel recusava HTTPS; alinhada ao contrato existente. Importacao manual original preservada.
+- Jornada continua desktop/mobile 2/2 PASS em laboratorio: projeto/LP, runtime, incidente, SMTP falha/retry/processos novos, destinos, 0/50/100/classes, suspensao/recuperacao.
+- F37/F38: retencao configuravel plan/apply so em arquivos sinteticos; preserva latest/verificado, recibo de restore real; foco retention/recovery 2/2 PASS.
+- Delta suplementar de canarios/CSS e viewport, regressao integral, revisao final e CI por SHA devem ser conferidos no PR consolidado; nenhum gate pendente e chamado PASS.
+- Matriz: 23 laboratorio / 4 incompletas / 14 homologacao / 4 bloqueadas. F18/F25/F29/F31 permanecem; D07 e shadow #69 preservados.
+- Limites/decisoes reais: LPs/destinos, SMTP, prazos/armazenamento/offsite e ambiente autorizado; docs/OPERATIONAL-CORE-CLOSURE.md. Nenhuma migration 062/conta externa/operacao de producao.
+
 ## Estabilizacao CI apos #69
 - Base obrigatoria 8834bf3; PR tecnico #71; #70 fechado/Draft preservado, sem migration 062 ou ingestao experimental.
 - Falha 43045087835: DNS Ubuntu durante apt antes dos testes; Chromium agora instala sem apt, com smoke real obrigatorio.

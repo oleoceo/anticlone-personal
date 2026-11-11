@@ -1,5 +1,11 @@
 # Recuperação PostgreSQL — F38 / GS16
 
+Restore integro grava recibo exclusivo `restore-verified.json` com hash do archive
+e horario. Retencao de arquivos preserva o snapshot verificado e o backup mais
+recente; prazos e limites em [OPERATIONAL-CORE-CLOSURE.md](OPERATIONAL-CORE-CLOSURE.md).
+O diretorio de origem precisa permitir a criacao desse recibo; falha ao grava-lo
+nao desfaz dados ja restaurados. Mantenha o destino isolado ate confirmar sucesso.
+
 O comando inclui todo o banco (tabelas, funções, triggers, índices, constraints,
 sequências e estado TOTP persistido), sem lista fixa de migrations. O ensaio usa
 001–032, 033 e 035 e dados sintéticos em dois projetos, incluindo tentativas de

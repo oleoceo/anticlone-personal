@@ -101,6 +101,12 @@ export async function restore(databaseUrl: string, directory: string, confirmati
     const actual = await inventory(client);
     await client.query('COMMIT');
     if (JSON.stringify(actual) !== JSON.stringify(manifest.tables)) throw Error('restored data integrity mismatch; keep database isolated');
+    // An immutable receipt allows retention to preserve a recovery point that
+    // was actually restored. Never replace an existing file or follow a link.
+    const receipt=resolve(folder,'restore-verified.json');
+    const proof=JSON.stringify({format:1,archive_sha256:manifest.archive_sha256,verified_at:new Date().toISOString()})+'\n';
+    try { await writeFile(receipt,proof,{flag:'wx',mode:0o600}); }
+    catch(error) { if((error as NodeJS.ErrnoException).code!=='EEXIST')throw error; }
     return {verified:true,tables:actual.length};
   } finally { await client.query('SELECT pg_advisory_unlock(74621391)').catch(()=>{}); client.release(); await pool.end(); }
 }

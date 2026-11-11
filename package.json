@@ -11,7 +11,8 @@
     "build": "tsc",
     "test": "npm run build && node --test --test-concurrency=1 dist/tests/*.test.js",
     "start": "node dist/apps/server.js",
-    "recovery": "node dist/apps/recovery.js"
+    "recovery": "node dist/apps/recovery.js",
+    "retention": "node dist/apps/artifact-retention.js"
   },
   "keywords": [],
   "author": "",
