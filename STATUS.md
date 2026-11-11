@@ -1,4 +1,10 @@
 # STATUS — AntiClone Personal
+## Estabilizacao CI apos #69
+- Base obrigatoria 8834bf3; PR tecnico #71; #70 fechado/Draft preservado, sem migration 062 ou ingestao experimental.
+- Falha 43045087835: DNS Ubuntu durante apt antes dos testes; Chromium agora instala sem apt, com smoke real obrigatorio.
+- Revisao independente /root/ci_review favoravel ao codigo 2c4ef1d, sem P0/P1/P2; diff-check e validacao documental PASS.
+- CI oficial e SHA final devem ser conferidos no PR #71; nenhum merge/deploy/DNS/SMTP externo/migration de producao autorizado.
+
 
 ## F13/F14 — avaliador shadow e perfil investigativo
 - Base ab8c7bd (main após #68), branch feat/f13-f14-shadow; investigação ON/OFF separada do veto, v2/legado preservados.
