@@ -42,7 +42,23 @@ jobs:
         run: |
           pg_dump --version
           pg_restore --version
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install chromium
+      - name: Smoke real Chromium before integration tests
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { chromium } from 'playwright';
+          const browser = await chromium.launch();
+          try {
+            const page = await browser.newPage();
+            await page.setContent('<button onclick="this.textContent=\'clicked\'">ready</button>');
+            await page.getByRole('button', { name: 'ready' }).click();
+            assert.equal(await page.getByRole('button').textContent(), 'clicked');
+            console.log('Real Chromium smoke passed:', browser.version());
+          } finally {
+            await browser.close();
+          }
+          JS
       - run: docker pull nginx:1.28-alpine
       - run: echo '127.0.0.1 gateway.test' | sudo tee -a /etc/hosts
       - run: docker build -f infra/https/Dockerfile -t anticlone-pilot:test .
