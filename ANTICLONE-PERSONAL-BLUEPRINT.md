@@ -319,3 +319,5 @@ Preservar a **semântica de proteção** de `11-PRODUCT-DEFINITION`, `12-MVP-SCO
 ### Atualização derivada de D05 — 2026-11-09
 
 Este blueprint Personal incorpora a decisão atualizada do proprietário. A regra inicial Stealth First suprimia HIGH e UNCERTAIN; esse histórico permanece em docs/DECISIONS.md e nos documentos originais de referência. A nova semântica é opt-in, versionada, independente entre página e CTA e exige republicação/reaprovação. Detalhes e limites em docs/OPTIONAL-STEALTH.md. Nenhuma evidência disponível neste recorte sustenta classificação operacional de operador; o caso forte é uma fixture sintética loopback.
+
+Evolução autorizada em 2026-11-11: investigação contínua com Stealth ON/OFF, perfil de grupo separado da avaliação de sessão e avaliador shadow. O interruptor controla apenas o eventual veto adicional, nunca a investigação. Proposta interna Stealth v3 permanece sem ativação e depende de aprovação posterior; v2 e legado preservados. Implementação, métricas e limites em [F13/F14 shadow](docs/F13-F14-SHADOW.md). Não há evidência operacional suficiente para concluir F13/F14.

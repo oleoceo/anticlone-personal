@@ -1,5 +1,6 @@
 import { copyHistory } from './copy-history.js';
 import { assessEvidence } from './risk.js';
+import {evaluateOperator,type OperatorSignal} from './operator-shadow.js';
 import {receiptColumns,presentReceipt} from './investigation-receipts.js';
 ﻿import type { Pool } from 'pg';
 
@@ -14,8 +15,12 @@ export async function investigation(pool: Pool, project: string) {
     to_regclass('incident_status_audit') IS NOT NULL AS audit,
     to_regclass('alert_outbox') IS NOT NULL AS notifications,
     to_regclass('notification_lifecycle_queue') IS NOT NULL AS notification_holds,
-    to_regclass('clone_delivery_attempts') IS NOT NULL AS notification_history`);
+    to_regclass('clone_delivery_attempts') IS NOT NULL AS notification_history,
+    to_regclass('operator_shadow_assessments') IS NOT NULL AS shadow`);
   const available = schema.rows[0];
+  const shadow=available.shadow?await pool.query(`SELECT host,page_id,recorded_at,assessment FROM
+    (SELECT host,page_id,recorded_at,assessment,row_number() OVER(PARTITION BY host ORDER BY recorded_at DESC,id DESC) AS rank
+    FROM operator_shadow_assessments WHERE project_id=$1 AND recorded_at>=clock_timestamp()-interval '7 days') t WHERE rank<=20`,[project]):{rows:[]};
   const cta=available.cta?await pool.query('SELECT id,point_id,reason,created_at FROM cta_drift_alerts WHERE project_id=$1 AND created_at>=clock_timestamp()-interval \'30 days\' ORDER BY created_at,id LIMIT 100',[project]):{rows:[]};
   const receipts=available.receipts?await pool.query(`SELECT ${receiptColumns} FROM investigation_receipts r WHERE project_id=$1 AND last_received_at>=clock_timestamp()-interval '7 days' AND ((to_jsonb(r)->>'accessed_at') IS NULL OR (to_jsonb(r)->>'accessed_at')::timestamptz>=clock_timestamp()-interval '7 days') ORDER BY id LIMIT 10000`,[project]):{rows:[]};
   const pagesByHost=new Map<string,Set<string>>();
@@ -68,7 +73,18 @@ export async function investigation(pool: Pool, project: string) {
     };
     const linked=[...preview(direct,10),...preview(shared,3)];
     const kinds=new Set([...direct,...shared].map(item=>item.kind));
+    const profileSignals:OperatorSignal[]=direct.slice(-99).map(item=>({kind:'activity',scope:'group',source:'gateway',
+      observedAt:new Date(item.last_received_at).getTime(),validUntil:new Date(item.last_received_at).getTime()+300000,reference:'receipt:'+item.id}));
+    const minutes=new Set(direct.map(item=>Math.floor(new Date(item.last_received_at).getTime()/60000)));
+    if(minutes.size>1&&profileSignals.length)profileSignals.push({...profileSignals[profileSignals.length-1],kind:'repeated_activity',reference:'distinct_receipt_minutes'});
     return { ...row,
+    operator_profile:{scope:'PROJECT_HOST_CONTEXT',assessment:evaluateOperator(profileSignals,Date.now()),
+      temporal:{retained_receipts:direct.length,distinct_minutes:minutes.size,first_observed_at:row.first_observed_at,last_observed_at:row.last_observed_at},
+      behavioral:{available:false,reason:'No independently observed session behavior retained'},
+      network:{available:false,reason:'DNS describes hosting; no visitor network evidence collected'},
+      geography:{available:false,precision:'APPROXIMATE_ONLY',reason:'No authorized enrichment source configured; never GPS'},
+      sessions:{available:available.shadow,events:shadow.rows.filter(item=>item.host===row.host).map(item=>({...item,current:Number(item.assessment.validUntil)>Date.now()})),limit:20,retention_days:7},
+      limitations:['Group activity never assigns operator likelihood to a session','Session contexts are untrusted, scoped and rotated daily; no cross-site/device identity','Queue loss, minute deduplication and capacity limits can omit evidence']},
     project_cta_context:{available:available.cta,events:cta.rows,relation:'PROJECT_ONLY',limitation:'CTA drift belongs to this project; no host, visitor or incident causality is established.'},
     contextual_assessment:assessEvidence([
       ...(kinds.has('original_request')?[{type:'original_request_import' as const,provenance:'administrator' as const,reliability:'uncorroborated' as const,validity:'unknown' as const}]:[]),
