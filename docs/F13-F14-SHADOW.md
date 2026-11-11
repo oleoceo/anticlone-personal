@@ -1,5 +1,7 @@
 # F13/F14 — investigação contínua e proposta Stealth v3
 
+Registro histórico do PR #69. Evolução com ingestão real e contextos emitidos, mantendo o veto desativado: [F13/F14 correlação](F13-F14-CORRELATION.md). As limitações abaixo descrevem aquele baseline.
+
 Base: `ab8c7bd`, main após PR #68. Decisão do proprietário em 2026-11-11: investigação continua ON/OFF; o interruptor controla exclusivamente o eventual veto adicional à seleção comercial. Esta entrega mantém v2 e legado. Não publica v3 nem modifica versões, percentuais, aprovações ou snapshots existentes.
 
 ## Implementação demonstrável

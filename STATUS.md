@@ -1,5 +1,14 @@
 # STATUS — AntiClone Personal
 
+## F13/F14 — ingestão e correlação autorizada (após #69)
+- Base 8834bf3; branch feat/f13-f14-correlation; contexto de teste emitido/validado por fonte, recursos+checkout, snapshots por revisão.
+- Foco real 3/3 PASS: PostgreSQL/Chromium/CLI assinado; TP2 FP0 FN2 TN6, oito abstenções; baseline #69 TP0/FN4. Sem HIGH injetado.
+- Endereço loopback alterado, mobile, país autorizado, atraso/contradição/falha503/401; rotação diária imposta, minimização e retenção7d; fonte externa indisponível.
+- Comparação com gateway #69 compilado: p95 entrada14,59→17,04ms; CTA17,60→15,78ms (30 amostras/endpoint/versão; sem SLO).
+- Revisão independente /root/independent_review favorável; foco final3/3/lint/typecheck PASS, upgrade atualizado para062; regressão integral e CI por SHA nos checks/relatório do PR.
+- V3 opt-in apenas proposto, veto operacional=false; v2/legado/comercial preservados. F13/F14 não concluídas: falta vínculo de visitas comuns e calibração de campo.
+- Sem merge/deploy/DNS/contas externas/migration de produção; contrato, reprodução, riscos e limites em docs/F13-F14-CORRELATION.md.
+
 ## F13/F14 — avaliador shadow e perfil investigativo
 - Base ab8c7bd (main após #68), branch feat/f13-f14-shadow; investigação ON/OFF separada do veto, v2/legado preservados.
 - Código: operator-shadow-v1, perfil autenticado grupo/sessão, snapshots imutáveis/limitados e migration aditiva 061 apenas laboratorial.

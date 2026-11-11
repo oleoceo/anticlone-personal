@@ -16,8 +16,11 @@ export async function investigation(pool: Pool, project: string) {
     to_regclass('alert_outbox') IS NOT NULL AS notifications,
     to_regclass('notification_lifecycle_queue') IS NOT NULL AS notification_holds,
     to_regclass('clone_delivery_attempts') IS NOT NULL AS notification_history,
-    to_regclass('operator_shadow_assessments') IS NOT NULL AS shadow`);
+    to_regclass('operator_shadow_assessments') IS NOT NULL AS shadow,
+    to_regclass('authorized_activity') IS NOT NULL AS activity`);
   const available = schema.rows[0];
+  const activity=available.activity?await pool.query(`SELECT page_id,source,event_id,observed_at,received_at,payload->>'kind' AS kind,payload->>'resource' AS resource
+    FROM authorized_activity WHERE project_id=$1 AND observed_at>=clock_timestamp()-interval '7 days' ORDER BY observed_at DESC,event_id LIMIT 100`,[project]):{rows:[]};
   const shadow=available.shadow?await pool.query(`SELECT host,page_id,recorded_at,assessment FROM
     (SELECT host,page_id,recorded_at,assessment,row_number() OVER(PARTITION BY host ORDER BY recorded_at DESC,id DESC) AS rank
     FROM operator_shadow_assessments WHERE project_id=$1 AND recorded_at>=clock_timestamp()-interval '7 days') t WHERE rank<=20`,[project]):{rows:[]};
@@ -79,6 +82,9 @@ export async function investigation(pool: Pool, project: string) {
     if(minutes.size>1&&profileSignals.length)profileSignals.push({...profileSignals[profileSignals.length-1],kind:'repeated_activity',reference:'distinct_receipt_minutes'});
     return { ...row,
     operator_profile:{scope:'PROJECT_HOST_CONTEXT',assessment:evaluateOperator(profileSignals,Date.now()),
+      authorized_activity:{available:available.activity,scope:'PAGE_GROUP_CONTEXT_NOT_CURRENT_SESSION',limit:100,retention_days:7,
+        events:activity.rows.filter(item=>pagesByHost.get(row.host)?.has(item.page_id)),
+        limitation:'Signed source assertions; request is not complete download. Only source-issued test contexts can support session correlation; ordinary CDN logs cannot identify an operator.'},
       temporal:{retained_receipts:direct.length,distinct_minutes:minutes.size,first_observed_at:row.first_observed_at,last_observed_at:row.last_observed_at},
       behavioral:{available:false,reason:'No independently observed session behavior retained'},
       network:{available:false,reason:'DNS describes hosting; no visitor network evidence collected'},

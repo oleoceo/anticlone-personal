@@ -1,6 +1,7 @@
 import {createHash} from 'node:crypto';
 import type {Pool} from 'pg';
 import {operationallyEligible} from './operational-eligibility.js';
+import {correlateActivity,sessionContext} from './authorized-activity.js';
 
 export const evaluatorVersion='operator-shadow-v1';
 export type OperatorSignal={
@@ -41,15 +42,21 @@ export async function recordOperatorShadow(db:Pool,project:string,page:string,ho
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1))',[project]);
     const now=Number((await client.query('SELECT extract(epoch FROM clock_timestamp())*1000 AS time')).rows[0].time);
     await client.query("DELETE FROM operator_shadow_assessments WHERE project_id=$1 AND recorded_at<clock_timestamp()-interval '7 days'",[project]);
-    const key=createHash('sha256').update(JSON.stringify([project,page,host,Math.floor(receivedAt/86400000),session])).digest('hex');
-    const assessment=evaluateOperator([
+    const key=sessionContext(project,page,host,session,receivedAt);
+    const base=evaluateOperator([
       {kind:'activity',scope:'session',source:'gateway',observedAt:receivedAt,validUntil:receivedAt+300000,reference:'decision_request_received'},
       {kind:'traffic_claim',scope:'session',source:'browser',observedAt:receivedAt,validUntil:receivedAt+300000,reference:'unverified_'+traffic}
     ],now);
-    await client.query(`INSERT INTO operator_shadow_assessments(project_id,page_id,host,session_context,bucket,assessment)
-      SELECT $1,$2,$3,$4,date_trunc('minute',clock_timestamp()),$5::jsonb
+    const correlation=await correlateActivity(client,project,page,key,now);
+    const assessment={...base,correlation,
+      ...(correlation.wouldVetoIfApproved?{version:'operator-correlated-v1',session:{assessment:correlation.assessment,confidence:correlation.confidence,probability:null},
+        supporting:correlation.supporting,opposing:correlation.opposing,validUntil:Math.min(base.validUntil,correlation.validUntil),
+        limitations:correlation.limitations,v3Proposal:{...base.v3Proposal,wouldVetoIfEnabled:true}}:{})};
+    const revision=createHash('sha256').update(JSON.stringify([correlation.assessment,correlation.supporting,correlation.opposing,correlation.limitations,correlation.enrichment])).digest('hex');
+    await client.query(`INSERT INTO operator_shadow_assessments(project_id,page_id,host,session_context,bucket,assessment${correlation.available?',evidence_revision':''})
+      SELECT $1,$2,$3,$4,date_trunc('minute',clock_timestamp()),$5::jsonb${correlation.available?',$6':''}
       WHERE (SELECT count(*) FROM operator_shadow_assessments WHERE project_id=$1)<10000
-      ON CONFLICT DO NOTHING`,[project,page,host,key,JSON.stringify(assessment)]);
+      ON CONFLICT DO NOTHING`,[project,page,host,key,JSON.stringify(assessment),...(correlation.available?[revision]:[])]);
     await client.query('COMMIT');
   }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
 }
