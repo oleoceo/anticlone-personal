@@ -65,7 +65,7 @@ test('incident triage: atomic audit, concurrency, observations, API and browser'
     await page.getByLabel('Código TOTP').fill(new TOTP({secret:Secret.fromBase32(secret)}).generate({timestamp:clock}));
     await page.getByRole('button',{name:'Entrar'}).click();
     await page.locator('#incident-query select option').first().waitFor({state:'attached'});
-    await page.locator('#incident-query select').selectOption('a'); await page.getByRole('button',{name:'Consultar incidentes'}).click();
+    await page.locator('#incident-query select[name=project]').selectOption('a'); await page.getByRole('button',{name:'Consultar incidentes'}).click();
     await page.locator('#incident-list h3').waitFor(); assert.match(await page.locator('#incident-list').innerText(),/false_positive/);
     assert.match(await page.locator('#incident-list').innerText(),/<img src=x onerror=alert\(1\)>/);
     assert.equal(await page.locator('#incident-list img').count(),0); assert.equal(await page.locator('#incident-query img').count(),0);

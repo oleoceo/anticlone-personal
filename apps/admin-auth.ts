@@ -7,7 +7,7 @@ import { TOTP, Secret } from 'otpauth';
 import { Pool } from 'pg';
 import http from 'node:http';
 import { randomBytes, scryptSync, timingSafeEqual, createHash, createHmac } from 'node:crypto';
-import { randomUUID } from 'node:crypto';
+import {registerProject} from './project-registration.js';
 import { configuredOrigin } from './detection.js';
 import { activatePolicy, saveDraft } from './protection-policy.js';
 import { importInventory, approveDestination, approveCommercial, mapPoint, reviewPoint } from './cta-inventory.js';
@@ -200,7 +200,7 @@ export function createAdminServer(passwordRecord: string, totpSecret: string, db
             if (!body || typeof body !== 'object' || !('name' in body) || !('origin' in body) || typeof body.name !== 'string' || typeof body.origin !== 'string' || !body.name.trim() || body.name.length > 100) throw Error('invalid');
             name = body.name.trim(); origin = configuredOrigin(body.origin);
           } catch { res.writeHead(400).end(); return; }
-          void db.query('INSERT INTO projects(id,name,origin) VALUES($1,$2,$3) RETURNING id,name,origin', [randomUUID(), name, origin]).then(result => res.writeHead(201, { 'Content-Type': 'application/json' }).end(JSON.stringify(result.rows[0]))).catch((error: {code?: string}) => res.writeHead(error.code === '23505' ? 409 : 503).end());
+          void registerProject(db,{name,origin}).then(result => res.writeHead(201, { 'Content-Type': 'application/json' }).end(JSON.stringify(result))).catch((error: {code?: string}) => res.writeHead(error.code === '23505' ? 409 : 503).end());
         }); return;
       }
       res.writeHead(404).end(); return;

@@ -130,6 +130,7 @@ test('GS14 authenticated generic checkout persists exactly one sale across retri
     assert.equal(csrfDenied,403);
     await close(); base=await start('one',false); assert.equal((await send()).status,404);
     assert.throws(()=>checkoutWebhook(db,'one',{CHECKOUT_WEBHOOK_SECRET:'short'}));
+    assert.throws(()=>checkoutWebhook(db,'one',{CHECKOUT_WEBHOOK_SECRET:'a'.repeat(65)}),'odd-length hex keys must not be silently truncated');
   } finally {
     await browser?.close(); await close(); if(admin){admin.close();await once(admin,'close');}
     await db.end(); await parent.query(`DROP SCHEMA ${schema} CASCADE`); await parent.end();

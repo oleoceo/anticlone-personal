@@ -10,10 +10,11 @@ import { Pool } from 'pg';
 import { chromium } from 'playwright';
 import { Secret, TOTP } from 'otpauth';
 import { createAdminServer } from '../apps/admin-auth.js';
+import {approveCommercial} from '../apps/cta-inventory.js';
 import { ctaDecision } from '../apps/cta-policy.js';
 
 const allocation={PAID_ATTRIBUTED:100,ORGANIC:100,REFERRAL:100,DIRECT_UNKNOWN:100};
-test('seven scoped conversion points coexist and SPA refreshes safely', {timeout:90000}, async()=>{
+test('Front3 integrated commercial: two prices, WhatsApp, popup/sticky/dynamic, stable identity and isolated drift', {timeout:90000}, async()=>{
   assert.ok(process.env.TEST_DATABASE_URL);
   const schema='multi_'+randomUUID().replaceAll('-','');
   const root=new Pool({connectionString:process.env.TEST_DATABASE_URL}); await root.query(`CREATE SCHEMA ${schema}`);
@@ -23,7 +24,7 @@ test('seven scoped conversion points coexist and SPA refreshes safely', {timeout
   try {
     for(const file of ['001_initial','002_alerts','003_projects','004_observation_sources','005_canaries','006_page_redirect','007_protection_policy','008_traffic_observations','009_risk_assessments','024_risk_evidence','010_policy_allocation','011_cta_inventory','022_cta_capture_selection','012_cta_policy','013_cta_review','014_cta_drift_alerts','015_cta_alert_deliveries','016_cta_local_smtp','018_notification_budget','019_alert_outbox_expiry','020_cta_delivery_expiry','021_notification_intent_reconciliation','023_cta_commercial']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
     const portFixture=createServer((req,res)=>res.writeHead(200,{'content-type':'text/html'}).end(req.url?.startsWith('/clone') ? html : '<h1>native or official</h1>'));
-    const html=`<section data-anticlone-surface="main"><a data-anticlone-point="classic01" href="/native-classic">Buy</a><a data-anticlone-point="plus0001" href="/native-plus">Buy</a><a data-anticlone-point="vip00001" href="/native-vip">Buy</a><a href="/unmarked">Buy</a></section><button id="open">Open modal</button><div id="dynamic"></div><script>
+    const html=`<section data-anticlone-surface="main"><a data-anticlone-point="classic01" data-anticlone-price-minor="6700" data-anticlone-currency="BRL" href="/native-classic">Buy</a><a data-anticlone-point="plus0001" data-anticlone-price-minor="9700" data-anticlone-currency="BRL" href="/native-plus">Buy</a><a data-anticlone-point="vip00001" href="/native-vip">Buy</a><a href="/unmarked">Buy ambiguous 12x/discount</a><a data-anticlone-point="contact1" href="https://whatsapp.fixture.test/send">WhatsApp synthetic</a></section><button id="open">Open modal</button><div id="dynamic"></div><script>
       addEventListener('load',()=>{ document.querySelector('#dynamic').innerHTML='<aside data-anticlone-surface="sticky"><a data-anticlone-point="classic01" href="/native-sticky">Buy</a></aside><aside data-anticlone-surface="popup"><a data-anticlone-point="popup001" href="/native-popup">Buy</a></aside><div role="dialog" hidden data-anticlone-surface="modal"><a data-anticlone-point="upsell01" href="/native-upsell">Buy</a></div><div data-anticlone-surface="dynamic"><a data-anticlone-point="dynamic1" href="/native-dynamic">Buy</a></div>'; });
       document.querySelector('#open').onclick=()=>document.querySelector('[data-anticlone-surface=modal]').hidden=false;</script><script src="http://127.0.0.1:3000/runtime.js"></script>`;
     fixture=portFixture.listen(0,'127.0.0.1'); await once(fixture,'listening');
@@ -52,12 +53,18 @@ test('seven scoped conversion points coexist and SPA refreshes safely', {timeout
       if(surface!=='main') assert.equal((await post('policy',{enabled:true,surface,pathname:'/clone',allocation})).status,200);
     }
     const points=(await db.query('SELECT id,marker,surface FROM cta_points WHERE project_id=$1 AND marker IS NOT NULL',[project])).rows;
-    const cases=[['classic01','classic','main'],['plus0001','plus','main'],['vip00001','vip','main'],['classic01','plus','sticky'],['popup001','special','popup'],['upsell01','upsell','modal'],['dynamic1','dynamic','dynamic']];
+    const cases=[['classic01','classic','main'],['plus0001','plus','main'],['vip00001','vip','main'],['contact1','contact','main'],['classic01','plus','sticky'],['popup001','special','popup'],['upsell01','upsell','modal'],['dynamic1','dynamic','dynamic']];
     const destinations=new Map<string,string>();
     for(const [marker,offer,surface] of cases) {
       if(!destinations.has(offer)) {const response=await post('destinations',{offer,url:original+'/official-'+offer}); assert.equal(response.status,200);destinations.set(offer,((await response.json()) as {id:string}).id);}
       assert.equal((await post('mappings',{pointId:points.find(p=>p.marker===marker && p.surface===surface).id,offer,destinationId:destinations.get(offer)})).status,200);
     }
+    for(const marker of ['classic01','plus0001']){
+      const row=(await db.query(`SELECT o.id,o.capture_id,o.point_id,o.commercial_amount,o.commercial_currency,m.destination_id FROM cta_observations o JOIN cta_points p ON p.id=o.point_id JOIN cta_captures c ON c.id=o.capture_id JOIN cta_mappings m ON m.point_id=p.id WHERE p.marker=$1 AND p.surface='main' AND c.is_current`,[marker])).rows[0];
+      await approveCommercial(db,{project,surface:'main',pointId:row.point_id,captureId:row.capture_id,observationId:row.id,destinationId:row.destination_id,amount:Number(row.commercial_amount),currency:row.commercial_currency,version:0});
+    }
+    assert.deepEqual((await db.query('SELECT amount FROM cta_commercial_references ORDER BY amount')).rows.map(r=>r.amount),['6700','9700']);
+    assert.ok((await db.query("SELECT 1 FROM cta_observations o JOIN cta_points p ON p.project_id=o.project_id AND p.id=o.point_id WHERE p.marker IS NULL AND o.commercial_amount IS NULL AND o.confidence='LOW' AND NOT EXISTS(SELECT 1 FROM cta_mappings m WHERE m.project_id=p.project_id AND m.point_id=p.id)")).rowCount,'unmarked commercial ambiguity remains unknown and unmapped');
     assert.equal((await post('policy',{enabled:true,surface:'other',pathname:'/clone2',allocation})).status,200);
     assert.equal((await post('policy',{enabled:true,surface:'main',pathname:'/clone2',allocation})).status,400);
     assert.equal((await post('inventory',{surface:'other',candidates:[{marker:'route001',kind:'a',parent:'div',ordinal:1,url:clone+'/native-route'}]})).status,200);

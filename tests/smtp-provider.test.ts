@@ -131,13 +131,13 @@ test('provider TLS, durable attempts, browser clone dedup, retry/restart and aut
     await page.getByLabel('Senha administrativa').fill('test password');
     await page.getByLabel('Código TOTP').fill(new TOTP({secret:Secret.fromBase32(secret)}).generate({timestamp:clock}));
     await page.getByRole('button',{name:'Entrar'}).click();
-    await page.locator('#incident-query select').selectOption('one');
+    await page.locator('#incident-query select[name=project]').selectOption('one');
     await page.getByRole('button',{name:'Consultar incidentes'}).click();
     await page.locator('#incident-list p').filter({hasText:'Alerta inicial: ACCEPTED_BY_TRANSPORT'}).waitFor();
     const content=await page.locator('#incident-list').textContent();
     assert.match(content ?? '',/FAILED/);assert.match(content ?? '',/ACCEPTED/);
     assert.ok(!content?.includes(privateEnv.SMTP_PASSWORD));assert.ok(!content?.includes(privateEnv.SMTP_USER));
-    await page.locator('#incident-query select').selectOption('two');
+    await page.locator('#incident-query select[name=project]').selectOption('two');
     await page.getByRole('button',{name:'Consultar incidentes'}).click();
     await page.getByText('Nenhum incidente observado.').waitFor();
     assert.ok(!logs.includes(privateEnv.SMTP_PASSWORD));assert.ok(!logs.includes(privateEnv.SMTP_USER));

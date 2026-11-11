@@ -46,7 +46,7 @@ export async function recordCheckout(db: Pool, project: string, raw: Buffer) {
 // A per-project, private opt-in. This authenticates the configured sender, not a customer or recovered sale.
 export function checkoutWebhook(db: Pool, project: string, env: NodeJS.ProcessEnv, now: () => number = Date.now, path = '/checkout-webhook') {
   const secret = env.CHECKOUT_WEBHOOK_SECRET;
-  if (secret !== undefined && !/^[a-f0-9]{64,128}$/.test(secret)) throw Error('invalid checkout webhook configuration');
+  if (secret !== undefined && (!/^[a-f0-9]{64,128}$/.test(secret) || secret.length%2!==0)) throw Error('invalid checkout webhook configuration');
   let start = now(), count = 0;
   return (req: IncomingMessage, res: ServerResponse): boolean => {
     if (req.url !== path) return false;
