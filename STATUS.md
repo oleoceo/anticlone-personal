@@ -12,5 +12,5 @@
 - Cadastro auditado/atomico, metadados de alteracoes 059/060, retencao, filtros/navegacao/CSS CSP desktop/mobile e chave webhook impar recusada.
 - Foco 5/5 PASS, zero falhas/skips: HTML/React-Vite/WordPress real, canais/CSP/sandbox/file/offline, duas ofertas/superficies, carga, upgrade/restore/rollback f95e9da.
 - Matriz:22 laboratorio/6 incompletas/13 homologacao/4 bloqueadas; pendencias1 critica/16 altas/6 medias. F18/F25/F29/F31/F37/F40 incompletas, D05/D07 preservadas.
-- Revisao independente /root/front3_review diagnosticou CSS/CSP e instalador WP; ajustes aplicados. Parecer final e CI do SHA imutavel no PR consolidado.
-- Regressao completa em validacao; nao e PASS antecipado. Evidencias/medidas/limites em docs/PRE-VPS-FRONT3.md e test-results/front3/.
+- Revisao independente /root/front3_review favoravel a687f11d e delta CSP, sem P0/P1/P2 pendente; parecer final/checks por SHA no PR68.
+- Regressao local39b0b14:118 Node+10 Python PASS,0 falhas/skips; lint/typecheck/build/Docker/Compose exit0. CI oficial do SHA final conferida no PR68; provas/limites em docs/PRE-VPS-FRONT3.md.

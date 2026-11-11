@@ -28,7 +28,7 @@ O primeiro comando é diagnóstico focado, não CI completa. O segundo reproduz 
 |---|---|
 | HTML, CSP, canais individualmente bloqueados, ausência completa | `front3-compatibility`; recebimentos consultados no PostgreSQL, separados de pedidos bloqueados |
 | React/Vite real, CSP, SPA e link dinâmico | Fixture compilada pelo Vite; Core/Fallback, dois canários e incidente persistidos |
-| WordPress real | `front3-wordpress`: instalação real, mu-plugin via hook de footer, original preservado, HTML copiado em host distinto observado |
+| WordPress real | `front3-wordpress`: instalação real, mu-plugin via hook de footer, CSP permissiva explícita no original e na cópia, original preservado, HTML copiado em host distinto observado |
 | iframe/sandbox/file/offline | `front3-compatibility`: snapshot de fontes/host/incidente por contexto, sem host inventado para origem opaca |
 | Duas ofertas de valores distintos, checkout/WhatsApp sintético, popup/sticky/modal/dinâmico | `multiple-cta-surfaces`: BRL 6700/9700 em unidades mínimas, captura, aprovação manual, destinos distintos, texto alterado sem perder marcador, drift isolado, SPA e clique sem decisão de rede |
 | UNCERTAIN, PAGE_REDIRECT e REPLACE_CONVERSION, autorizações | `operational-authorization`, `optional-stealth`, `scoped-gateway`: gateway real via Nginx/TLS, destinos HTTPS sintéticos, aprovação e D05/D09/D15 |
@@ -73,4 +73,6 @@ Falhas corrigidas: seletores antigos ambíguos com novos filtros; CSS inline blo
 
 Comparação da matriz: 13 → 22 laboratório; 16 → 6 incompletas; 12 → 13 homologação externa; quatro bloqueadas preservadas. Pendências: uma crítica, 16 altas, seis médias. Seis incompletas restantes explicitadas acima; nenhuma venda, pessoa ou entrega externa foi fabricada para encerrar itens.
 
-SHA imutável, revisão final e CI oficial serão vinculados após os gates; rodadas ainda em execução não são PASS.
+Regressão local integral do código **39b0b14ffd4413c815dea8e4462f11fbf8a15d7d**: **118 Node + 10 Python PASS**, zero falhas/skips, lint/typecheck/build, Nginx/TLS, imagens Docker e Compose, exit 0; suíte Node **446,4 s**. Artefatos e manifesto: `test-results/front3/20261111T092216Z/`, exportação imutável `/tmp/anticlone-front3-source-7yh8de`. Após essa exportação, o delta `687f11d` passou a exigir recibos novos de cada executável no rollback; o último delta acrescentou a CSP permissiva explícita ao WordPress e sua cópia. Nenhum código de produção mudou nesses deltas. A CI oficial do SHA final, incluindo essas provas adicionais, é a confirmação imutável final no [PR #68](https://github.com/oleoceo/anticlone-personal/pull/68).
+
+Revisão independente read-only **`/root/front3_review`**: favorável a **687f11df3a92042491bd1ebd3702426ae24ff50f**, sem P0/P1/P2 pendente, condicionada aos gates; delta CSP de teste também revisado, sem novo achado. Classificações 22/6/13/4 e limites aceitos pela revisão. Parecer final do delta documental/CSP e links dos checks por SHA ficam no PR. CI em execução não é PASS, e o PR só fica pronto após a conferência no SHA final. Sem autorização de merge/produção.
