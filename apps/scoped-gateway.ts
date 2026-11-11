@@ -15,6 +15,7 @@ import { projectMaintenance } from './project-maintenance.js';
 import { operationallyEligible } from './operational-eligibility.js';
 import type { LayerObserver } from './runtime-layer-observations.js';
 import {receiveRuntimeReceipt,receiptAliases} from './investigation-receipts.js';
+import {scheduleOperatorShadow} from './operator-shadow.js';
 
 // Identifiers in these routes are correlation handles, never credentials.
 export function scopedGateway(db: Pool, scripts: Record<string, Buffer>, collect=projectMaintenance(db,{SMTP_PORT:'1'}).collect, layers:LayerObserver=async()=>{}) {
@@ -31,6 +32,7 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>, collect
   return (req: IncomingMessage, res: ServerResponse): boolean => {
     const match = /^\/i\/([0-9a-f-]{36})\/(runtime\.js|core\.js|fallback\.js|observe|observe\/fallback|entry-decision|cta-refresh)$/i.exec(req.url ?? '');
     if (!match) return false;
+    const receivedAt=Date.now();
     res.setHeader('Access-Control-Allow-Origin','*'); res.setHeader('Cache-Control','no-store');
     if (Date.now()-start >= 60_000) { start=Date.now(); count=0; }
     if (++count > 1200) { res.writeHead(429).end(); return true; }
@@ -78,6 +80,7 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>, collect
             const eligible=await preserveLegacyRiskHistory(decision,recorded);
             const result=await issueObservedReceipt(db,context.project,context.page,origin,fields.session,traffic.trafficClass,withAttribution(eligible,context.project,context.page,original.origin));
             await client.query('COMMIT'); client.release(); released=true;
+            scheduleOperatorShadow(db,context.project,context.page,new URL(origin).hostname,fields.session as string,traffic.trafficClass,receivedAt);
             res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(operationalContext && result.action!=='OBSERVE_ONLY' ? {...result,operationalContext} : result));
           };
           if (!controlled && !operationalContext) { await finish({action:'OBSERVE_ONLY'}); return; }

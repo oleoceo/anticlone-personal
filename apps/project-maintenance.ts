@@ -49,6 +49,8 @@ export function projectMaintenance(db: Pool, env: NodeJS.ProcessEnv, exclude?: s
               const aliases=await db.query("SELECT to_regclass('runtime_alias_activity') IS NOT NULL AS installed");
               if(aliases.rows[0].installed)await db.query("DELETE FROM runtime_alias_activity s USING runtime_aliases a,protected_pages p WHERE s.alias=a.alias AND a.installation_id=p.installation_id AND p.project_id=$1 AND s.last_received_at<now()-interval '7 days'",[id]);
               const checks=await db.query("SELECT to_regclass('controlled_installation_checks') IS NOT NULL AS installed");
+              const shadow=await db.query("SELECT to_regclass('operator_shadow_assessments') IS NOT NULL AS installed");
+              if(shadow.rows[0].installed)await db.query("DELETE FROM operator_shadow_assessments WHERE project_id=$1 AND recorded_at<now()-interval '7 days'",[id]);
               if(checks.rows[0].installed)await db.query("DELETE FROM controlled_installation_checks WHERE project_id=$1 AND checked_at<now()-interval '7 days'",[id]);
               const reviews=await db.query("SELECT to_regclass('notification_reviews') IS NOT NULL AS installed");
               if(reviews.rows[0].installed)await db.query("DELETE FROM notification_reviews WHERE project_id=$1 AND occurred_at<now()-interval '30 days'",[id]);

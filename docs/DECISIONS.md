@@ -35,6 +35,10 @@ Um hostname público operacional inicial atende SCRIPT, TELEMETRY e STATIC_ASSET
 
 ## Histórico de D05
 
+### Evolução investigativa F13/F14 — decisão do proprietário em 2026-11-11
+
+Inteligência e investigação continuam com Stealth ON/OFF; o interruptor controla somente uso de avaliação suficientemente confiável como veto adicional. Visitas sem confiança suficiente seguem políticas comerciais, classes e percentuais normais. Separar hipótese de atividade do grupo de provável operador da sessão; IP, UTM, fingerprint, proximidade e primeira visita não comprovam identidade. A entrega atual é shadow, conforme [F13-F14-SHADOW.md](F13-F14-SHADOW.md): proposta interna v3 opt-in para aprovação posterior, sem alterar/publicar versões v2 ou legadas, snapshots e aprovações. Sem fonte operacional validável nem calibração de campo, não ativar veto nem concluir F13/F14. Não autoriza coleta invasiva, IDs permanentes entre sites/dispositivos ou geolocalização precisa.
+
 A redação inicial aprovada para início era: “Stealth com risco alto ou explicitamente incerto prevalece sobre mitigação visível; sinais não provam identidade.” Foi superada para novas versões explícitas pela decisão do proprietário em 2026-11-09. Versões publicadas legadas conservam esse comportamento; nenhuma fonte histórica SaaS foi modificada.
 
 ## Correção operacional do PR #64

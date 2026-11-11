@@ -1,4 +1,13 @@
 # STATUS — AntiClone Personal
+
+## F13/F14 — avaliador shadow e perfil investigativo
+- Base ab8c7bd (main após #68), branch feat/f13-f14-shadow; investigação ON/OFF separada do veto, v2/legado preservados.
+- Código: operator-shadow-v1, perfil autenticado grupo/sessão, snapshots imutáveis/limitados e migration aditiva 061 apenas laboratorial.
+- Prova focada: 5/5 PASS, zero falhas/skips, PostgreSQL16/Chromium156; upgrade/restore, v2, snapshots, tempo e locks reais. Regressão integral e CI final por SHA no PR.
+- V3 apenas proposta interna opt-in; sem publicação/ativação. Rede/comportamento/geografia indisponíveis, sem coleta nova invasiva.
+- F13/F14 permanecem bloqueadas por ausência de fonte operacional de sessão e calibração de campo; contagens da matriz preservadas.
+- Revisão independente /root/shadow_review favorável ao delta final, sem P0/P1/P2 pendente; módulo SHA256 AC84C436, teste 8DE3D894. Métricas reais FP 0/6 e FN 4/4; fixture separada FN 3/4.
+- Sem merge/deploy/DNS/custos novos/migrations de produção; contrato, reprodução e limitações em docs/F13-F14-SHADOW.md.
 - **Frente 1:** PR #66, SHA 3683e5d, revisão independente favorável e CI oficial verde (42899056739); sem merge/deploy.
 - **Frente 2 F27/F45:** SMTP privado TLS para CTA/saúde, tentativas duráveis, revisão auditada do backlog e worker/monitor local independente; base 3683e5d, branch feat/pre-vps-front2.
 - **Prova focada:** provider-notifications 2/2 PASS, 0 falhas/skips/exit0; PostgreSQL/Chromium/SMTP TLS, retry/reinício, recuperação do backend, MFA/CSRF, concorrência e SIGTERM. UNKNOWN preservado sem takeover.
