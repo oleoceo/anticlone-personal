@@ -1,4 +1,5 @@
 import {retainObservedMetrics} from './observed-retention.js';
+import {retainAdministrativeChanges} from './administrative-retention.js';
 import {retainInvestigationReceipts} from './investigation-receipts.js';
 import { notificationRetention } from './notification-lifecycle.js';
 import { tryRecordTimeline } from './investigation-timeline.js';
@@ -22,6 +23,7 @@ export async function cleanup(db: Pool, project: string): Promise<void> {
   const pool=await db.connect();
   try {
   await pool.query('BEGIN');
+  await retainAdministrativeChanges(pool,project);
   const retention=await notificationRetention(pool,project);
   await retainObservedMetrics(pool,project);
   await retainInvestigationReceipts(pool,project);

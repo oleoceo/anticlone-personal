@@ -17,6 +17,7 @@ test('projects: authenticated creation, unique origins and isolated evidence', a
   await db.query(await readFile('infra/009_risk_assessments.sql', 'utf8'));
   await db.query(await readFile('infra/024_risk_evidence.sql', 'utf8'));
   for (const path of ['infra/001_initial.sql', 'infra/002_alerts.sql', 'infra/003_projects.sql', 'infra/004_observation_sources.sql', 'infra/005_canaries.sql', 'infra/018_notification_budget.sql', 'infra/019_alert_outbox_expiry.sql']) await db.query(await readFile(path, 'utf8'));
+  await db.query(await readFile('infra/059_project_registration_audit.sql','utf8'));
   await db.query('CREATE TABLE IF NOT EXISTS admin_totp_replay (factor_id text PRIMARY KEY, last_counter bigint NOT NULL)');
   await db.query('CREATE TABLE IF NOT EXISTS admin_totp_codes (factor_id text NOT NULL, digest text NOT NULL, valid_until bigint NOT NULL, PRIMARY KEY (factor_id, digest))');
   const secret = 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP', salt = '0123456789abcdef0123456789abcdef';
@@ -49,6 +50,7 @@ test('projects: authenticated creation, unique origins and isolated evidence', a
       ids.push((await response.json() as {id:string}).id);
     }
     assert.notEqual(ids[0], ids[1]);
+    assert.equal((await db.query('SELECT count(*)::int n FROM project_registration_audit WHERE project_id=ANY($1)',[ids])).rows[0].n,2);
     assert.equal((await fetch(`${base}/admin/projects/${ids[0]}/risk-assessments`, {headers:{...headers,origin:'https://attacker.test'}})).status, 403);
     assert.equal((await create('duplicate', originA.toUpperCase() + ':443/')).status, 409);
     assert.equal((await create('invalid', 'https://example.test/path')).status, 400);

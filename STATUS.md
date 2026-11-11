@@ -6,3 +6,11 @@
 - **Matriz:** 13 laboratório / 16 incompletas / 12 homologação externa / 4 bloqueadas; 1 crítica, 21 altas, 10 médias. F27/F45 aguardam recebimento externo, não declaradas concluídas integralmente.
 - **Limites:** aceite SMTP não prova caixa postal; monitor observa apenas backend loopback. D05 invisibilidade, D07 formulários, auditoria completa F34 e compatibilidade continuam pendentes.
 - **Operação:** migrations 057/058 apenas em teste isolado; sem deploy/DNS/segredos externos/migrations de produção. Provas e configuração em docs/PRE-VPS-FRONT2.md.
+
+## Frente 3 - fechamento funcional pre-VPS
+- Base f95e9da; branch unica feat/front3-pre-vps; sem merge/deploy/DNS/segredos/migrations de producao.
+- Cadastro auditado/atomico, metadados de alteracoes 059/060, retencao, filtros/navegacao/CSS CSP desktop/mobile e chave webhook impar recusada.
+- Foco 5/5 PASS, zero falhas/skips: HTML/React-Vite/WordPress real, canais/CSP/sandbox/file/offline, duas ofertas/superficies, carga, upgrade/restore/rollback f95e9da.
+- Matriz:22 laboratorio/6 incompletas/13 homologacao/4 bloqueadas; pendencias1 critica/16 altas/6 medias. F18/F25/F29/F31/F37/F40 incompletas, D05/D07 preservadas.
+- Revisao independente /root/front3_review diagnosticou CSS/CSP e instalador WP; ajustes aplicados. Parecer final e CI do SHA imutavel no PR consolidado.
+- Regressao completa em validacao; nao e PASS antecipado. Evidencias/medidas/limites em docs/PRE-VPS-FRONT3.md e test-results/front3/.

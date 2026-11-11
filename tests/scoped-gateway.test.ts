@@ -231,13 +231,13 @@ for (const distributionMode of [false,true]) test('scoped browser observations i
     const panel=await browser.newPage(); await panel.goto(`http://127.0.0.1:${adminAddress.port}/admin/ui/`);
     await panel.getByLabel('Senha administrativa').fill('password'); await panel.getByLabel('Código TOTP').fill(new TOTP({secret:Secret.fromBase32(secret)}).generate()); await panel.getByRole('button',{name:'Entrar',exact:true}).click();
     await panel.locator('#incident-query select option').first().waitFor({state:'attached'});
-    await panel.locator('#incident-query select').selectOption('health'); await panel.getByRole('button',{name:'Consultar incidentes',exact:true}).click();
+    await panel.locator('#incident-query select[name=project]').selectOption('health'); await panel.getByRole('button',{name:'Consultar incidentes',exact:true}).click();
     await panel.getByRole('list',{name:'Linha do tempo investigativa'}).waitFor();
     assert.match(await panel.locator('#incident-list').innerText(),/Coleta incompleta/);
     assert.match(await panel.locator('#incident-list').innerText(),/DIRECT_UNKNOWN/);
     assert.match(await panel.locator('#incident-list').innerText(),/mudança entre respostas comparáveis/);
     assert.equal(await panel.locator('#incident-list details[open]').count(),0);
-    await panel.locator('#incident-query select').selectOption('finance');
+    await panel.locator('#incident-query select[name=project]').selectOption('finance');
     assert.equal(await panel.locator('#incident-list h3').count(),0);
     await panel.getByRole('button',{name:'Consultar incidentes',exact:true}).click();
     await panel.getByText('Nenhum incidente observado.',{exact:true}).waitFor();
