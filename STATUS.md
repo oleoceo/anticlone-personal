@@ -5,9 +5,9 @@
 - Foco real 3/3 PASS: PostgreSQL/Chromium/CLI assinado; TP2 FP0 FN2 TN6, oito abstenções; baseline #69 TP0/FN4. Sem HIGH injetado.
 - Endereço loopback alterado, mobile, país autorizado, atraso/contradição/falha503/401; rotação diária imposta, minimização e retenção7d; fonte externa indisponível.
 - Comparação com gateway #69 compilado: p95 entrada14,59→17,04ms; CTA17,60→15,78ms (30 amostras/endpoint/versão; sem SLO).
-- Revisão independente favorável; SHA funcional80712b0:121 Node+10 Python PASS,0 falhas/skips,lint/typecheck/build/Docker/Compose exit0; CI oficial final por SHA no PR70 (duas falhas apt/DNS antes dos testes; mirrorlist temporária corrigida).
+- BLOCKED CI oficial:43039232846(2 tentativas)/43043071976 falham apt100 antes dos testes por resolução externa Azure/Ubuntu; mirror direto não resolveu e workflow foi restaurada. PR70 draft, sem novo retry manual.
 - V3 opt-in apenas proposto, veto operacional=false; v2/legado/comercial preservados. F13/F14 não concluídas: falta vínculo de visitas comuns e calibração de campo.
-- Sem merge/deploy/DNS/contas externas/migration de produção; contrato, reprodução, riscos e limites em docs/F13-F14-CORRELATION.md.
+- Revisão independente favorável; SHA funcional80712b0:121 Node+10 Python PASS,0 falhas/skips,lint/typecheck/build/Docker/Compose exit0; sem merge/deploy/DNS/contas externas/migration de produção. Provas/limites:docs/F13-F14-CORRELATION.md.
 
 ## F13/F14 — avaliador shadow e perfil investigativo
 - Base ab8c7bd (main após #68), branch feat/f13-f14-shadow; investigação ON/OFF separada do veto, v2/legado preservados.

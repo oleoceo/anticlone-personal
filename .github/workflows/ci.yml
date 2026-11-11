@@ -42,13 +42,6 @@ jobs:
         run: |
           pg_dump --version
           pg_restore --version
-      - name: Use official Ubuntu HTTPS mirrors for browser dependencies
-        run: |
-          # The runner mirrorlist preferred Azure, which failed DNS resolution
-          # in both attempts. Keep suites, components, keyrings and APT checks.
-          if [[ -f /etc/apt/apt-mirrors.txt ]]; then
-            printf 'https://archive.ubuntu.com/ubuntu/\tpriority:1\nhttps://security.ubuntu.com/ubuntu/\tpriority:2\n' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
-          fi
       - run: npx playwright install --with-deps chromium
       - run: docker pull nginx:1.28-alpine
       - run: echo '127.0.0.1 gateway.test' | sudo tee -a /etc/hosts
