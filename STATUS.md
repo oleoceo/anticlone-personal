@@ -1,4 +1,12 @@
 # STATUS — AntiClone Personal
+## Hotfix CI shadow apos #72
+- Base 3ec1796; branch fix/ci-shadow-entry-deadline; escopo exclusivo do harness, sem runtime/politica/migration/infra alterados.
+- CI 43080387939 confundia PAGE_REDIRECT no replay com entrega dentro dos 150 ms; tempo inclui Core e buffering route.fetch/body/fulfill.
+- Matriz ON/OFF com relogio controlado e sem interceptacao; transporte real direto e retencoes de 250 ms comprovam navegacao/fail-open/CTA/original.
+- Foco PostgreSQL/Chromium 2/2 PASS; direto JSON43,6ms < prazo164,7ms; servidor/replay atrasados JSON293,5/301,5ms, sem page redirect tardio.
+- Cabecalho forjado na API de refresh preserva teste de entrada nao confiavel sem preflight artificial ou ampliacao CORS. F13/F14 continuam shadow, sem veto novo.
+- Revisao independente, regressao integral e CI oficial do SHA final registradas no PR do hotfix; nao tratar gates pendentes como PASS. Sem merge/deploy/operacoes externas.
+
 ## Nucleo operacional apos estabilizacao CI
 - Base 8834bf3 + PR tecnico #71 verde em 29c2a06; branch consolidada fix/operational-core-closure, sem merge/deploy.
 - Defeito comprovado: consulta/mapping CTA no painel recusava HTTPS; alinhada ao contrato existente. Importacao manual original preservada.

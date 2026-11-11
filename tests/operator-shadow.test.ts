@@ -2,10 +2,10 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID,createHash} from 'node:crypto';
 import {readFile,readdir,mkdir,writeFile} from 'node:fs/promises';
-import {createServer} from 'node:http';
+import {createServer,type IncomingMessage,type ServerResponse} from 'node:http';
 import {once} from 'node:events';
 import {Pool} from 'pg';
-import {chromium} from 'playwright';
+import {chromium,type Page} from 'playwright';
 import {evaluateOperator,proposeStealthV3,type OperatorSignal,recordOperatorShadow,settleOperatorShadow} from '../apps/operator-shadow.js';
 import {scopedGateway} from '../apps/scoped-gateway.js';
 import {publishPagePolicy} from '../apps/protection-admin.js';
@@ -32,6 +32,47 @@ function metrics(rows:{operator:boolean;veto:boolean}[]) {
   const tp=rows.filter(r=>r.operator&&r.veto).length,fp=rows.filter(r=>!r.operator&&r.veto).length;
   const fn=rows.filter(r=>r.operator&&!r.veto).length,tn=rows.filter(r=>!r.operator&&!r.veto).length;
   return {tp,fp,fn,tn,falsePositiveRate:fp/(fp+tn),falseNegativeRate:fn/(fn+tp)};
+}
+
+type EntryTrace={session?:string;received:number;ready?:number;sent?:number;action?:string;sha256?:string};
+const tracePrefix='SHADOW_ENTRY_TRACE ';
+// Observe actual server bytes without adding a second HTTP stack to the positive path.
+function traceEntry(req:IncomingMessage,res:ServerResponse,rows:EntryTrace[],delay=0){
+  if(req.method!=='POST'||!req.url?.endsWith('/entry-decision'))return;
+  const trace:EntryTrace={received:performance.now()};rows.push(trace);
+  const chunks:Buffer[]=[];req.on('data',(chunk:Buffer)=>chunks.push(chunk));
+  req.on('end',()=>{trace.session=(JSON.parse(Buffer.concat(chunks).toString()) as {session:string}).session;});
+  const end=res.end;
+  res.end=function(this:ServerResponse,chunk?:unknown,...args:unknown[]){
+    trace.ready=performance.now();const bytes=Buffer.isBuffer(chunk)?chunk:Buffer.from(String(chunk));
+    if(bytes.length&&chunk!==undefined)trace.action=(JSON.parse(bytes.toString()) as {action:string}).action;trace.sha256=createHash('sha256').update(bytes).digest('hex');
+    const send=()=>{trace.sent=performance.now();Reflect.apply(end,this,[chunk,...args]);};
+    if(delay)setTimeout(send,delay);else send();return this;
+  } as typeof res.end;
+}
+async function entryProbe(page:Page){
+  const events:Record<string,unknown>[]=[];
+  page.on('console',message=>{if(message.text().startsWith(tracePrefix))events.push(JSON.parse(message.text().slice(tracePrefix.length)));});
+  page.on('framenavigated',frame=>{if(frame===page.mainFrame())events.push({event:'navigation',url:frame.url(),nodeMono:performance.now()});});
+  await page.addInitScript(prefix=>{
+    const emit=(event:string,detail:Record<string,unknown>={})=>console.debug(prefix+JSON.stringify({event,mono:performance.now(),wall:Date.now(),...detail}));
+    const timeout=window.setTimeout.bind(window);
+    window.setTimeout=((callback:TimerHandler,ms?:number,...args:unknown[])=>{
+      if(ms!==150||typeof callback!=='function')return timeout(callback,ms,...args);
+      emit('deadline-armed',{deadline:performance.now()+ms});
+      return timeout(()=>{emit('deadline-expired');Reflect.apply(callback,window,args);},ms);
+    }) as typeof window.setTimeout;
+    const fetch=window.fetch.bind(window);
+    window.fetch=(...args)=>{if(String(args[0]).endsWith('/entry-decision'))emit('request');return fetch(...args);};
+    const json=Response.prototype.json;
+    Response.prototype.json=function(){const url=this.url;return json.call(this).then(decision=>{
+      if(url.endsWith('/entry-decision'))emit('parsed',{decision,session:sessionStorage.getItem('anticlone.lab.session')});
+      return decision;
+    });};
+    addEventListener('pagehide',()=>emit('pagehide'));
+  },tracePrefix);
+  const parsed=page.waitForEvent('console',{predicate:m=>m.text().startsWith(tracePrefix)&&JSON.parse(m.text().slice(tracePrefix.length)).event==='parsed'}).then(m=>JSON.parse(m.text().slice(tracePrefix.length)) as {decision:{action:string};session:string;mono:number});
+  return {events,parsed};
 }
 test('shadow separates group/session, expires evidence and quantifies missed operators',()=>{
   const rows=cases.map(c=>({...c,veto:proposeStealthV3(true,evaluateOperator(c.signals,now,true),now).wouldVeto}));
@@ -61,6 +102,7 @@ test('F13/F14 shadow PostgreSQL/Chromium: ON/OFF collection and unchanged PAGE/C
   await once(site,'listening');const address=site.address();assert.ok(address&&typeof address!=='string');
   const original=`http://127.0.0.1:${address.port}`,copy=`http://localhost:${address.port}`;
   const saved={...process.env};let gateway:ReturnType<typeof createServer>|undefined;
+  const transport:EntryTrace[]=[],timing:Record<string,unknown>[]=[];let serverDelay=0;
   const browser=await chromium.launch({args:['--host-resolver-rules=MAP localhost 127.0.0.1']});
   const evidence:Record<string,unknown>[]=[];
   try {
@@ -75,7 +117,7 @@ test('F13/F14 shadow PostgreSQL/Chromium: ON/OFF collection and unchanged PAGE/C
     process.env.SCOPED_LAB_INSTALLATIONS=installation;process.env.SCOPED_LAB_ORIGIN=copy;process.env.SCOPED_LAB_RISK='UNCERTAIN';delete process.env.GATEWAY_MODE;
     const scripts=Object.fromEntries(await Promise.all(['bootstrap','core','fallback'].map(async name=>[name==='bootstrap'?'runtime.js':name+'.js',await readFile('runtime/'+name+'.js')])));
     const handle=scopedGateway(db,scripts,async()=>true);
-    gateway=createServer((req,res)=>{if(!handle(req,res))res.writeHead(404).end();}).listen(0,'127.0.0.1');await once(gateway,'listening');
+    gateway=createServer((req,res)=>{traceEntry(req,res,transport,serverDelay);if(!handle(req,res))res.writeHead(404).end();}).listen(0,'127.0.0.1');await once(gateway,'listening');
     const ga=gateway.address();assert.ok(ga&&typeof ga!=='string');gatewayOrigin=`http://127.0.0.1:${ga.port}`;
     const allocation={PAID_ATTRIBUTED:100,ORGANIC:0,REFERRAL:0,DIRECT_UNKNOWN:0};
     for(const stealth of [false,true]) {
@@ -86,27 +128,23 @@ test('F13/F14 shadow PostgreSQL/Chromium: ON/OFF collection and unchanged PAGE/C
       const snapshots=(await db.query('SELECT configuration FROM page_policy_approvals')).rows;
       for(const c of cases) {
         const context=await browser.newContext(c.name==='different_device'?{viewport:{width:390,height:844},isMobile:true}:{});
-        // All contexts use the same loopback network; a forged VPN header remains untrusted.
-        if(c.name==='simulated_vpn')await context.setExtraHTTPHeaders({'X-Forwarded-For':'192.0.2.44'});
+        // All contexts use the same loopback network. Send the forged header
+        // through the explicit API probe below, not a CORS-preflight browser bypass.
         if(c.paid)await context.addInitScript(()=>sessionStorage.setItem('anticlone.lab.attribution',JSON.stringify({medium:'cpc'})));
         const page=await context.newPage();
-        // Cache exact backend bytes before redirect navigation discards the CDP body.
-        // This pass-through does not fabricate decisions or change runtime deadlines.
-        const response=new Promise<{decision:{action:string};runtimeSession:string}>((resolve,reject)=>{
-          void context.route('**/entry-decision',async route=>{
-            try {
-              const upstream=await route.fetch({maxRedirects:0});const body=await upstream.body();
-              const decision=JSON.parse(body.toString('utf8')) as {action:string};
-              const runtimeSession=(JSON.parse(route.request().postData()!) as {session:string}).session;
-              await route.fulfill({response:upstream,body});resolve({decision,runtimeSession});
-            }catch(error){reject(error);}
-          }).catch(reject);
-        });
-        await page.goto(copy+'/lp');const {decision,runtimeSession}=await response;
+        // This matrix tests shadow/commerce logic, not wall-clock throughput.
+        // Freeze browser time during real PostgreSQL/network work; do not intercept HTTP.
+        await page.clock.install();await page.clock.pauseAt(new Date());
+        const probe=await entryProbe(page);
+        timing.push({case:c.name,stealth,clock:'controlled',browser:probe.events});
+        await page.goto(copy+'/lp');const {decision,session:runtimeSession}=await probe.parsed;
         assert.equal(decision.action,c.paid?'PAGE_REDIRECT':'OBSERVE_ONLY');
         if(c.paid)await page.waitForURL(original+'/page');else {await page.locator('a').click();await page.waitForURL(copy+'/native');}
+        const server=transport.find(t=>t.session===runtimeSession);assert.equal(server?.action,decision.action);
+        assert.ok(probe.events.some(e=>e.event==='deadline-armed'),'runtime deadline must be observed');
+        Object.assign(timing[timing.length-1],{server,finalUrl:page.url()});
         // Exercise CTA selection independently of the page entry phase.
-        const refresh=await context.request.post(`${gatewayOrigin}/i/${installation}/cta-refresh`,{headers:{origin:copy,'content-type':'text/plain'},data:JSON.stringify({pathname:'/lp',session:randomUUID().replaceAll('-',''),signals:c.paid?{medium:'cpc'}:{}})});
+        const refresh=await context.request.post(`${gatewayOrigin}/i/${installation}/cta-refresh`,{headers:{origin:copy,'content-type':'text/plain',...(c.name==='simulated_vpn'?{'X-Forwarded-For':'192.0.2.44'}:{})},data:JSON.stringify({pathname:'/lp',session:randomUUID().replaceAll('-',''),signals:c.paid?{medium:'cpc'}:{}})});
         assert.equal((await refresh.json() as {action:string}).action,c.paid?'REPLACE_CONVERSION':'OBSERVE_ONLY');
         const assessment=evaluateOperator(c.signals,now,true);
         let operational:ReturnType<typeof evaluateOperator>|undefined;
@@ -163,8 +201,52 @@ test('F13/F14 shadow PostgreSQL/Chromium: ON/OFF collection and unchanged PAGE/C
       assert.ok(blocked,'shadow must be waiting on the held page lock');
       await admin.query('SELECT pg_advisory_xact_lock(hashtext($1))',['shadow']);
     } finally {await admin.query('ROLLBACK');admin.release();await pending;}
-    await mkdir('test-results/operator-shadow',{recursive:true});await writeFile('test-results/operator-shadow/calibration.json',JSON.stringify({dataset:'synthetic-controlled-v1',notFieldCalibration:true,browser:browser.version(),operation,synthetic:metrics(cases.map(c=>({operator:c.operator,veto:proposeStealthV3(true,evaluateOperator(c.signals,now,true),now).wouldVeto}))),evidence},null,2));
+    // Real-clock negatives: same genuine PAGE_REDIRECT, delivered after 150 ms.
+    // The route case reproduces the former harness; only latency is injected.
+    for(const mode of ['direct-realtime','server-delay','route-delay'] as const){
+      const context=await browser.newContext();await context.addInitScript(()=>sessionStorage.setItem('anticlone.lab.attribution',JSON.stringify({medium:'cpc'})));
+      const page=await context.newPage(),probe=await entryProbe(page);let forwardedHash:string|undefined,routeReady:number|undefined,routeSent:number|undefined;
+      const row:Record<string,unknown>={case:mode,clock:'real',browser:probe.events};timing.push(row);
+      serverDelay=mode==='server-delay'?250:0;
+      if(mode==='direct-realtime'){
+        await page.goto(copy+'/lp');const result=await probe.parsed;Object.assign(row,{server:transport.find(t=>t.session===result.session),finalUrl:page.url()});assert.equal(result.decision.action,'PAGE_REDIRECT');
+        const armed=probe.events.find(e=>e.event==='deadline-armed');assert.ok(armed);assert.ok(result.mono<Number(armed.deadline),'direct decision must arrive within the 150 ms browser budget');
+        await page.waitForURL(original+'/page');row.finalUrl=page.url();await context.close();continue;
+      }
+      if(mode==='route-delay')await context.route('**/entry-decision',async route=>{
+        const upstream=await route.fetch({maxRedirects:0}),body=await upstream.body();routeReady=performance.now();
+        forwardedHash=createHash('sha256').update(body).digest('hex');await new Promise(r=>setTimeout(r,250));
+        routeSent=performance.now();Object.assign(row,{routeReady,routeSent});await route.fulfill({response:upstream,body});
+      });
+      const refreshed=page.waitForResponse(r=>r.url().endsWith('/cta-refresh'));
+      await page.goto(copy+'/lp');const result=await probe.parsed,server=transport.find(t=>t.session===result.session);Object.assign(row,{server,finalUrl:page.url()});
+      assert.equal((await (await refreshed).json()).action,'REPLACE_CONVERSION');await page.waitForTimeout(100);
+      assert.equal(server?.action,'PAGE_REDIRECT');assert.equal(result.decision.action,'PAGE_REDIRECT');
+      const armed=probe.events.find(e=>e.event==='deadline-armed');assert.ok(armed);assert.ok(result.mono>=Number(armed.deadline));
+      assert.ok(probe.events.some(e=>e.event==='deadline-expired'));
+      // Timers need not fire at an exact fractional millisecond; prove the hold
+      // exceeded the unchanged commercial budget as well as observing expiry.
+      if(mode==='route-delay'){assert.equal(forwardedHash,server.sha256);assert.ok(routeSent!-routeReady!>150);}
+      else assert.ok(server.sent!-server.ready!>150);
+      assert.equal(page.url(),copy+'/lp','late PAGE must never navigate');
+      // Late page entry must not veto the independently refreshed approved CTA.
+      await page.locator('a').click();await page.waitForURL(original+'/cta');
+      row.ctaFinalUrl=page.url();
+      await context.close();serverDelay=0;
+    }
+    const originalContext=await browser.newContext(),originalPage=await originalContext.newPage(),originalProbe=await entryProbe(originalPage);
+    await originalPage.goto(original+'/lp');assert.equal((await originalProbe.parsed).decision.action,'OBSERVE_ONLY');
+    await originalPage.locator('a').click();await originalPage.waitForURL(original+'/native');timing.push({case:'original',clock:'real',browser:originalProbe.events,finalUrl:originalPage.url()});await originalContext.close();
+    await mkdir('test-results/operator-shadow',{recursive:true});await writeFile('test-results/operator-shadow/calibration.json',JSON.stringify({dataset:'synthetic-controlled-v1',notFieldCalibration:true,browser:browser.version(),operation,synthetic:metrics(cases.map(c=>({operator:c.operator,veto:proposeStealthV3(true,evaluateOperator(c.signals,now,true),now).wouldVeto}))),evidence,timing},null,2));
   } finally {
-    process.env=saved;await browser.close();if(gateway)await new Promise<void>(resolve=>gateway!.close(()=>resolve()));await new Promise<void>(resolve=>site.close(()=>resolve()));await db.end();await root.query(`DROP SCHEMA ${schema} CASCADE`);await root.end();
+    await mkdir('test-results/operator-shadow',{recursive:true});await writeFile('test-results/operator-shadow/entry-timing.json',JSON.stringify({transport,timing},null,2));
+    const summary=timing.map(row=>{const events=row.browser as Record<string,unknown>[],server=row.server as EntryTrace|undefined;
+      return {case:row.case,stealth:row.stealth,clock:row.clock,backendMs:server?.ready===undefined?null:server.ready-server.received,
+        serverHoldMs:server?.sent===undefined?null:server.sent-server.ready!,routeHoldMs:row.routeSent===undefined?null:Number(row.routeSent)-Number(row.routeReady),
+        parsedMs:events.find(e=>e.event==='parsed')?.mono,deadlineMs:events.find(e=>e.event==='deadline-armed')?.deadline,
+        expired:events.some(e=>e.event==='deadline-expired'),action:(events.find(e=>e.event==='parsed')?.decision as {action:string}|undefined)?.action,
+        finalUrl:row.finalUrl,ctaFinalUrl:row.ctaFinalUrl};});
+    process.stdout.write('SHADOW_ENTRY_TIMING '+JSON.stringify(summary)+'\n');
+    process.env=saved;await browser.close();if(gateway)await new Promise<void>(resolve=>gateway!.close(()=>resolve()));await new Promise<void>(resolve=>site.close(()=>resolve()));await settleOperatorShadow(db);await db.end();await root.query(`DROP SCHEMA ${schema} CASCADE`);await root.end();
   }
 });
