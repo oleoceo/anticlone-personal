@@ -46,3 +46,12 @@
 - Matriz:22 laboratorio/6 incompletas/13 homologacao/4 bloqueadas; pendencias1 critica/16 altas/6 medias. F18/F25/F29/F31/F37/F40 incompletas, D05/D07 preservadas.
 - Revisao independente /root/front3_review favoravel a687f11d e delta CSP, sem P0/P1/P2 pendente; parecer final/checks por SHA no PR68.
 - Regressao local39b0b14:118 Node+10 Python PASS,0 falhas/skips; lint/typecheck/build/Docker/Compose exit0. CI oficial do SHA final conferida no PR68; provas/limites em docs/PRE-VPS-FRONT3.md.
+
+## F25/F18 — fechamento laboratorial após PR #73
+- Base e8dd1c6; branch feat/f25-f18-closure; código 863be6d; um PR consolidado, sem merge/deploy/produção.
+- F25: termos estruturados revisados, UNKNOWN, drift/alerta por ponto, legado e reaprovação auditada D15; F18: gate opt-in, deadline 150 ms e medidas reais desktop/mobile.
+- Foco 6/6 PASS; integral 125 Node + 10 Python PASS, zero falhas/skips; lint/typecheck/build/Docker/Compose/PostgreSQL16/Chromium/HTTPS/restore/rollback exit0.
+- Revisão independente /root/f25_f18_review favorável a 863be6d, sem P0/P1/P2 pendente; delta posterior de testes/documentação, revisão/CI final por SHA no PR.
+- F18/F25 concluídas em laboratório: matriz 25 laboratório/2 incompletas/14 homologação/4 bloqueadas; pendências 1 crítica/15 altas/4 médias; agregado histórico corrigido pelas linhas Fxx.
+- Homologar LPs, CSS/dispositivos/redes, checkout/WhatsApp e alertas externos reais; sem inferir oferta/preço hostil, sem formulário D07, sem invisibilidade prometida.
+- CI main 43098539403 intocada; PR74: run43218675626 124PASS/1FAIL na sonda literal150, corrigida sem mudar Stealth; foco ampliado8PASS, nova CI final exigida. Provas/limites: docs/F25-F18-CLOSURE.md.
