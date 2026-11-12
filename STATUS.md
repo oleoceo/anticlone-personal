@@ -1,4 +1,20 @@
 # STATUS — AntiClone Personal
+## PR75 — correções da revisão sobre 2bf9a04
+- Mesma branch/PR; moeda/expoente validados por allowlist ISO, sem retroconverter históricos; saldos incompatíveis ficam indisponíveis.
+- Migration064 aditiva: preparar/testar HMAC/confirmar migração da mesma conta; formatos legados preservados, versão/intenção assinadas e dedup canônica.
+- Seletores e editor guiado com aliases preservados; amostras exibem caminhos de vocabulário seguro, sem payload bruto/valores/chaves privadas.
+- SHA512/timestamp é a extensão fechada; PAID→CANCELLED sem estorno deixa líquido incerto. Sem homologação de marcas/API/atribuição/chegada.
+- Foco PG/Chromium 5/5 PASS; dinheiro BRL/USD/JPY/KWD/BHD, concorrência, atraso, backfill, binário2bf9a04 sobre064 e formulário inválido. Regressão Linux integral e CI final por SHA no PR.
+- Revisão independente /root/pr75_revision_review favorável, foco próprio5/5 PASS, sem P0/P1/P2 pendente; hashes/provas no contrato. Sem merge/deploy/credenciais reais/migrations de produção.
+
+## F29/F31 — Custom multiprovedor — PR #75
+- Base fdcc453 (#74); branch única feat/f29-f31-multiprovider; sem merge/deploy/contas externas ou migrations de produção.
+- Catálogo global imutável, contas criptografadas, vínculos versionados, HMAC Custom, ledger/dedup/estornos e relatório F30 por moeda.
+- Foco PG/Chromium10/10, Linux commerce/upgrade3/3 e jornada/F18/GS06 corrigido5/5 PASS; lint/typecheck/build PASS. CI inicial126/1; correção só no harness revisada; CI final por SHA no PR75.
+- Revisão independente /root/commerce_review favorável ao delta funcional, sem P0/P1/P2 pendente; hashes/provas em docs/F29-F31-MULTIPROVIDER.md e PR.
+- Chegada confirmada, atribuição verificável, API externa e estornos parciais não suportados; checkout real depende de contrato/credenciais autorizados.
+- F29/F31 integrais não declaradas concluídas; limites/matriz em docs/F29-F31-MULTIPROVIDER.md. PR75 consolidado; sem autorização de merge.
+
 ## Hotfix CI shadow apos #72
 - Base 3ec1796; branch fix/ci-shadow-entry-deadline; escopo exclusivo do harness, sem runtime/politica/migration/infra alterados.
 - CI 43080387939 confundia PAGE_REDIRECT no replay com entrega dentro dos 150 ms; tempo inclui Core e buffering route.fetch/body/fulfill.
@@ -55,3 +71,10 @@
 - F18/F25 concluídas em laboratório: matriz 25 laboratório/2 incompletas/14 homologação/4 bloqueadas; pendências 1 crítica/15 altas/4 médias; agregado histórico corrigido pelas linhas Fxx.
 - Homologar LPs, CSS/dispositivos/redes, checkout/WhatsApp e alertas externos reais; sem inferir oferta/preço hostil, sem formulário D07, sem invisibilidade prometida.
 - CI main 43098539403 intocada; PR74: run43218675626 124PASS/1FAIL na sonda literal150, corrigida sem mudar Stealth; foco ampliado8PASS, nova CI final exigida. Provas/limites: docs/F25-F18-CLOSURE.md.
+
+## PR75 — P2 exclusao da amostra legada
+- Base 784dcd5; limpeza em 064 restrita a legacy_model_version; rotacao connection-wide preservada.
+- Teste PostgreSQL cobre legado expirado, v2 valida preservada, commit de migracao e rotacao invalidando tres versoes.
+- Revisao independente /root/p2_review favoravel ao delta SQL/teste, sem P0/P1/P2; achado no preparo do teste corrigido.
+- Regressao Linux e CI oficial do SHA final: resultados e links registrados no PR75; nao presumir sucesso antes dos checks.
+- Sem merge/deploy/credenciais reais/migrations de producao; restante do PR preservado.

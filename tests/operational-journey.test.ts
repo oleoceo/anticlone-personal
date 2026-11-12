@@ -96,7 +96,13 @@ for(const width of [1440,390])test(`GS01-04/06/13/16/17: continuous operational 
     for(const id of percent===50?[accepted!,rejected!]:[percent===100?accepted!:rejected!]){
      const active=selected(id,action,version,allocation(percent),kind),signals=kind==='PAID_ATTRIBUTED'?{medium:'cpc'}:kind==='ORGANIC'?{referrerHost:'google.com'}:kind==='REFERRAL'?{referrerHost:'referrer.fixture.test'}:{};
      const p=await context.newPage();await p.addInitScript(({id,signals})=>{sessionStorage.setItem('anticlone.lab.session',id);sessionStorage.setItem('anticlone.lab.attribution',JSON.stringify(signals));},{id,signals});
+     // This matrix proves selection/class/approval, not the 150 ms wall-clock SLA.
+     // Keep real HTTP/PostgreSQL, but isolate selected entry logic from runner load.
+     // F18/GS06 and shadow transport probes retain real time and delayed fail-open cases.
+     if(action==='PAGE_REDIRECT'&&active){await p.clock.install();await p.clock.pauseAt(new Date());}
      const response=p.waitForResponse(r=>r.url()===decisionUrl);await p.goto(copy+'/lp');const received=await response;assert.equal(received.status(),200);
+     // Selected PAGE navigation can dispose the response body; its approved URL
+     // is asserted below. Other cases retain the original response assertion.
      if(!(action==='PAGE_REDIRECT'&&active))assert.equal((await received.json()).action,active?action:'OBSERVE_ONLY');
      if(action==='PAGE_REDIRECT'&&active)await p.waitForURL(original+'/checkout-approved');
      else{

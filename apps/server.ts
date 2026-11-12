@@ -1,3 +1,4 @@
+import {commerceWebhook} from './commerce.js';
 import { distributionGateway } from './distribution-gateway.js';
 import { runtimeLayerObservations, scopedCorrelationOrigin } from './runtime-layer-observations.js';
 import { observedSessionGateway } from './observed-session-gateway.js';
@@ -150,12 +151,14 @@ async function withLegacyEligibility<T>(action: () => Promise<T>, reserve=true):
     if (reserve) { const next=legacyWaiters.shift(); if(next) next(); else legacyAdmissions--; }
   }
 }
+const handleCommerce=commerceWebhook(pool);
 const handleObservedSession=observedSessionGateway(pool);
 const handleCheckout = checkoutWebhook(pool,activeProject,project ? process.env : {...process.env,CHECKOUT_WEBHOOK_SECRET:undefined});
 const handleProjectCheckout = projectCheckoutWebhooks(pool,process.env);
 const distributed = distributionGateway(pool, {'runtime.js':bootstrap,'core.js':core,'fallback.js':fallback,'cta-inventory.js':inventoryScript},(req,res)=>{if (!handleObservedSession(req,res) && !scoped(req,res)) res.writeHead(404).end();},layerObservations);
 const server = http.createServer((req, res) => {
   if (!boundary(req, res)) return;
+  if (handleCommerce(req,res)) return;
   if (handleProjectCheckout(req,res)) return;
   if (handleObservedSession(req,res)) return;
   if (distributed(req,res)) return;

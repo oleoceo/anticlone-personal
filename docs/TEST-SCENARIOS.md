@@ -1,5 +1,20 @@
 # Testes de aceitação — Golden Scenarios
 
+Revisão PR75: `commerce` inclui moedas/expoentes BRL/USD/JPY/KWD/BHD, persistência
+exata, migração prepare/test HMAC versionado/commit/cancel e concorrência, versões
+antigas/novas no mesmo pedido, alias de status no Chromium, backfill064 e execução
+real do receptor2bf9a04 antes/depois da migração de formato. PAID→CANCELLED mantém
+incerteza até evento de estorno; montante histórico incompatível não é convertido.
+`front3-upgrade` cobre064 e falha atômica065, restore e rollback geral separados.
+
+F29/F31 multiprovedor: `tests/commerce.test.ts` testa PostgreSQL e Chromium reais,
+catálogo/revisão Custom no painel MFA/CSRF, modelo reutilizado entre projetos/contas,
+múltiplas plataformas e checkouts, versões, rotação, HMAC inválido/expirado, duplicatas
+concorrentes, conflitos, estados e estornos após desativação/TEST, datas comerciais
+independentes, cancelamento sem débito, F30 por moeda e referência opcional.
+Não comprova checkout externo, chegada confirmada ou atribuição verificável;
+[contrato, matriz e limites](F29-F31-MULTIPROVIDER.md).
+
 Todos usam **ambientes, cópias simuladas e domínios autorizados** sob controle do proprietário. Sem atacar páginas alheias. Cada GS só passa com teste reproduzível e evidência (comando/log/resultado e versão).
 
 | ID | Verificação operacional |
