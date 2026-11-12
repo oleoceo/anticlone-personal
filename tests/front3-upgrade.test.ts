@@ -34,15 +34,15 @@ test('Front3: checksummed versioned upgrade, atomic failure, real baseline resto
   await saveOperationalBundle(join(dir,'operations'),configuration,baselineSha);
   const recovered=await readOperationalBundle(join(dir,'operations'));assert.deepEqual(recovered.configuration,configuration);assert.equal(recovered.credentialsRequired,true);
   await backup(url(sourceName),join(dir,'database'));
-  assert.deepEqual((await upgradeLaboratory(db)).applied,[59,60,61,62]);assert.deepEqual((await upgradeLaboratory(db)).applied,[]);
+  assert.deepEqual((await upgradeLaboratory(db)).applied,[59,60,61,62,63]);assert.deepEqual((await upgradeLaboratory(db)).applied,[]);
   await db.query("UPDATE projects SET name='Upgraded synthetic' WHERE id='upgrade'");
   assert.ok((await db.query("SELECT 1 FROM administrative_change_audit WHERE relation_name='projects' AND operation='UPDATE'")).rowCount);
-  const bad=join(dir,'bad');await mkdir(bad);await writeFile(join(bad,'063_atomic_failure.sql'),'CREATE TABLE must_rollback(id int); SELECT missing_upgrade_function();');
-  await assert.rejects(upgradeLaboratory(db,bad));assert.equal((await db.query("SELECT to_regclass('must_rollback') missing")).rows[0].missing,null);assert.equal((await db.query('SELECT 1 FROM schema_migration_ledger WHERE version=63')).rowCount,0);
+  const bad=join(dir,'bad');await mkdir(bad);await writeFile(join(bad,'064_atomic_failure.sql'),'CREATE TABLE must_rollback(id int); SELECT missing_upgrade_function();');
+  await assert.rejects(upgradeLaboratory(db,bad));assert.equal((await db.query("SELECT to_regclass('must_rollback') missing")).rows[0].missing,null);assert.equal((await db.query('SELECT 1 FROM schema_migration_ledger WHERE version=64')).rowCount,0);
   await copyFile('infra/059_project_registration_audit.sql',join(bad,'059_project_registration_audit.sql'));await writeFile(join(bad,'059_project_registration_audit.sql'),'-- changed checksum\n',{flag:'a'});
   await assert.rejects(upgradeLaboratory(db,bad),/checksum mismatch/);
   await restore(url(targetName),join(dir,'database'),targetName);const restored=new Pool({connectionString:url(targetName)});
-  try{assert.equal((await restored.query('SELECT name FROM projects')).rows[0].name,'Synthetic baseline');assert.equal((await restored.query('SELECT max(version)::int v FROM schema_migration_ledger')).rows[0].v,58);assert.deepEqual((await upgradeLaboratory(restored)).applied,[59,60,61,62]);}finally{await restored.end();}
+  try{assert.equal((await restored.query('SELECT name FROM projects')).rows[0].name,'Synthetic baseline');assert.equal((await restored.query('SELECT max(version)::int v FROM schema_migration_ledger')).rows[0].v,58);assert.deepEqual((await upgradeLaboratory(restored)).applied,[59,60,61,62,63]);}finally{await restored.end();}
   // Roll back the executable, retain additive schema/data. No destructive down migration.
   previous=await compilePreviousCode(baselineSha);
   const reserve=createServer().listen(0,'127.0.0.1');await once(reserve,'listening');const ra=reserve.address();assert.ok(ra&&typeof ra!=='string');await new Promise<void>(r=>reserve.close(()=>r()));api='http://127.0.0.1:'+ra.port;
@@ -60,6 +60,6 @@ test('Front3: checksummed versioned upgrade, atomic failure, real baseline resto
   }
   assert.equal((await db.query('SELECT count(*)::int n FROM incidents')).rows[0].n,1);
   await writeFile(join(dir,'operations','operational.json'),'{}');await assert.rejects(readOperationalBundle(join(dir,'operations')),/invalid operational bundle/);
-  console.log('FRONT3_UPGRADE baseline 001-058 -> 059-062; repeat no-op; failed 063 rollback; checksum refusal; PostgreSQL restore 058 -> 062; current and f95e9da executables PASS');
+  console.log('FRONT3_UPGRADE baseline 001-058 -> 059-063; repeat no-op; failed 064 rollback; checksum refusal; PostgreSQL restore 058 -> 063; current and f95e9da executables PASS');
  }finally{await browser?.close();if(child&&child.exitCode===null&&child.signalCode===null){child.kill('SIGTERM');await once(child,'exit');}await new Promise<void>(r=>site.close(()=>r()));await db.end();await root.query(`DROP DATABASE ${sourceName}`);await root.query(`DROP DATABASE ${targetName}`);await root.end();if(previous)await rm(previous,{recursive:true,force:true});await rm(dir,{recursive:true,force:true});}
 });

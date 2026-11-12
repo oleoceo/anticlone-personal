@@ -1,0 +1,33 @@
+// Appended to the existing administrative script; inherits session/CSRF handling.
+export const commerceScript=String.raw`
+const commerce=document.createElement('section');
+commerce.innerHTML='<h2>Integrações globais de checkout</h2><p>Custom Webhook: JSON com HMAC-SHA256 e timestamp. Credenciais permanecem no servidor. Nenhuma venda implica recuperação comprovada. Vínculos comerciais não alteram aprovações de CTA.</p><button id="commerce-load">Atualizar catálogo, conexões e amostras sanitizadas</button><pre id="commerce-list"></pre><div id="commerce-forms"></div><pre id="commerce-result" role="status"></pre>';
+document.getElementById('settings').append(commerce);
+const commerceForms=document.getElementById('commerce-forms');
+const commerceField=(form,name,label,type='text',required=true)=>{const l=document.createElement('label');l.textContent=label;const input=document.createElement(type==='textarea'?'textarea':type==='select'?'select':'input');input.name=name;if(type!=='textarea'&&type!=='select')input.type=type;input.required=required;l.append(input);form.append(l);return input;};
+function commerceForm(action,label,fields){const form=document.createElement('form');form.dataset.action=action;const heading=document.createElement('h3');heading.textContent=label;form.append(heading);for(const f of fields)commerceField(form,...f);const button=document.createElement('button');button.textContent=label;form.append(button);commerceForms.append(form);return form;}
+const modelForm=commerceForm('model','Salvar modelo global Custom revisado',[
+ ['id','ID global (vazio para novo)','text',false],['expected_version','Versão atual (0 para novo)','number'],['name','Identificação da plataforma'],
+ ['config','Mapeamento JSON (caminhos simples, sem expressões)','textarea'],['sample','Amostra sintética para teste; dados pessoais não são persistidos','textarea'],['reviewed','Revisei os campos, estados e unidade monetária','checkbox']]);
+modelForm.elements.expected_version.value='0';
+modelForm.elements.config.value=JSON.stringify({auth:'HMAC_SHA256_TIMESTAMP',fields:{event:'event',order:'order',amount:'amount',currency:'currency',status:'status',occurred:'occurred',product:'product',offer:'offer',checkout:'checkout'},statuses:{paid:'PAID',pending:'PENDING',cancelled:'CANCELLED',refunded:'REFUNDED',chargeback:'CHARGEBACK'},money:{unit:'DECIMAL',exponent:2}},null,2);
+modelForm.elements.sample.value=JSON.stringify({event:'sample_event',order:'sample_order',amount:'19.99',currency:'BRL',status:'paid',occurred:'2026-11-12T00:00:00.000Z',product:'product_a',offer:'offer_a',checkout:'checkout_a'},null,2);
+const testButton=document.createElement('button');testButton.type='button';testButton.textContent='Testar interpretação sem salvar';modelForm.append(testButton);
+const commerceShow=value=>document.getElementById('commerce-result').textContent=JSON.stringify(value,null,2);
+testButton.addEventListener('click',async()=>{try{commerceShow(await request('commerce',{action:'test',config:JSON.parse(modelForm.elements.config.value),sample:JSON.parse(modelForm.elements.sample.value)}));}catch{commerceShow('Teste recusado. Confira caminhos, estados e unidade monetária.');}});
+commerceForm('connection','Criar conexão de conta', [['model','ID do modelo aprovado'],['model_version','Versão aprovada','number'],['account','Identificação não pessoal da conta']]);
+const stateForm=commerceForm('connection-state','Alterar estado da conexão',[['id','ID da conexão'],['expected_version','Versão atual','number'],['state','Estado','select']]);
+for(const value of ['TEST','ACTIVE','INACTIVE','ARCHIVED']){const option=document.createElement('option');option.value=value;option.textContent=value;stateForm.elements.state.append(option);}
+commerceForm('rotate','Rotacionar chave da conexão (invalida imediatamente a anterior)',[['id','ID da conexão'],['expected_version','Versão atual','number']]);
+const bindingForm=commerceForm('binding','Salvar revisão do vínculo comercial',[
+ ['id','ID do vínculo (vazio para novo)','text',false],['expected_version','Versão atual (0 para novo)','number'],['connection','ID da conexão'],['project','Projeto'],['page','ID da landing page (opcional)','text',false],['product','Produto (quando mapeado)','text',false],['offer','Oferta (quando mapeada)','text',false],['checkout','Checkout (quando mapeado)','text',false],['url','URL HTTPS'],['price_minor','Preço em unidades mínimas','number'],['currency','Moeda ISO'],['state','Estado','select']]);
+bindingForm.elements.expected_version.value='0';for(const value of ['ACTIVE','INACTIVE','ARCHIVED']){const option=document.createElement('option');option.value=value;option.textContent=value;bindingForm.elements.state.append(option);}
+commerceForm('history','Consultar histórico',[['id','ID do modelo, conexão ou vínculo']]);
+commerceForm('report','Consultar relatório consolidado',[
+ ['project','Projeto (vazio = todos)','text',false],['page','Landing page','text',false],['offer','Oferta','text',false],['checkout','Checkout','text',false],['provider','ID do modelo da plataforma','text',false],['from','Início ISO UTC'],['until','Fim ISO UTC'],['traffic','Classe de tráfego (opcional)','text',false],['protection','Proteção (opcional)','text',false]]);
+let commerceGeneration=0;
+commerceForms.addEventListener('input',()=>{commerceGeneration++;document.getElementById('commerce-result').textContent='Configuração alterada; execute a operação para obter resultado atual.';});
+commerceForms.addEventListener('submit',async event=>{event.preventDefault();const form=event.target,body=Object.fromEntries(new FormData(form));body.action=form.dataset.action;for(const key of ['expected_version','model_version','price_minor'])if(key in body)body[key]=Number(body[key]);for(const key of ['config','sample'])if(key in body){try{body[key]=JSON.parse(body[key]);}catch{commerceShow('JSON inválido.');return;}}if(body.action==='model')body.reviewed=form.elements.reviewed.checked;
+ const generation=++commerceGeneration;try{const result=await request('commerce',body);if(generation===commerceGeneration)commerceShow(result);}catch(error){if(generation===commerceGeneration)commerceShow(error.status===409?'Conflito: atualize versão ou confira identidade/estado da integração.':'Operação recusada ou indisponível. Verifique sessão, configuração e disponibilidade.');}});
+document.getElementById('commerce-load').addEventListener('click',async()=>{try{document.getElementById('commerce-list').textContent=JSON.stringify(await request('commerce',{action:'list'}),null,2);}catch{document.getElementById('commerce-list').textContent='Catálogo indisponível.';}});
+`;

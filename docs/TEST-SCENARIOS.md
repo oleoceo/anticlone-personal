@@ -1,5 +1,13 @@
 # Testes de aceitação — Golden Scenarios
 
+F29/F31 multiprovedor: `tests/commerce.test.ts` testa PostgreSQL e Chromium reais,
+catálogo/revisão Custom no painel MFA/CSRF, modelo reutilizado entre projetos/contas,
+múltiplas plataformas e checkouts, versões, rotação, HMAC inválido/expirado, duplicatas
+concorrentes, conflitos, estados e estornos após desativação/TEST, datas comerciais
+independentes, cancelamento sem débito, F30 por moeda e referência opcional.
+Não comprova checkout externo, chegada confirmada ou atribuição verificável;
+[contrato, matriz e limites](F29-F31-MULTIPROVIDER.md).
+
 Todos usam **ambientes, cópias simuladas e domínios autorizados** sob controle do proprietário. Sem atacar páginas alheias. Cada GS só passa com teste reproduzível e evidência (comando/log/resultado e versão).
 
 | ID | Verificação operacional |
