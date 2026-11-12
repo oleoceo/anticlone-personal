@@ -71,3 +71,10 @@
 - F18/F25 concluídas em laboratório: matriz 25 laboratório/2 incompletas/14 homologação/4 bloqueadas; pendências 1 crítica/15 altas/4 médias; agregado histórico corrigido pelas linhas Fxx.
 - Homologar LPs, CSS/dispositivos/redes, checkout/WhatsApp e alertas externos reais; sem inferir oferta/preço hostil, sem formulário D07, sem invisibilidade prometida.
 - CI main 43098539403 intocada; PR74: run43218675626 124PASS/1FAIL na sonda literal150, corrigida sem mudar Stealth; foco ampliado8PASS, nova CI final exigida. Provas/limites: docs/F25-F18-CLOSURE.md.
+
+## PR75 — P2 exclusao da amostra legada
+- Base 784dcd5; limpeza em 064 restrita a legacy_model_version; rotacao connection-wide preservada.
+- Teste PostgreSQL cobre legado expirado, v2 valida preservada, commit de migracao e rotacao invalidando tres versoes.
+- Revisao independente /root/p2_review favoravel ao delta SQL/teste, sem P0/P1/P2; achado no preparo do teste corrigido.
+- Regressao Linux e CI oficial do SHA final: resultados e links registrados no PR75; nao presumir sucesso antes dos checks.
+- Sem merge/deploy/credenciais reais/migrations de producao; restante do PR preservado.

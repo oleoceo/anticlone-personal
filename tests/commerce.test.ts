@@ -207,6 +207,12 @@ test('F29/F31 real PostgreSQL + Chromium: reusable global Custom, accounts, proj
   assert.equal((await db.query('SELECT count(*)::int n FROM commerce_events')).rows[0].n,beforeTest);
   await db.query("UPDATE commerce_version_samples SET received_at=clock_timestamp()-interval '25 hours' WHERE connection_id=$1 AND model_version=2",[connection.id]);await assert.rejects(api(committing),CommerceConflict);
   assert.equal((await send(connection.id,key,testPayload,{},{version:2,test:true})).status,200);
+  // Expiring the legacy mirror must preserve the fresh authenticated pending version.
+  await db.query("UPDATE commerce_samples SET received_at=clock_timestamp()-interval '25 hours' WHERE connection_id=$1",[connection.id]);
+  assert.deepEqual((await db.query("SELECT model_version,received_at>clock_timestamp()-interval '24 hours' AS valid FROM commerce_version_samples WHERE connection_id=$1 ORDER BY model_version",[connection.id])).rows,[{model_version:1,valid:false},{model_version:2,valid:true}]);
+  await db.query("DELETE FROM commerce_samples WHERE received_at<clock_timestamp()-interval '24 hours'");
+  assert.equal((await db.query('SELECT 1 FROM commerce_samples WHERE connection_id=$1',[connection.id])).rowCount,0);
+  assert.deepEqual((await db.query('SELECT model_version FROM commerce_version_samples WHERE connection_id=$1',[connection.id])).rows,[{model_version:2}]);
   const commits=await Promise.allSettled([api(committing),api(committing)]);assert.equal(commits.filter(r=>r.status==='fulfilled').length,1);
   const replay=await send(connection.id,key,{...sample,amount:1999},{},{version:2});assert.equal(replay.status,200);assert.equal((await replay.json()).duplicate,true);
   await db.query('UPDATE commerce_events SET canonical_digest=NULL WHERE connection_id=$1 AND event_id=$2',[connection.id,sample.event]);
@@ -267,6 +273,13 @@ test('F29/F31 real PostgreSQL + Chromium: reusable global Custom, accounts, proj
    const c=await api({action:'connection',model:m.id,model_version:1,account:'money_account'}),k=await provisionCommerceSender(db,c.id,env);assert.equal((await send(c.id,k,payload)).status,200);await api({action:'connection-state',id:c.id,expected_version:1,state:'ACTIVE'});await api({...bind,connection:c.id,currency,price_minor:minor});assert.equal((await send(c.id,k,payload)).status,200);
    const saved=(await db.query('SELECT amount_minor,currency FROM commerce_orders WHERE connection_id=$1',[c.id])).rows[0];assert.deepEqual(saved,{amount_minor:String(minor),currency});
   }
+  // Rotation still invalidates every accepted version, including a legacy sample.
+  assert.equal((await send(connection.id,key,sample,{},{version:1,test:true})).status,200);
+  assert.equal((await send(connection.id,key,testPayload,{},{version:2,test:true})).status,200);
+  assert.equal((await db.query('SELECT count(*)::int n FROM commerce_version_samples WHERE connection_id=$1',[connection.id])).rows[0].n,3);
+  await api({action:'rotate',id:connection.id,expected_version:10});
+  assert.equal((await db.query('SELECT 1 FROM commerce_version_samples WHERE connection_id=$1',[connection.id])).rowCount,0);
+  assert.equal((await send(connection.id,key,sample)).status,401);
   assert.deepEqual(errors,[]);
  }finally{if(oldKey===undefined)delete process.env.COMMERCE_ENCRYPTION_KEY;else process.env.COMMERCE_ENCRYPTION_KEY=oldKey;await browser.close();server.closeAllConnections();admin.closeAllConnections();await Promise.all([new Promise<void>(r=>server.close(()=>r())),new Promise<void>(r=>admin.close(()=>r()))]);await db.end();await parent.query(`DROP SCHEMA ${schema} CASCADE`);await parent.end();}
 });

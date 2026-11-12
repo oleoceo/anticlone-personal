@@ -56,6 +56,7 @@ BEGIN IF EXISTS(SELECT 1 FROM commerce_connections WHERE id=NEW.connection_id AN
  ON CONFLICT(connection_id,model_version) DO UPDATE SET shape=excluded.shape,received_at=excluded.received_at; RETURN NEW; END $$;
 CREATE TRIGGER commerce_legacy_sample AFTER INSERT OR UPDATE ON commerce_samples FOR EACH ROW EXECUTE FUNCTION commerce_legacy_sample_mirror();
 CREATE FUNCTION commerce_legacy_sample_delete() RETURNS trigger LANGUAGE plpgsql AS $$
-BEGIN DELETE FROM commerce_version_samples WHERE connection_id=OLD.connection_id; RETURN OLD; END $$;
+BEGIN DELETE FROM commerce_version_samples WHERE connection_id=OLD.connection_id
+ AND model_version=(SELECT legacy_model_version FROM commerce_connections WHERE id=OLD.connection_id); RETURN OLD; END $$;
 CREATE TRIGGER commerce_legacy_sample_deleted AFTER DELETE ON commerce_samples FOR EACH ROW EXECUTE FUNCTION commerce_legacy_sample_delete();
 COMMIT;
