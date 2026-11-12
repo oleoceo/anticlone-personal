@@ -4,7 +4,7 @@
 - OPERATIONAL multiprojeto, admin MFA/SSH, aliases por LP, SMTP/worker, sequência A–G e backup/rollback documentados; nenhum código funcional alterado.
 - PostgreSQL16 descartável com initdb real: 63 SQL até064, 87 tabelas e oito sentinelas/coluna064 PASS; Compose config --quiet PASS.
 - Lint/typecheck/build e validação documental PASS; sem nova auditoria/suíte extensa das 45 funções.
-- Revisão read-only /root/vps_preparation_review favorável ao delta 9ac0b8e, três P2 corrigidos, nenhum pendente; CI final no PR #76, sem merge.
+- Revisão read-only favorável à preparação; P2 do proprietário sobre chave mestra compartilhada admin/gateway/provisionamento documentado; CI final no PR #76, sem merge.
 - VPS/DNS/TLS público/LP/SMTP/caixa/checkout NOT_VERIFIED; execução depende de autorização explícita e acessos privados do proprietário.
 
 ## PR75 — correções da revisão sobre 2bf9a04

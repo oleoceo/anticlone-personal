@@ -63,8 +63,18 @@ Antes de habilitar alertas, substituir pelo conjunto SMTP completo autorizado
 de [CLONE-SMTP](CLONE-SMTP.md) e recriar gateway/admin/worker pertinentes para
 recarregar seus env-files (simples restart não recarrega ambiente).
 Credenciais administrativas ficam somente em `admin.env`; SMTP deve coincidir
-entre processos. Chave `COMMERCE_ENCRYPTION_KEY` só será provisionada para o teste
-comercial autorizado (32 bytes em hex), com backup privado separado.
+entre processos. Ao habilitar a integração comercial autorizada, disponibilizar
+privadamente a **mesma** `COMMERCE_ENCRYPTION_KEY` (32 bytes em hex) ao admin,
+ao gateway receptor e ao utilitário `commerce-provision.js`. Uma conexão criada
+pelo admin não poderá ser recebida corretamente se o gateway não possuir a mesma
+chave. Não gerar chaves diferentes por processo. Adicionar a variável nos env-files
+privados de admin/gateway e no ambiente privado do utilitário; após a inclusão,
+recriar o gateway com `dc up -d --force-recreate gateway` e recriar o container
+admin pelo procedimento da seção 6. Simples restart não recarrega os env-files.
+Executar o utilitário com essa mesma chave no ambiente, nunca em argumentos.
+Preservar a chave mestra em backup privado separado, sem exposição em logs, Git
+ou navegador. Rotação da chave mestra exige mecanismo de recriptografia ainda
+não implementado; não trocar a variável para tentar rotacioná-la.
 
 O renderer usa Node do checkout, nunca dados da requisição:
 
