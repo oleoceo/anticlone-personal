@@ -2,7 +2,8 @@
 
 Base: PR #73, `e8dd1c60bcad9303967ecd77cad1145aa2dea5a7`.
 Branch única `feat/f25-f18-closure`; sem merge, deploy, DNS, provedores ou
-migrations de produção. Código revisado/testado `863be6d`; delta posterior é documental.
+migrations de produção. Código revisado/testado `863be6d`; delta posterior de testes
+e documentação, sem alterações adicionais em apps/runtime.
 
 ## F25: snapshot comercial explícito por ponto
 
