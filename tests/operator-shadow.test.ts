@@ -58,8 +58,12 @@ async function entryProbe(page:Page){
     const emit=(event:string,detail:Record<string,unknown>={})=>console.debug(prefix+JSON.stringify({event,mono:performance.now(),wall:Date.now(),...detail}));
     const timeout=window.setTimeout.bind(window);
     window.setTimeout=((callback:TimerHandler,ms?:number,...args:unknown[])=>{
-      if(ms!==150||typeof callback!=='function')return timeout(callback,ms,...args);
-      emit('deadline-armed',{deadline:performance.now()+ms});
+      // Bootstrap schedules the remaining monotonic budget (e.g. 149.9ms),
+      // not necessarily the literal 150. Observe its real timer without
+      // changing delay, responses or the existing before/after-deadline asserts.
+      const source=document.currentScript instanceof HTMLScriptElement?document.currentScript.src:'';
+      if(!source.endsWith('/runtime.js')||typeof ms!=='number'||!Number.isFinite(ms)||ms<0||ms>150||typeof callback!=='function')return timeout(callback,ms,...args);
+      emit('deadline-armed',{deadline:performance.now()+ms,scheduledDelay:ms});
       return timeout(()=>{emit('deadline-expired');Reflect.apply(callback,window,args);},ms);
     }) as typeof window.setTimeout;
     const fetch=window.fetch.bind(window);

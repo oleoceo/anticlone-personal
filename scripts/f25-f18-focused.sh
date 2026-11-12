@@ -12,4 +12,4 @@ unset DATABASE_URL PGOPTIONS
 export TEST_DATABASE_URL="postgres://anticlone:test-only@127.0.0.1:${BASH_REMATCH[1]}/anticlone_test" HTTPS_GATE_TEST=1
 npm ci > test-results/f25-f18/npm.log 2>&1
 npm run build > test-results/f25-f18/build.log 2>&1
-node --test --test-concurrency=1 dist/tests/cta-commercial.test.js dist/tests/cta-selection-ui.test.js dist/tests/f18-gate-browser.test.js dist/tests/f18-timing.test.js dist/tests/scoped-gateway.test.js 2>&1 | tee test-results/f25-f18/focused.log
+node --test --test-concurrency=1 dist/tests/cta-commercial.test.js dist/tests/cta-selection-ui.test.js dist/tests/f18-gate-browser.test.js dist/tests/f18-timing.test.js dist/tests/scoped-gateway.test.js dist/tests/operator-shadow.test.js 2>&1 | tee test-results/f25-f18/focused.log

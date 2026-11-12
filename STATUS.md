@@ -54,4 +54,4 @@
 - Revisão independente /root/f25_f18_review favorável a 863be6d, sem P0/P1/P2 pendente; delta posterior apenas documental, revisão/CI final por SHA no PR.
 - F18/F25 concluídas em laboratório: matriz 25 laboratório/2 incompletas/14 homologação/4 bloqueadas; pendências 1 crítica/15 altas/4 médias; agregado histórico corrigido pelas linhas Fxx.
 - Homologar LPs, CSS/dispositivos/redes, checkout/WhatsApp e alertas externos reais; sem inferir oferta/preço hostil, sem formulário D07, sem invisibilidade prometida.
-- CI antiga main 43098539403 queued intocada; CI oficial própria de pull_request exigida. Provas/limites: docs/F25-F18-CLOSURE.md; artefatos test-results/f25-f18/20261112T121725Z.
+- CI main 43098539403 intocada; PR74: run43218675626 124PASS/1FAIL na sonda literal150, corrigida sem mudar Stealth; foco ampliado8PASS, nova CI final exigida. Provas/limites: docs/F25-F18-CLOSURE.md.

@@ -161,3 +161,24 @@ Nenhuma alteração funcional foi feita após essa execução.
 é opt-in; a captura comercial é explícita e revisada, com UNKNOWN preservado.
 Isso não conclui homologação externa, não garante invisibilidade nem substitui
 aprovação das LPs/destinos reais. F13/F14 e D07 permanecem como estavam.
+
+### Primeira CI oficial e correção da instrumentação
+
+Run **43218675626**, HEAD `6ebc315`: **124 PASS / 1 FAIL / 0 SKIP**.
+Todos os testes F25/F18 passaram. A falha foi `assert.ok(armed)` na sonda
+de entrada de `operator-shadow.test.ts`, que reconhecia apenas o argumento
+literal `setTimeout(...,150)`. O Bootstrap agenda o restante do mesmo deadline
+monotônico (por exemplo 149,9 ms); o log oficial leu PAGE_REDIRECT em 54,9 ms,
+mas a sonda não havia registrado esse timer. Não houve alteração Stealth.
+
+A instrumentação agora reconhece o timer síncrono do script `/runtime.js`,
+com atraso finito entre 0 e 150 ms, e registra o atraso recebido sem modificá-lo.
+As asserções de antes/depois do deadline, expiração, navegação efetiva, bytes
+e CTA independente permanecem. Reprodução independente Chromium encontrou seis
+timers de 150 ms e dois de 149,9 ms em oito cargas. O relatório da fixture Front3
+também explicita que ela não usa opt-in visual, em vez de alegar gate inexistente.
+
+Novo foco real **8 PASS / 0 FAIL / 0 SKIP**, exit 0:
+`test-results/f25-f18/20261112T124630Z/f25-f18/focused.log`, incluindo shadow
+inalterado. Revisão independente favorável à correção da sonda; nova CI oficial
+no SHA final exigida. A falha anterior é preservada, não reclassificada como PASS.
