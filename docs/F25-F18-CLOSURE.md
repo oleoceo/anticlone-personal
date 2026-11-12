@@ -2,7 +2,7 @@
 
 Base: PR #73, `e8dd1c60bcad9303967ecd77cad1145aa2dea5a7`.
 Branch única `feat/f25-f18-closure`; sem merge, deploy, DNS, provedores ou
-migrations de produção. Gates e SHA final serão registrados nesta entrega.
+migrations de produção. Código revisado/testado `863be6d`; delta posterior é documental.
 
 ## F25: snapshot comercial explícito por ponto
 
@@ -109,8 +109,8 @@ exportação e exit code, pipeline integral inclui manifestos/logs/hashes.
 O run antigo **43098539403**, evento push de main no SHA base, estava queued na
 consulta. Não foi cancelado nem alterado código para simular seu sucesso. O novo
 PR usa o grupo pull_request já existente, distinto do grupo de main; workflow
-oficial permanece íntegro. Resultados finais e revisão independente por SHA/delta
-serão registrados após execução, sem tratar queued/in_progress como PASS.
+oficial permanece íntegro. A CI oficial e o estado pronto serão conferidos no SHA
+final do PR; queued/in_progress não são PASS e a validação local não os substitui.
 
 Homologação externa continua necessária: LPs/destinos/WhatsApp reais do
 proprietário, checkout efetivo, popup/sticky/CSS específicos, redes/dispositivos
@@ -118,3 +118,46 @@ físicos e confirmação externa de alerta. UNKNOWN não é falha a resolver por
 adivinhação. Não se interceptam formulários (D07), não há venda comprovada por
 clique/handoff, nem reconhecimento seguro de oferta em página hostil sem evidência.
 F13/F14, SMTP, quatro classes e percentuais não foram reimplementados.
+
+## Evidência focada e revisão
+
+Foco do delta funcional de `863be6d2f21cc670527a2a4b8640b759238cc044`:
+**6 PASS, 0 FAIL, 0 SKIP, exit 0**, em
+`test-results/f25-f18/20261112T121604Z/f25-f18/focused.log`.
+Node 22.23.4, PostgreSQL 16 e Chromium 156.0.8078.4 reais.
+
+| Contexto (3 tentativas atuais) | Upstream até corpo (ms) | Headers no browser (ms) | JSON lido (ms) | Commit do destino (ms) |
+|---|---|---|---|---|
+| Desktop 1440 | 11,7–16,3 | 38,6–52,7 | 39,2–53,3 | 54,4–65,4; 3/3 efetivas |
+| Pixel 7 emulado | 10,7–14,9 | 38,2–41,3 | 38,8–41,8 | 50,7–53,2; 3/3 efetivas |
+
+Tempos do browser são relativos ao início do documento; commit é medido no
+processo controlador desde o início do `goto`, portanto não são fases a somar.
+Uma amostra anterior por viewport renderizou o documento em 32/24 ms antes do
+JSON em 86,1/49,7 ms. O gate atual reduz a exposição do escopo após executar,
+mas frames iniciais anteriores ao Bootstrap continuam possíveis. Não se atribui
+a diferença de latência observada a otimização do backend: há aquecimento,
+variabilidade e poucas amostras. Com 250 ms extras no transporte, o redirect
+não ocorreu e o link original funcionou. OBSERVE e CTA liberaram o gate;
+CTA navegou ao destino aprovado sem esperar nova decisão no clique.
+
+O teste de CSS mediu liberação em **148,4 ms** entre alterações observadas.
+Revisão independente `/root/f25_f18_review`, read-only, favorável ao SHA acima,
+sem P0/P1/P2 pendente. Reproduções independentes Chromium: transição CSS de
+2 s liberada em 149,9 ms; longhands/prioridades preservados em 150,6 ms com
+escalonamento. Achados corrigidos: termos ocultos na confirmação, entrada de
+referência legada sem revisão, termos perdidos na evidência de alerta,
+transição prolongada e perda de longhands. Nenhuma escrita do revisor na worktree.
+
+Regressão integral local de `863be6d`: **125 Node + 10 Python PASS**, zero
+falhas/skips, pipeline exit 0. Lint, typecheck, build, imagens Docker, Compose,
+PostgreSQL 16, Chromium, HTTPS/Nginx, backup/restore/rollback reais incluídos.
+Testes Node em 515706 ms. Artefatos completos:
+`test-results/f25-f18/20261112T121725Z/full/`; `source.sha256`, `steps.tsv`,
+`evidence.sha256`, `tests.log` e `result.txt` preservam versão, comandos e resultados.
+Nenhuma alteração funcional foi feita após essa execução.
+
+**F18 e F25 concluídas em laboratório no contrato delimitado acima.** O gate
+é opt-in; a captura comercial é explícita e revisada, com UNKNOWN preservado.
+Isso não conclui homologação externa, não garante invisibilidade nem substitui
+aprovação das LPs/destinos reais. F13/F14 e D07 permanecem como estavam.
