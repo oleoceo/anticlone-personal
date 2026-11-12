@@ -1,7 +1,9 @@
 // Deliberately not JSONPath: own object properties only, no evaluation or arrays.
 export const commercialStates=['PENDING','PAID','CANCELLED','REFUNDED','CHARGEBACK'] as const;
+// Deliberate ISO 4217 subset, SIX List One checked 2026-11-12. Unknown codes fail closed.
+export const currencyExponents:Readonly<Record<string,number>>=Object.freeze({BRL:2,USD:2,EUR:2,GBP:2,CAD:2,AUD:2,CHF:2,JPY:0,KWD:3,BHD:3,OMR:3,TND:3,JOD:3});
 export type CommercialState=typeof commercialStates[number];
-export type Mapping={auth:'HMAC_SHA256_TIMESTAMP';fields:{event:string;order:string;amount:string;currency:string;status:string;occurred:string;product?:string;offer?:string;checkout?:string;reference?:string};statuses:Record<string,CommercialState>;money:{unit:'MINOR'|'DECIMAL';exponent:number}};
+export type Mapping={auth:'HMAC_SHA256_TIMESTAMP'|'HMAC_SHA512_TIMESTAMP';fields:{event:string;order:string;amount:string;currency:string;status:string;occurred:string;product?:string;offer?:string;checkout?:string;reference?:string};statuses:Record<string,CommercialState>;money:{unit:'MINOR'|'DECIMAL';exponent:number}};
 const keys=['event','order','amount','currency','status','occurred'];
 export function object(value:unknown):Record<string,unknown>{
  if(!value||typeof value!=='object'||Array.isArray(value))throw new TypeError('object required');return value as Record<string,unknown>;
@@ -15,7 +17,7 @@ export function field(payload:unknown,p:string):unknown{
 }
 export function mapping(value:unknown):Mapping{
  const data=object(value),fields=object(data.fields),money=object(data.money),statuses=object(data.statuses);
- if(Object.keys(data).sort().join(',')!=='auth,fields,money,statuses'||data.auth!=='HMAC_SHA256_TIMESTAMP'||!keys.every(k=>Object.hasOwn(fields,k))||!['product','offer','checkout'].some(k=>Object.hasOwn(fields,k))||Object.keys(fields).some(k=>![...keys,'product','offer','checkout','reference'].includes(k))||Object.values(fields).some(v=>!path(v))||!['MINOR','DECIMAL'].includes(String(money.unit))||!Number.isInteger(money.exponent)||Number(money.exponent)<0||Number(money.exponent)>3||Object.keys(money).sort().join(',')!=='exponent,unit'||Object.keys(statuses).length<1||Object.keys(statuses).length>32||!Object.hasOwn(statuses,Object.keys(statuses).find(k=>statuses[k]==='PAID')??'')||Object.entries(statuses).some(([k,v])=>!/^[-A-Za-z0-9_]{1,40}$/.test(k)||!commercialStates.includes(v as CommercialState)))throw new TypeError('invalid mapping');
+ if(Object.keys(data).sort().join(',')!=='auth,fields,money,statuses'||!['HMAC_SHA256_TIMESTAMP','HMAC_SHA512_TIMESTAMP'].includes(String(data.auth))||!keys.every(k=>Object.hasOwn(fields,k))||!['product','offer','checkout'].some(k=>Object.hasOwn(fields,k))||Object.keys(fields).some(k=>![...keys,'product','offer','checkout','reference'].includes(k))||Object.values(fields).some(v=>!path(v))||!['MINOR','DECIMAL'].includes(String(money.unit))||!Number.isInteger(money.exponent)||Number(money.exponent)<0||Number(money.exponent)>3||Object.keys(money).sort().join(',')!=='exponent,unit'||Object.keys(statuses).length<1||Object.keys(statuses).length>32||!Object.hasOwn(statuses,Object.keys(statuses).find(k=>statuses[k]==='PAID')??'')||Object.entries(statuses).some(([k,v])=>!/^[-A-Za-z0-9_]{1,40}$/.test(k)||!commercialStates.includes(v as CommercialState)))throw new TypeError('invalid mapping');
  return JSON.parse(JSON.stringify(data)) as Mapping;
 }
 export function identifier(value:unknown):string{if(typeof value!=='string'||!/^[-A-Za-z0-9_]{1,128}$/.test(value))throw new TypeError('invalid identifier');return value;}
@@ -31,6 +33,7 @@ export function normalize(config:Mapping,payload:unknown){
  const status=get('status');if(typeof status!=='string'||!Object.hasOwn(config.statuses,status))throw new TypeError('unmapped status');
  const currency=get('currency'),occurred=get('occurred');
  if(typeof currency!=='string'||!/^[A-Z]{3}$/.test(currency)||typeof occurred!=='string'||!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(occurred)||!Number.isFinite(Date.parse(occurred))||new Date(occurred).toISOString()!==occurred)throw new TypeError('invalid commercial fields');
+ if(!Object.hasOwn(currencyExponents,currency)||currencyExponents[currency]!==config.money.exponent)throw new TypeError('unsupported currency/exponent combination');
  let reference=false;if(config.fields.reference){try{const value=get('reference');reference=typeof value==='string'&&/^[a-zA-Z0-9_-]{1,128}$/.test(value);}catch{/* Optional attribution never gates authenticated ordinary sales. */}}
  return {event:identifier(get('event')),order:identifier(get('order')),product:config.fields.product?identifier(get('product')):'',offer:config.fields.offer?identifier(get('offer')):'',checkout:config.fields.checkout?identifier(get('checkout')):'',amount:moneyMinor(get('amount'),config.money.unit,config.money.exponent),currency,status:config.statuses[status],occurred,reference_present:reference};
 }
@@ -39,4 +42,19 @@ export function sampleShape(value:unknown,depth=0):unknown{
  if(Array.isArray(value))return '[array]';
  if(value&&typeof value==='object')return Object.fromEntries(Object.values(value).slice(0,24).map((v,index)=>['field_'+(index+1),sampleShape(v,depth+1)]));
  return value===null?'[null]':`[${typeof value}]`;
+}
+
+// Only a fixed semantic vocabulary is discoverable. Arbitrary keys (including
+// names and secrets embedded in keys) and all values are suppressed.
+const sampleKeys=new Set(['event','event_id','order','order_id','sale_id','amount','amount_minor','total','currency','status','occurred','occurred_at','product','product_id','offer','offer_id','checkout','checkout_id','data','payment','transaction','metadata','reference','ref']);
+export function sampleFields(value:unknown,prefix='',depth=0):{path:string;type:string}[]{
+ if(!value||typeof value!=='object'||Array.isArray(value)||depth>=8)return [];
+ const rows:{path:string;type:string}[]=[];
+ for(const [key,v] of Object.entries(value).slice(0,32)){
+  if(!sampleKeys.has(key))continue;
+  const p=prefix?prefix+'.'+key:key;if(p.length>160)continue;
+  rows.push({path:p,type:v===null?'null':Array.isArray(v)?'array':typeof v});
+  rows.push(...sampleFields(v,p,depth+1));
+ }
+ return rows.slice(0,128);
 }

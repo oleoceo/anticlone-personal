@@ -4,6 +4,125 @@ Base: `fdcc453153e5d8c49481d8fa106ba7f6f7ce9cb1` (#74). Uma frente,
 uma branch `feat/f29-f31-multiprovider`; sem merge, deploy, conta externa ou
 migration de produção. O painel/stack D16 e o runtime são preservados.
 
+## Revisão do PR #75 após `2bf9a04`
+
+Correções solicitadas pelo proprietário permanecem na mesma branch/PR. Migration
+**064** é aditiva; 063 não foi reescrita. Não há operação em produção.
+
+**Moeda e precisão.** Um modelo de expoente 2 recusa JPY, inclusive em `MINOR`;
+não se usa arredondamento nem uma suposição de duas casas para moedas desconhecidas.
+O subconjunto explícito validado na [List One da SIX, agência ISO 4217](https://www.six-group.com/dam/download/financial-information/data-center/iso-currrency/lists/list-one.xml)
+em 2026-11-12 é: BRL/USD/EUR/GBP/CAD/AUD/CHF = 2, JPY = 0,
+KWD/BHD/OMR/TND/JOD = 3. Outras moedas são recusadas, não inferidas. Um único
+modelo com expoente fixo pode receber somente moedas compatíveis. Acrescentar outra
+moeda exige alteração de código/revisão da tabela, não um expoente arbitrário no painel.
+Montantes históricos nunca são retroconvertidos. Pedidos legados incompatíveis recebem
+`UNVERIFIED_HISTORICAL_CONTRACT`; montantes agregados da moeda ficam `null` até
+reconciliação com fonte autorizada. A contagem/evento e o valor original são preservados.
+
+**Migração da conta.** `migration-prepare` recebe conexão, revisão esperada, versão
+global superior do mesmo modelo, revisão explícita e duas amostras sintéticas do mesmo
+evento (atual/nova). Os resultados canônicos precisam coincidir. Caminhos de
+evento/pedido/produto/oferta/checkout/moeda permanecem iguais; renomear identidade
+ou alterar namespaces requer adaptador com contrato autorizado, não heurística.
+Pode mudar caminhos de valor/status/horário, unidade monetária ou algoritmo suportado.
+Uma preparação pendente por conta; não se cria outra conta nem se remove a unicidade.
+
+Preparar não ativa o formato. O remetente próprio envia teste **explicitamente
+marcado**, autenticado com a chave existente. Testes não gravam venda ou recibo
+financeiro, nem mudam um pedido real. Pedido real no formato pendente recebe 409
+retryable. `migration-commit` exige revisão atual, confirmação explícita e teste
+autenticado dessa versão nas últimas 24 horas; `migration-cancel` elimina apenas a
+preparação e a amostra candidata, preservando a auditoria. Ambos incrementam a revisão
+da conta, como preparação, rotação e mudança de estado. Edições/commits concorrentes
+são serializados e versões obsoletas recebem 409.
+
+A conexão conserva ID, conta, chave e ledger. O ponteiro do modelo avança; formatos
+aceitos anteriores continuam registrados. **Sem cabeçalho de versão, usa-se sempre a
+versão original da conexão**, não a versão mais recente. Não se tenta reconhecer o
+formato por conteúdo. Para formato explícito:
+
+- `x-checkout-model-version`: inteiro decimal positivo da versão global já preparada/aceita.
+- `x-checkout-test: 1`: somente para teste explícito; exige cabeçalho de versão.
+- HMAC cobre `timestamp + "." + version + "." + intent + "." + bytes`, onde
+  `intent` é `test` com o cabeçalho acima, e `event` sem ele.
+- Sem versão, o contrato antigo `timestamp + "." + bytes` continua intacto.
+
+Versão e intenção não podem ser adicionadas/trocadas/removidas sem invalidar a
+assinatura. Ambos os algoritmos usam timestamp em segundos, tolerância absoluta de
+300 s, corpo JSON até 2048 bytes e chave hex decodificada. SHA256 recebe assinatura
+hex minúscula de 64 caracteres; SHA512, 128. Nenhum cabeçalho/algoritmo/expressão
+arbitrária é executado. Chaves continuam apenas no servidor.
+
+Eventos/pedidos continuam únicos por conexão, independentemente do formato. Pedido
+guarda a versão em que surgiu; recibo guarda a versão processada. Recibos novos têm
+digest canônico além do digest bruto: a mesma identidade/evento comercial normalizado
+em formatos distintos é duplicata, não outra venda. Divergência canônica recebe 409.
+Recibos legados não ganham digest canônico inventado: repetição byte a byte continua
+aceita; apresentação com bytes diferentes sem prova canônica é recusada, sem inflar
+receita. Estornos antigos e eventos concorrentes antigos/novos mantêm o mesmo pedido.
+
+**Painel e amostras.** Modelos/versões, contas, projetos, LPs, vínculos, ofertas,
+checkouts e histórico existentes podem ser escolhidos em seletores; IDs não precisam
+ser transcritos. Produtos/ofertas/checkouts já cadastrados também aparecem como
+sugestões na criação de vínculo. Editor guiado monta caminhos, unidade, expoente,
+autenticação e estados; JSON avançado continua disponível. Aliases de status são
+listas explícitas separadas por vírgula e sobrevivem a alterações de outros campos.
+Criar conta, ativar ou migrar continuam ações explícitas.
+
+Inspeção de amostra sintética e amostra recebida mostram tipos e caminhos de um
+vocabulário fixo (por exemplo `data.payment.amount`, `event_id`, `currency`). Valores
+nunca aparecem; nomes de chave desconhecidos são omitidos, pois também podem conter
+segredos/dados pessoais. Campos particulares fora desse vocabulário precisam ser
+informados a partir do contrato/sintético autorizado. Não há payload bruto em banco
+ou logs. Amostras de cada formato ficam em `commerce_version_samples` por 24 h de
+consulta, com limpeza no próximo recebimento. A tabela legada é preservada para
+compatibilidade; remoção de amostra legada invalida os testes de sua conexão, podendo
+exigir reteste. Rotação invalida testes de ambas as tabelas.
+
+**PAID → CANCELLED.** Cancelamento não demonstra refund, chargeback ou retenção.
+Sem estorno posterior, `net_amount_minor` fica `null`, e o montante incerto é mostrado
+separadamente. `reported_balance_minor` é apenas pagamentos reportados menos estornos
+reportados. `financial_basis=REPORTED_EVENTS_NOT_SETTLEMENT` e `settled_revenue=null`
+impedem apresentá-lo como liquidação bancária. Um refund posterior resolve o saldo
+aritmético reportado, mas não comprova transferência bancária ou recuperação.
+F30 continua rotulada e separada, sem alteração de fórmula.
+
+**Autenticação e provedores.** Em `2bf9a04`, somente SHA256/timestamp era suportado.
+A menor extensão implementada/testada nesta revisão é SHA512/timestamp, com contrato
+fechado e a mesma proteção de replay. Isso não equivale a suporte real a empresas.
+Hotmart, Kiwify, Lowify, Cakto, Lemon Squeezy e checkout particular do proprietário
+continuam **não homologados**. Se o contrato real não coincidir exatamente com esses
+headers/bytes/identidades, exige adaptação específica autorizada. Bearer estático,
+assinatura sem timestamp, OAuth, desafios de assinatura, JWS/certificados, verificação
+por API e autenticação arbitrária não foram habilitados. Não criamos adaptadores por
+marca sem contrato/ambiente autorizado. Atribuição e chegada continuam sem suporte.
+
+**Rollback e recuperação.** O schema conserva a tabela/PK de amostras legada e
+triggers de compatibilidade para conexões, pedidos e recibos. O teste compila o
+executável exato `2bf9a04` e exercita criação de conta, teste, ativação, recebimento e
+duplicata sobre 064 **antes** de migrar o formato da conta. Após a migração, o binário
+antigo não conhece assinatura versionada/algoritmo novo; inserts financeiros sem versão
+são bloqueados, inclusive quando a transação já tentou atualizar um pedido. Não há
+rollback comercial transparente nessa situação: manter receptor compatível ou
+restaurar código + backup isolado anterior de forma coordenada com o remetente e
+reenvio dos eventos posteriores. Não apagar/down-migrar o ledger para retroceder.
+O ensaio geral de backup/restore/rollback e os probes temporais continuam separados.
+
+**Prova da revisão.** Foco ampliado `commerce`: 5/5 PASS, sem falhas/skips, PostgreSQL
+e Chromium reais. Inclui backfill064 com montante legado incompatível, executável
+`2bf9a04`, recebimento/duplicata antes da migração, bloqueio transacional depois dela,
+ambos os HMACs, dinheiro persistido para BRL/USD/JPY/KWD/BHD, transição concorrente,
+teste expirado, eventos antigos, seletor e cancelamento no painel, aliases e bloqueio
+de salvar/testar JSON antigo quando controles estão inválidos. Revisão independente
+read-only `/root/pr75_revision_review`: foco próprio 5/5 PASS, parecer favorável sem
+P0/P1/P2 pendente. SHA256 revisados: núcleo `B5607D5AC64BBF7F35481987C19A66503AABB23D581BC6D82085421CB11B78B3`,
+UI `869B7323C379F28DB4AD95566E05431B191503A27777B34C48107B2CBCD37CF6`,
+064 `CDA7D55222253A8DD639883BF8BA9B3845BFB1BC1B830514023512E9978F7123`,
+teste `C53A477894B1B82B097DD609D11AF287F9730B5D4248AFDFF52E705D237AF1B0`.
+Lint/typecheck/build passaram. Regressão integral e CI oficial do novo SHA devem ser
+conferidas no PR75; o gate anterior de 127 testes não valida estas alterações.
+
 ## Contrato implementado
 
 `063_checkout_integrations.sql` acrescenta modelos globais imutáveis por
@@ -18,8 +137,7 @@ No painel existente, após login com MFA: **Integrações globais de checkout**.
 O editor JSON configura os caminhos e estados; **Testar interpretação sem salvar**
 mostra a normalização comercial, sem gravar a amostra. Salvar exige marcar a revisão
 explícita e envia novamente uma amostra válida. O modelo novo nunca modifica uma
-conexão existente. Não existe atualização automática/in-place de conexão para outra
-versão: requer homologação de compatibilidade, especialmente dos eventos atrasados.
+conexão existente. Não há atualização automática de conexão: a migração controlada exige revisão, teste autenticado e confirmação; ver a revisão do PR75 abaixo.
 
 Criar conexão gera endpoint relativo `/commerce-webhook/<uuid>` e chave aleatória
 no servidor, criptografada com AES-256-GCM, IV aleatório e ID da conexão como AAD.
@@ -67,11 +185,11 @@ Para efetivar destino protegido, continuam obrigatórias F20/F25/D15 pelo fluxo 
 
 ## Checkout próprio de referência (sintético)
 
-Autenticação efetivamente suportada: `HMAC_SHA256_TIMESTAMP`, JSON UTF-8, POST,
+Autenticação efetivamente suportada: `HMAC_SHA256_TIMESTAMP` e `HMAC_SHA512_TIMESTAMP`, JSON UTF-8, POST,
 `Content-Type: application/json`, até 2048 bytes. Cabeçalhos:
 
 - `x-checkout-timestamp`: Unix segundos, dez dígitos, desvio máximo absoluto 300 s.
-- `x-checkout-signature`: HMAC-SHA256 em hex minúsculo sobre
+- `x-checkout-signature`: HMAC-SHA256 ou HMAC-SHA512 conforme modelo, em hex minúsculo sobre
   `timestamp + "." + bytes_exatos_do_corpo`, chave decodificada de hexadecimal.
 
 Exemplo de configuração e payload executáveis em `tests/commerce.test.ts` e
@@ -107,8 +225,7 @@ até cinco minutos no futuro; eventos antigos autenticados são permitidos.
 400 payload/mapeamento inválido; 401 autenticação; 409 conflito de identidade/versão
 ou conexão inativa para pedido novo; 413 tamanho; 429 orçamento; 503 indisponibilidade.
 Remetentes devem reenviar com os mesmos IDs após falha transitória, assinando novo
-timestamp. JSON semanticamente igual com bytes diferentes no mesmo evento gera 409:
-o remetente deve preservar bytes. Não reutilize ID de evento para outro estado.
+timestamp. Eventos novos deduplicam também pela interpretação canônica; recibos legados sem digest canônico exigem os mesmos bytes e recusam conflito com 409. Não reutilize ID de evento para outro estado.
 
 Deduplicação por `(connection_id,event_id)` e identidade de pedido por
 `(connection_id,order_id)`. Montante/moeda/identificadores do pedido são imutáveis.
@@ -127,8 +244,8 @@ externa é executada: não existe superfície de SSRF de verificação por API n
 
 ## Observação, retenção e relatórios
 
-Persistência de amostra: somente tipos e posições genéricas, sem valores **ou chaves
-originais**, uma por conexão e janela consultável de 24 h; limpeza no próximo webhook.
+Persistência de amostra: tipos, posições genéricas e caminhos do vocabulário fixo,
+sem valores ou chaves arbitrárias, uma por conexão/formato e janela consultável de 24 h; limpeza no próximo webhook.
 Não equivale a apagamento físico exato em 24 h durante ociosidade. Não há payload bruto
 persistido/logado. Configuração revisada mostra seus próprios caminhos no catálogo.
 Ledger financeiro conserva IDs comerciais, valores, timestamps e digest para
@@ -170,7 +287,7 @@ do ledger legado, pois falta identidade de conta confiável para deduplicá-lo.
 | Verificação autorizada por API | Não suportada; requer adaptador restrito e testes de SSRF antes de habilitar |
 | OAuth, assinaturas específicas, arrays e campos calculados | Não suportados; adaptador pequeno somente com contrato autorizado |
 | Estornos parciais, mudanças de moeda/valor no mesmo pedido, múltiplas capturas | Não suportados; não aproximados como refund integral |
-| Rotação da chave mestra/revisão in-place da conexão | Não suportada; chave do remetente tem rotação funcional |
+| Rotação da chave mestra | Não suportada; chave do remetente tem rotação funcional e conexão tem migração revisada entre versões |
 
 Não há parâmetro novo em URL, fetch em clique, redirecionador obrigatório ou alteração
 de F18/F20/F21/F23/F24/F25/F42. D05/D07/D08/D09/D15/D16 permanecem. Checkout exclusivo

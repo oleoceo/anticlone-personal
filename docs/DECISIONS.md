@@ -2,8 +2,7 @@
 
 F29/F31 multiprovedor (base #74): [contrato e limites](F29-F31-MULTIPROVIDER.md).
 Conforme pedido do proprietário, catálogo global, conexão de conta e vínculo por
-projeto são separados; modelos aprovados são imutáveis e conexões ficam presas à
-versão. Painel atual preservado por D16. Nenhuma atribuição comercial é inferida de
+projeto são separados; modelos aprovados são imutáveis e conexões só avançam de versão pelo fluxo revisado/testado da revisão PR75, preservando os formatos anteriores. Painel atual preservado por D16. Nenhuma atribuição comercial é inferida de
 referência recebida ou exclusividade do checkout. F29/F31 integrais mantêm suas
 lacunas enquanto não houver instrumento/cadeia verificável. HMAC legado não é
 importado/somado automaticamente: falta identidade de conta confiável para deduplicação.

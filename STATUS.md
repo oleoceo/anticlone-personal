@@ -1,4 +1,12 @@
 # STATUS — AntiClone Personal
+## PR75 — correções da revisão sobre 2bf9a04
+- Mesma branch/PR; moeda/expoente validados por allowlist ISO, sem retroconverter históricos; saldos incompatíveis ficam indisponíveis.
+- Migration064 aditiva: preparar/testar HMAC/confirmar migração da mesma conta; formatos legados preservados, versão/intenção assinadas e dedup canônica.
+- Seletores e editor guiado com aliases preservados; amostras exibem caminhos de vocabulário seguro, sem payload bruto/valores/chaves privadas.
+- SHA512/timestamp é a extensão fechada; PAID→CANCELLED sem estorno deixa líquido incerto. Sem homologação de marcas/API/atribuição/chegada.
+- Foco PG/Chromium 5/5 PASS; dinheiro BRL/USD/JPY/KWD/BHD, concorrência, atraso, backfill, binário2bf9a04 sobre064 e formulário inválido. Regressão Linux integral e CI final por SHA no PR.
+- Revisão independente /root/pr75_revision_review favorável, foco próprio5/5 PASS, sem P0/P1/P2 pendente; hashes/provas no contrato. Sem merge/deploy/credenciais reais/migrations de produção.
+
 ## F29/F31 — Custom multiprovedor — PR #75
 - Base fdcc453 (#74); branch única feat/f29-f31-multiprovider; sem merge/deploy/contas externas ou migrations de produção.
 - Catálogo global imutável, contas criptografadas, vínculos versionados, HMAC Custom, ledger/dedup/estornos e relatório F30 por moeda.
