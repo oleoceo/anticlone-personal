@@ -1,4 +1,12 @@
 # STATUS — AntiClone Personal
+## Hotfix CI pós-merge #76 — F17/F18
+- Base 1c43a9f; branch única fix/ci-entry-deadline; somente harness e evidências em docs/CI-HOTFIX-PR76.md.
+- Árvores aprovada/pós-merge idênticas; shadow tardio preservou página corretamente; causa histórica específica do optional segue inconclusiva.
+- Classificação pontual/tardia exige decisão/destino e efeito correto; negativos reais, positivo real existente e prazo150ms preservados; sem skips/timeouts maiores.
+- Foco PG/Chromium5/5 e regressão F18/redirect7/7 PASS; baseline original4/4 PASS; lint/typecheck/build, documental e Python10/10 PASS.
+- Revisão independente read-only /root/diagnosis; corrida no novo clique CTA corrigida por sincronização com refresh processado.
+- CI oficial verde no SHA final é gate obrigatório; sem merge/deploy/infra/Stealth ou políticas modificados.
+
 ## Preparação VPS real — base d306459 / PR #76
 - Roteiro: docs/VPS-REAL-PREPARATION.md; modelos privados sem segredos em docs/vps-models; F03/F07/F38 sem reclassificar a matriz.
 - OPERATIONAL multiprojeto, admin MFA/SSH, aliases por LP, SMTP/worker, sequência A–G e backup/rollback documentados; nenhum código funcional alterado.
