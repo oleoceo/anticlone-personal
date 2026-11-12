@@ -2,7 +2,7 @@
 ## F29/F31 — Custom multiprovedor — PR #75
 - Base fdcc453 (#74); branch única feat/f29-f31-multiprovider; sem merge/deploy/contas externas ou migrations de produção.
 - Catálogo global imutável, contas criptografadas, vínculos versionados, HMAC Custom, ledger/dedup/estornos e relatório F30 por moeda.
-- Foco real PostgreSQL/Chromium 10/10 PASS; Linux commerce/upgrade/restore/rollback 3/3 PASS; lint/typecheck/build PASS. CI integral oficial final por SHA no PR75.
+- Foco PG/Chromium10/10, Linux commerce/upgrade3/3 e jornada/F18/GS06 corrigido5/5 PASS; lint/typecheck/build PASS. CI inicial126/1; correção só no harness revisada; CI final por SHA no PR75.
 - Revisão independente /root/commerce_review favorável ao delta funcional, sem P0/P1/P2 pendente; hashes/provas em docs/F29-F31-MULTIPROVIDER.md e PR.
 - Chegada confirmada, atribuição verificável, API externa e estornos parciais não suportados; checkout real depende de contrato/credenciais autorizados.
 - F29/F31 integrais não declaradas concluídas; limites/matriz em docs/F29-F31-MULTIPROVIDER.md. PR75 consolidado; sem autorização de merge.

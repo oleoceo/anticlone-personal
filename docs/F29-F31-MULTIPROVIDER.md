@@ -204,3 +204,17 @@ Código entregue no [PR #75](https://github.com/oleoceo/anticlone-personal/pull/
 Resultados da regressão integral e CI oficial são registrados no PR pelo SHA final;
 gates em execução não são aprovação. O snapshot local inicial ainda tinha expectativa
 fixa 062 no teste de upgrade; a correção 063/064 passou no foco Linux final acima.
+
+CI oficial inicial `43265992161` em `847ac4f`: 126 PASS / 1 FAIL / zero skips.
+Única falha: jornada mobile aguardando PAGE_REDIRECT selecionado, sem medição
+do deadline nessa falha. A matriz confundia seleção lógica com garantia de navegar
+em 150 ms; expiração é hipótese consistente, não causa medida. O harness agora
+congela o relógio somente nessa matriz PAGE selecionada, sem interceptar HTTP nem
+alterar runtime. F18/GS06/shadow mantêm tempo real e casos de fail-open atrasado.
+As demais asserts e destinos continuam obrigatórios; não se lê body de resposta
+depois que a navegação selecionada já descartou o contexto do navegador.
+Foco Linux da correção: 5/5 PASS, zero falhas/skips em 66,7 s: jornada 1440/390,
+F18 visual, F18 transporte/paint/navegação em tempo real e GS06. Revisão independente
+favorável de `/root/commerce_review`, SHA256 do harness
+`094DE429895B10073E6C89DEC5ED3BFB72C3E181E32209E8BAB7694136C80D9C`;
+nenhuma mudança de código funcional após a revisão anterior.
