@@ -1,11 +1,11 @@
 # STATUS — AntiClone Personal
-## F29/F31 — Custom multiprovedor (em validação)
+## F29/F31 — Custom multiprovedor — PR #75
 - Base fdcc453 (#74); branch única feat/f29-f31-multiprovider; sem merge/deploy/contas externas ou migrations de produção.
 - Catálogo global imutável, contas criptografadas, vínculos versionados, HMAC Custom, ledger/dedup/estornos e relatório F30 por moeda.
-- Foco real PostgreSQL/Chromium 10/10 PASS; ampliado commerce 2/2 PASS; lint/typecheck/build PASS. Regressão integral e CI oficial ainda pendentes.
+- Foco real PostgreSQL/Chromium 10/10 PASS; Linux commerce/upgrade/restore/rollback 3/3 PASS; lint/typecheck/build PASS. CI integral oficial final por SHA no PR75.
 - Revisão independente /root/commerce_review favorável ao delta funcional, sem P0/P1/P2 pendente; hashes/provas em docs/F29-F31-MULTIPROVIDER.md e PR.
 - Chegada confirmada, atribuição verificável, API externa e estornos parciais não suportados; checkout real depende de contrato/credenciais autorizados.
-- F29/F31 integrais não declaradas concluídas; limites e matriz de entrega explícitos em docs/F29-F31-MULTIPROVIDER.md. PR consolidado em preparação.
+- F29/F31 integrais não declaradas concluídas; limites/matriz em docs/F29-F31-MULTIPROVIDER.md. PR75 consolidado; sem autorização de merge.
 
 ## Hotfix CI shadow apos #72
 - Base 3ec1796; branch fix/ci-shadow-entry-deadline; escopo exclusivo do harness, sem runtime/politica/migration/infra alterados.

@@ -197,5 +197,10 @@ mapping `0A4CE2FD1CB5E75F60EFE56612C2DF5A013850BBFCD317930346E0571CB7D42D`,
 migration `9E287D1628F97E3D3F96684274EDD3693EE6300AD054565D813C8BC0FE3C0CBA`.
 Achados corrigidos e reensaiados: datas por categoria, estornos em TEST, chaves de
 amostra, referência ausente, provisão POSIX e cancelamento sem débito financeiro.
-Regressão Linux, revisão independente final e CI oficial: registrar resultado real
-no PR e STATUS; gates em execução não são aprovação.
+Revisão final documental e dos testes também favorável na sessão independente
+`/root/commerce_review`, sem achados pendentes. Prova do CLI Linux é do implementador;
+o revisor executou novamente o foco Windows 2/2 PASS e verificou recusa de provisão.
+Código entregue no [PR #75](https://github.com/oleoceo/anticlone-personal/pull/75).
+Resultados da regressão integral e CI oficial são registrados no PR pelo SHA final;
+gates em execução não são aprovação. O snapshot local inicial ainda tinha expectativa
+fixa 062 no teste de upgrade; a correção 063/064 passou no foco Linux final acima.
