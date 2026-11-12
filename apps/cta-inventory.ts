@@ -3,8 +3,9 @@ import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import { approvedDestination, configurationOrigin } from './page-redirect.js';
 import { tryIntent } from './notification-intents.js';
+import { commercialTerms, type CommercialTerms } from './commercial-snapshot.js';
 
-type Candidate = {marker: string | null; kind: string; parent: string; ordinal: number; url: string | null; context: string | null; amount: number | null; currency: string | null};
+type Candidate = {marker: string | null; kind: string; parent: string; ordinal: number; url: string | null; context: string | null; amount: number | null; currency: string | null; terms: CommercialTerms | null};
 const offerPattern = /^[a-zA-Z0-9_-]{1,64}$/;
 const markerPattern = /^[a-zA-Z0-9_-]{8,64}$/;
 function object(value: unknown): Record<string, unknown> {
@@ -29,15 +30,17 @@ function candidates(body: unknown): {surface: string; rows: Candidate[]} {
     const row = object(item);
     if (!['kind,marker,ordinal,parent,url','context,kind,marker,ordinal,parent,url','commercial,context,kind,marker,ordinal,parent,url','commercial,kind,marker,ordinal,parent,url'].includes(Object.keys(row).sort().join(','))) throw Error('invalid fields');
     let amount: number | null = null, currency: string | null = null;
+    let terms: CommercialTerms | null = null;
     if (row.commercial && typeof row.commercial === 'object' && !Array.isArray(row.commercial)) {
       const commercial = row.commercial as Record<string,unknown>;
-      if (Object.keys(commercial).sort().join(',') === 'amount,currency' && Number.isSafeInteger(commercial.amount) && (commercial.amount as number) >= 0 && typeof commercial.currency === 'string' && /^[A-Z]{3}$/.test(commercial.currency)) {
+      if (['amount,currency','amount,currency,terms'].includes(Object.keys(commercial).sort().join(',')) && Number.isSafeInteger(commercial.amount) && (commercial.amount as number) >= 0 && typeof commercial.currency === 'string' && /^[A-Z]{3}$/.test(commercial.currency)) {
         amount = commercial.amount as number; currency = commercial.currency;
+        terms = commercialTerms(commercial.terms);
       }
     }
     if (row.context !== undefined && (typeof row.context !== 'string' || row.context.length>160 || /[\u0000-\u001f\u007f]/.test(row.context))) throw Error('invalid context');
     if (!['a','form','button'].includes(row.kind as string) || typeof row.parent !== 'string' || !/^[a-z]{1,20}$/.test(row.parent) || !Number.isInteger(row.ordinal) || (row.ordinal as number) < 1 || (row.ordinal as number) > 100 || !(row.marker === null || typeof row.marker === 'string' && markerPattern.test(row.marker))) throw Error('invalid candidate');
-    return {marker: row.marker as string | null,kind:row.kind as string,parent:row.parent,ordinal:row.ordinal as number,url:observationUrl(row.url),context:typeof row.context === 'string' ? row.context : null,amount,currency};
+    return {marker: row.marker as string | null,kind:row.kind as string,parent:row.parent,ordinal:row.ordinal as number,url:observationUrl(row.url),context:typeof row.context === 'string' ? row.context : null,amount,currency,terms};
   });
   return {surface:data.surface, rows};
 }
@@ -95,11 +98,19 @@ export async function importInventory(db: Pool, project: string, body: unknown) 
           INSERT INTO cta_drift_alerts(project_id,point_id,reason) SELECT project_id,id,'DESTINATION_CHANGED' FROM changed CROSS JOIN prior WHERE NOT prior.review_required RETURNING id`,[project,id,row.url]);
         for (const alert of alerts.rows) await tryIntent(client, () => client.query('INSERT INTO cta_alert_deliveries(alert_id) VALUES($1) ON CONFLICT DO NOTHING',[alert.id]));
       }
-      await client.query('INSERT INTO cta_observations(project_id,point_id,evidence,confidence,observed_url,capture_id,selection_allowed,visual_context,commercial_amount,commercial_currency) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',[project,id,`structural:${row.kind}:${row.parent}:ordinal:${row.ordinal}`,unique ? 'HIGH' : 'LOW',row.url,capture,row.marker === null || unique,row.context,row.amount,row.currency]);
+      const inserted = await client.query('INSERT INTO cta_observations(project_id,point_id,evidence,confidence,observed_url,capture_id,selection_allowed,visual_context,commercial_amount,commercial_currency) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id',[project,id,`structural:${row.kind}:${row.parent}:ordinal:${row.ordinal}`,unique ? 'HIGH' : 'LOW',row.url,capture,row.marker === null || unique,row.context,row.amount,row.currency]);
+      if (row.terms) await client.query('UPDATE cta_observations SET commercial_terms=$2 WHERE id=$1',[inserted.rows[0].id,JSON.stringify(row.terms)]);
     }
     const alerts = await client.query(`WITH assessed AS (
       SELECT r.project_id,r.point_id,r.suspension,r.amount,r.currency,o.id AS observation_id,o.commercial_amount,o.commercial_currency, CASE WHEN o.id IS NULL OR o.commercial_amount IS NULL THEN 'UNCERTAIN'
-        WHEN o.commercial_amount <> r.amount OR o.commercial_currency <> r.currency THEN 'CHANGED' ELSE NULL END AS reason
+        WHEN o.commercial_amount <> r.amount OR o.commercial_currency <> r.currency THEN 'CHANGED'
+        WHEN to_jsonb(r)->'commercial_terms' IS NOT NULL AND to_jsonb(r)->'commercial_terms' <> 'null'::jsonb THEN
+          CASE WHEN to_jsonb(o)->'commercial_terms' IS NULL OR to_jsonb(o)->'commercial_terms' = 'null'::jsonb THEN 'UNCERTAIN'
+          WHEN EXISTS (SELECT 1 FROM jsonb_each(to_jsonb(r)->'commercial_terms') approved JOIN jsonb_each(to_jsonb(o)->'commercial_terms') observed USING(key) WHERE approved.value <> 'null'::jsonb AND observed.value <> 'null'::jsonb AND approved.value <> observed.value) THEN 'CHANGED'
+          WHEN EXISTS (SELECT 1 FROM jsonb_each(to_jsonb(r)->'commercial_terms') approved JOIN jsonb_each(to_jsonb(o)->'commercial_terms') observed USING(key) WHERE approved.value <> 'null'::jsonb AND observed.value = 'null'::jsonb) THEN 'UNCERTAIN'
+          WHEN to_jsonb(r)->'commercial_terms' IS DISTINCT FROM to_jsonb(o)->'commercial_terms' THEN 'CHANGED' ELSE NULL END
+        WHEN to_jsonb(o)->'commercial_terms' IS NOT NULL AND to_jsonb(o)->'commercial_terms' <> 'null'::jsonb THEN 'CHANGED'
+        ELSE NULL END AS reason
       FROM cta_commercial_references r JOIN cta_points p ON p.project_id=r.project_id AND p.id=r.point_id
       LEFT JOIN cta_observations o ON o.project_id=r.project_id AND o.point_id=r.point_id AND o.capture_id=$3 AND o.confidence='HIGH' AND o.selection_allowed
       WHERE r.project_id=$1 AND p.surface=$2
@@ -111,7 +122,14 @@ export async function importInventory(db: Pool, project: string, body: unknown) 
       SELECT project_id,point_id,CASE reason WHEN 'CHANGED' THEN 'COMMERCIAL_CHANGED' ELSE 'COMMERCIAL_UNCERTAIN' END FROM changed WHERE previous IS NULL OR (previous='UNCERTAIN' AND reason='CHANGED') RETURNING id,point_id)
       INSERT INTO cta_commercial_alert_evidence(alert_id,capture_id,observation_id,approved_amount,approved_currency,observed_amount,observed_currency)
       SELECT alerts.id,$3,assessed.observation_id,assessed.amount,assessed.currency,assessed.commercial_amount,assessed.commercial_currency FROM alerts JOIN assessed ON assessed.point_id=alerts.point_id RETURNING alert_id AS id`,[project,surface,capture]);
-    for (const alert of alerts.rows) await tryIntent(client, () => client.query('INSERT INTO cta_alert_deliveries(alert_id) VALUES($1) ON CONFLICT DO NOTHING',[alert.id]));
+    for (const alert of alerts.rows) {
+      const terms = await client.query(`SELECT to_jsonb(r)->'commercial_terms' AS approved,to_jsonb(o)->'commercial_terms' AS observed
+        FROM cta_commercial_alert_evidence e JOIN cta_drift_alerts a ON a.id=e.alert_id
+        JOIN cta_commercial_references r ON r.project_id=a.project_id AND r.point_id=a.point_id
+        LEFT JOIN cta_observations o ON o.id=e.observation_id WHERE e.alert_id=$1`,[alert.id]);
+      if (terms.rows[0]?.approved || terms.rows[0]?.observed) await client.query('UPDATE cta_commercial_alert_evidence SET approved_terms=$2,observed_terms=$3 WHERE alert_id=$1',[alert.id,terms.rows[0].approved ? JSON.stringify(terms.rows[0].approved) : null,terms.rows[0].observed ? JSON.stringify(terms.rows[0].observed) : null]);
+      await tryIntent(client, () => client.query('INSERT INTO cta_alert_deliveries(alert_id) VALUES($1) ON CONFLICT DO NOTHING',[alert.id]));
+    }
     await client.query('COMMIT');
   } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
 }
@@ -155,7 +173,11 @@ export async function selectObservation(db: Pool, body: unknown) {
 export class SelectionConflict extends Error {}
 // Approval confirms exact current evidence and mapping under the same project lock as import.
 export async function approveCommercial(db: Pool, body: unknown) {
-  const row = fields(body,'amount,captureId,currency,destinationId,observationId,pointId,project,surface,version');
+  const input = object(body);
+  const hasTerms = Object.hasOwn(input,'terms');
+  const row = fields(body,hasTerms ? 'amount,captureId,currency,destinationId,observationId,pointId,project,surface,terms,version' : 'amount,captureId,currency,destinationId,observationId,pointId,project,surface,version');
+  const terms = commercialTerms(row.terms);
+  if (hasTerms && !terms) throw new TypeError('invalid commercial terms');
   const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
   if (typeof row.project !== 'string' || !offerPattern.test(row.project) || typeof row.surface !== 'string' || !offerPattern.test(row.surface) || typeof row.pointId !== 'string' || !uuid.test(row.pointId) || typeof row.captureId !== 'string' || !uuid.test(row.captureId) || typeof row.destinationId !== 'string' || !uuid.test(row.destinationId) || typeof row.observationId !== 'string' || !/^[1-9][0-9]{0,18}$/.test(row.observationId) || BigInt(row.observationId)>9223372036854775807n || !Number.isSafeInteger(row.amount) || (row.amount as number)<0 || typeof row.currency !== 'string' || !/^[A-Z]{3}$/.test(row.currency) || !Number.isSafeInteger(row.version) || (row.version as number)<0) throw new TypeError('invalid commercial approval');
   const client=await db.connect();
@@ -165,7 +187,7 @@ export async function approveCommercial(db: Pool, body: unknown) {
     const project=await client.query('SELECT origin FROM projects WHERE id=$1 FOR UPDATE',[row.project]);
     if (!project.rowCount) throw new TypeError('invalid project');
     configurationOrigin(project.rows[0].origin);
-    const evidence=await client.query(`SELECT m.offer FROM cta_captures c
+    const evidence=await client.query(`SELECT m.offer,to_jsonb(o)->'commercial_terms' AS terms FROM cta_captures c
       JOIN cta_observations o ON o.project_id=c.project_id AND o.capture_id=c.id
       JOIN cta_points p ON p.project_id=o.project_id AND p.id=o.point_id AND p.surface=c.surface
       JOIN cta_mappings m ON m.project_id=p.project_id AND m.point_id=p.id AND m.offer=p.offer
@@ -173,13 +195,18 @@ export async function approveCommercial(db: Pool, body: unknown) {
       AND p.kind='a' AND p.marker IS NOT NULL AND o.confidence='HIGH' AND o.selection_allowed
       AND o.observed_at>=clock_timestamp()-interval '7 days' AND m.destination_id=$6
       AND o.commercial_amount=$7 AND o.commercial_currency=$8`,[row.project,row.surface,row.captureId,row.observationId,row.pointId,row.destinationId,row.amount,row.currency]);
-    if (!evidence.rowCount) throw new SelectionConflict();
-    const current=await client.query('SELECT version,suspension FROM cta_commercial_references WHERE project_id=$1 AND point_id=$2',[row.project,row.pointId]);
+    if (!evidence.rowCount || JSON.stringify(commercialTerms(evidence.rows[0].terms)) !== JSON.stringify(terms)) throw new SelectionConflict();
+    const current=await client.query(`SELECT version,suspension,to_jsonb(cta_commercial_references)->'commercial_terms' AS terms FROM cta_commercial_references WHERE project_id=$1 AND point_id=$2`,[row.project,row.pointId]);
     if ((current.rowCount ? current.rows[0].version : 0)!==row.version || (current.rowCount && !current.rows[0].suspension)) throw new SelectionConflict();
     const offer=evidence.rows[0].offer;
+    if ((terms?.offer !== null && terms?.offer !== undefined && terms.offer !== offer) || (current.rows[0]?.terms && !terms)) throw new SelectionConflict();
     await client.query(`INSERT INTO cta_commercial_references(project_id,point_id,offer,destination_id,amount,currency,observation_id,capture_id)
       VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(project_id,point_id) DO UPDATE SET amount=EXCLUDED.amount,currency=EXCLUDED.currency,observation_id=EXCLUDED.observation_id,capture_id=EXCLUDED.capture_id,version=cta_commercial_references.version+1,suspension=NULL`,[row.project,row.pointId,offer,row.destinationId,row.amount,row.currency,row.observationId,row.captureId]);
     await client.query('INSERT INTO cta_commercial_audit(project_id,point_id,offer,destination_id,capture_id,observation_id,amount,currency) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[row.project,row.pointId,offer,row.destinationId,row.captureId,row.observationId,row.amount,row.currency]);
+    if (terms) {
+      await client.query('UPDATE cta_commercial_references SET commercial_terms=$3 WHERE project_id=$1 AND point_id=$2',[row.project,row.pointId,JSON.stringify(terms)]);
+      await client.query('UPDATE cta_commercial_audit SET commercial_terms=$3 WHERE project_id=$1 AND point_id=$2 AND id=(SELECT max(id) FROM cta_commercial_audit WHERE project_id=$1 AND point_id=$2)',[row.project,row.pointId,JSON.stringify(terms)]);
+    }
     await client.query('COMMIT');
   } catch(error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
 }

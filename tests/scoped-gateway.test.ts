@@ -1,5 +1,5 @@
 import {distributionAdmin, type Distribution} from '../apps/runtime-distribution.js';
-import {importInventory,reviewPoint} from '../apps/cta-inventory.js';
+import {importInventory,reviewPoint,approveCommercial} from '../apps/cta-inventory.js';
 import {SMTPServer} from 'smtp-server';
 import {deliverOne} from '../apps/alerts.js';
 import {configureEstimate,observedMetrics} from '../apps/observed-metrics.js';
@@ -61,6 +61,7 @@ for (const distributionMode of [false,true]) test('scoped browser observations i
     await db.query((await readFile('infra/017_notification_settings.sql','utf8')).replace(/^\uFEFF/,''));
     for(const file of ['030_infrastructure_dns','031_investigation_timeline']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
     await db.query(await readFile('infra/015_cta_alert_deliveries.sql','utf8'));
+    await db.query(await readFile('infra/062_commercial_terms.sql','utf8'));
     await db.query('CREATE TABLE admin_totp_replay(factor_id text PRIMARY KEY,last_counter bigint NOT NULL)');
     await db.query('CREATE TABLE admin_totp_codes(factor_id text NOT NULL,digest text NOT NULL,valid_until bigint NOT NULL,PRIMARY KEY(factor_id,digest))');
     await db.query("INSERT INTO projects VALUES ('health','Health',$1),('finance','Finance',$1)",[origin]);
@@ -197,6 +198,24 @@ for (const distributionMode of [false,true]) test('scoped browser observations i
 
 
     const decide=(id:string,source:string) => fetch(`${telemetryBase(id)}entry-decision`,{method:'POST',headers:{origin:source,'content-type':'text/plain'},body:JSON.stringify({pathname:'/outro-slug',session:'a'.repeat(32),signals:{}})});
+    // Terms-only drift through real scoped approval and browser decisions (D15).
+    const terms={offer:'offer',previousAmount:null,discountBps:null,installments:{count:2,amount:3350}};
+    const withTerms=(count:number)=>candidates.map(row=>row.marker==='shared01'?{...row,commercial:{amount:6700,currency:'BRL',terms:{...terms,installments:{count,amount:3350}}}}:row);
+    const commercialApproval=async(version:number,count:number)=>{
+      const row=(await db.query("SELECT o.id,o.capture_id,o.point_id,m.destination_id FROM cta_observations o JOIN cta_captures c ON c.id=o.capture_id JOIN cta_points p ON p.id=o.point_id JOIN cta_mappings m ON m.point_id=p.id WHERE c.is_current AND p.project_id='health' AND p.marker='shared01'")).rows[0];
+      await approveCommercial(db,{project:'health',surface:'main',pointId:row.point_id,captureId:row.capture_id,observationId:row.id,destinationId:row.destination_id,amount:6700,currency:'BRL',version,terms:{...terms,installments:{count,amount:3350}}});
+    };
+    const reapprovePage=async()=>{const g=(await db.query('SELECT url_generation,config_generation FROM protected_pages WHERE id=$1',[hp])).rows[0];await managePages(db,{action:'approve',project:'health',page:hp,generation:g.url_generation,configGeneration:g.config_generation,entryVersion:null,ctaVersions:[1]});};
+    await importInventory(db,'health',{surface:'main',candidates:withTerms(2)});await commercialApproval(0,2);await reapprovePage();
+    const generationBeforeTerms=(await db.query('SELECT config_generation FROM protected_pages WHERE id=$1',[hp])).rows[0].config_generation;
+    await importInventory(db,'health',{surface:'main',candidates:withTerms(4)});
+    assert.equal((await db.query('SELECT config_generation FROM protected_pages WHERE id=$1',[hp])).rows[0].config_generation,generationBeforeTerms);
+    const termsDecision=page.waitForResponse(r=>r.url().endsWith('/entry-decision'));await page.goto(`http://localhost:${address.port}/outro-slug`);await termsDecision;await page.waitForFunction(()=>document.documentElement.dataset.ctaReady==='yes');
+    const termsTargets=await page.evaluate(()=>Array.from(document.querySelectorAll<HTMLAnchorElement>('a')).map(link=>{let target='';window.addEventListener('click',event=>{target=link.href;event.preventDefault();},{once:true});link.click();return target;}));
+    assert.deepEqual(termsTargets,[`http://localhost:${address.port}/checkout`,origin+'/official-second',origin+'/wa-approved']);
+    await commercialApproval(1,4);
+    assert.equal((await(await decide(health,`http://localhost:${address.port}`)).json() as {action:string}).action,'OBSERVE_ONLY','new approved reference requires page reapproval');
+    await reapprovePage();
     const decision=await decide(health,`http://localhost:${address.port}`);
     const selected=await decision.json() as {action:string;pathname:string;mappings:{marker:string;destination:string}[]};
     assert.equal(selected.action,'REPLACE_CONVERSION'); assert.equal(selected.pathname,'/outro-slug');

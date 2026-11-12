@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { Pool } from 'pg';
+import { chromium } from 'playwright';
 import { approveCommercial, approveDestination, importInventory, mapPoint, reviewPoint } from '../apps/cta-inventory.js';
 import { ctaDecision, publishCtaPolicy } from '../apps/cta-policy.js';
 
@@ -70,5 +71,65 @@ test('commercial drift is isolated, deduplicated and approved against current ev
     const malformed=rows(10000).map((row,i)=>i===0?{...row,commercial:{amount:8900,currency:null}}:row);
     await importInventory(db,project,{surface:'landing',candidates:malformed});
     assert.equal((await db.query("SELECT suspension FROM cta_commercial_references r JOIN cta_points p ON p.project_id=r.project_id AND p.id=r.point_id WHERE p.marker='basic001'")).rows[0].suspension,'UNCERTAIN');
+
+    // Structured snapshot from real Chromium; prose never supplies an offer or terms.
+    await db.query(await readFile('infra/062_commercial_terms.sql','utf8'));
+    const browser=await chromium.launch();
+    try {
+      const page=await browser.newPage();
+      await page.route(clone+'/**',route=>route.fulfill({contentType:'text/html',body:'<section data-anticlone-surface="landing"><a data-anticlone-point="basic001" data-anticlone-price-minor="10000" data-anticlone-currency="BRL" data-anticlone-offer="a" data-anticlone-previous-minor="12000" data-anticlone-discount-bps="1667" data-anticlone-installments="2" data-anticlone-installment-minor="5000" href="/a">Premium 12x R$1 cheapest discount</a><a data-anticlone-point="premium1" data-anticlone-price-minor="9700" data-anticlone-currency="BRL" href="/b">Same text</a><a href="/uncertain">Offer a R$100 2x50</a></section>'}));
+      await page.goto(clone+'/clone');
+      await page.addScriptTag({content:await readFile('runtime/cta-inventory.js','utf8')});
+      const take=async()=>{
+        const candidates=await page.evaluate(()=>(window as unknown as {anticloneLabInventory:(s:string)=>unknown[]}).anticloneLabInventory('landing'));
+        await importInventory(db,project,{surface:'landing',candidates});
+      };
+      await take();
+      const terms={offer:'a',previousAmount:12000,discountBps:1667,installments:{count:2,amount:5000}};
+      const versionNow=async()=>Number((await db.query("SELECT version FROM cta_commercial_references r JOIN cta_points p ON p.id=r.point_id WHERE p.marker='basic001'")).rows[0].version);
+      const approve=async(t:object)=>approveCommercial(db,{...await approval('basic001',await versionNow()),terms:t});
+      await assert.rejects(approveCommercial(db,await approval('basic001',await versionNow())),'must acknowledge all structured evidence');
+      await assert.rejects(approve({...terms,offer:'b'}));
+      await approve(terms);
+      const latest=await approval('basic001',await versionNow());
+      await reviewPoint(db,project,{pointId:latest.pointId,destinationId:latest.destinationId,observationId:latest.observationId});
+      assert.equal((await decision()).mappings?.length,2);
+      await take(); assert.equal((await decision()).mappings?.length,2);
+      // Same total, different installment conditions: only this CTA suspends.
+      await page.locator('[data-anticlone-point=basic001]').evaluate(node=>node.setAttribute('data-anticlone-installments','4'));
+      await take(); await take();
+      assert.deepEqual((await decision()).mappings?.map(x=>x.marker),['premium1']);
+      assert.equal((await db.query('SELECT suspension FROM cta_commercial_references WHERE point_id=$1',[latest.pointId])).rows[0].suspension,'CHANGED');
+      const evidence=(await db.query('SELECT approved_terms,observed_terms FROM cta_commercial_alert_evidence ORDER BY alert_id DESC LIMIT 1')).rows[0];
+      assert.deepEqual(evidence.approved_terms,terms);
+      assert.equal(evidence.observed_terms.installments.count,4);
+      const changed={...terms,installments:{count:4,amount:5000}};
+      await approve(changed);assert.equal((await decision()).mappings?.length,2);
+      await page.locator('[data-anticlone-point=basic001]').evaluate(node=>node.removeAttribute('data-anticlone-discount-bps'));
+      await take();
+      assert.equal((await db.query('SELECT suspension FROM cta_commercial_references WHERE point_id=$1',[latest.pointId])).rows[0].suspension,'UNCERTAIN');
+      assert.deepEqual((await decision()).mappings?.map(x=>x.marker),['premium1']);
+      await approve({...changed,discountBps:null});
+      const audit=(await db.query('SELECT commercial_terms FROM cta_commercial_audit ORDER BY id DESC LIMIT 1')).rows[0];
+      assert.equal(audit.commercial_terms.discountBps,null,'UNKNOWN survives administrative approval');
+      await page.locator('[data-anticlone-point=basic001]').evaluate(node=>{node.setAttribute('data-anticlone-offer','b');node.setAttribute('data-anticlone-discount-bps','1667');});
+      await take(); await assert.rejects(approve({...changed,offer:'b'}),'offer cannot cross its approved checkout');
+      // Legacy price-only reference must suspend before activating newly observed terms.
+      await page.locator('[data-anticlone-point=premium1]').evaluate(node=>node.setAttribute('data-anticlone-offer','a'));
+      await take();
+      const legacyAlert=(await db.query('SELECT approved_terms,observed_terms FROM cta_commercial_alert_evidence ORDER BY alert_id DESC LIMIT 1')).rows[0];
+      assert.equal(legacyAlert.approved_terms,null);assert.equal(legacyAlert.observed_terms.offer,'a');
+      const premium=await approval('premium1',1);
+      assert.equal((await db.query('SELECT suspension FROM cta_commercial_references WHERE point_id=$1',[premium.pointId])).rows[0].suspension,'CHANGED');
+      const unknownTerms={offer:'a',previousAmount:null,discountBps:null,installments:null};
+      await assert.rejects(approveCommercial(db,{...premium,terms:unknownTerms}));
+      await page.locator('[data-anticlone-point=premium1]').evaluate(node=>node.setAttribute('data-anticlone-offer','b'));
+      await take();
+      await approveCommercial(db,{...await approval('premium1',1),terms:{...unknownTerms,offer:'b'}});
+      assert.deepEqual((await decision()).mappings?.map(x=>x.marker),['premium1']);
+      await page.locator('[data-anticlone-point=basic001]').evaluate(node=>node.remove());
+      await take();assert.deepEqual((await decision()).mappings?.map(x=>x.marker),['premium1']);
+      assert.equal((await db.query("SELECT count(*)::int AS n FROM cta_mappings m JOIN cta_points p ON p.id=m.point_id WHERE p.marker IS NULL")).rows[0].n,0);
+    } finally { await browser.close(); }
   } finally { await db.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end(); }
 });
