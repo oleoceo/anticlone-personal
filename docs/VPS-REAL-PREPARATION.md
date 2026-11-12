@@ -325,5 +325,11 @@ Preparação local: initdb real PostgreSQL 16 descartável, montagem idêntica d
 sentinelas e coluna 064 conferidas. Container sem rede/portas, dados em tmpfs,
 removido após o ensaio. Compose OPERATIONAL `config --quiet`, lint, typecheck,
 build e validação documental passaram. Não houve mudança de código funcional nem
-reexecução extensa das 45 funções. Revisão e CI deste delta: consultar STATUS e PR.
+reexecução extensa das 45 funções. Revisão independente read-only
+`/root/vps_preparation_review` favorável ao delta `9ac0b8e`, com três P2 documentais
+corrigidos e nenhum P0/P1/P2 pendente. Fingerprint dos seis arquivos revisados:
+`ffbe9632de001282538b257fc81248a23383bbfcb49d2292dcb9c1eac2998e7b`
+(paths ordenados + NUL + conteúdo UTF-8 normalizado LF + NUL). Atualização posterior
+somente de evidências e comentário do modelo (recriar containers). CI final no
+[PR #76](https://github.com/oleoceo/anticlone-personal/pull/76).
 DNS/TLS públicos, VPS, SMTP/caixa postal, LP e checkout reais continuam NOT_VERIFIED.
