@@ -91,8 +91,11 @@ PostgreSQL/Chromium/HTTPS/Docker/Compose/restore/rollback reais. Revisão indepe
 `/root/f25_f18_review` favorável, sem P0/P1/P2 pendente; CI oficial final no PR.
 Provas e limites em [F25-F18-CLOSURE.md](F25-F18-CLOSURE.md).
 
-**24** concluídas em laboratório / **4** incompletas pré-VPS / **13** com homologação
+**25** concluídas em laboratório / **2** incompletas pré-VPS / **14** com homologação
 externa pendente / **4** bloqueadas = **45**. Pendências globais: **1 crítica /
-15 altas / 5 médias** (21 funções pendentes). F18/F25 encerram suas lacunas
+15 altas / 4 médias** (20 funções pendentes). F18/F25 encerram suas lacunas
 laboratoriais; páginas/checkout/dispositivos reais continuam em homologação.
-F29/F31/F37/F40 e D05/D07/F13/F14/F22/F32 não são reclassificadas nesta entrega.
+O agregado histórico 22/6/13/4 já estava defasado na base: suas linhas Fxx eram
+23/4/14/4 (F37 em homologação, F40 concluída). Esta correção de contagem não é
+crédito de implementação. Somente F18/F25 mudam de estado; incompletas restantes
+F29/F31. F37/F40 e D05/D07/F13/F14/F22/F32 não são reclassificadas nesta entrega.
