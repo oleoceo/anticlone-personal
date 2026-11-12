@@ -49,6 +49,21 @@ Inteligência e investigação continuam com Stealth ON/OFF; o interruptor contr
 
 A redação inicial aprovada para início era: “Stealth com risco alto ou explicitamente incerto prevalece sobre mitigação visível; sinais não provam identidade.” Foi superada para novas versões explícitas pela decisão do proprietário em 2026-11-09. Versões publicadas legadas conservam esse comportamento; nenhuma fonte histórica SaaS foi modificada.
 
+## Preparação operacional após PR #75 — 2026-11-12
+
+Para a VPS vazia, seguir [VPS-REAL-PREPARATION.md](VPS-REAL-PREPARATION.md),
+OPERATIONAL multiprojeto e distribuição por LP já implementados. As instruções
+históricas de projeto único/SQL até 024/ausência de SMTP no runbook PILOT_OBSERVE
+não descrevem esta base. O Compose atual inicializa todos os 63 SQLs até 064 em
+volume novo, sem ser migrador de volume existente. Não adaptar `upgradeLaboratory`
+para produção. Nenhuma autorização externa ou mudança de contrato funcional é criada.
+
+Acesso administrativo autorizado: processo em loopback e túnel SSH local privado,
+conforme runbook HTTPS atual; a proibição histórica de qualquer túnel em
+ADMIN-AUTH-LAB não é aplicável a esse acesso. Host/porta loopback, MFA e CSRF são
+preservados; nunca expor admin no Nginx ou na internet. Sem DNS, deploy, segredos,
+migrations de produção, e-mails ou mitigação real nesta preparação.
+
 ## Correção operacional do PR #64
 
 Opt-in comercial persistido por projeto/LP, contexto HTTPS explícito, revisão concorrente e vínculo à aprovação/gerações (052). Configurar OPERATIONAL não ativa LP. Origem declarada não comprova cópia: servidor exclui origens oficiais cadastradas e Bootstrap confere contexto real. Suspensão impede novas admissões após commit, preservando D09 para snapshots entregues. D05–D15 preservados.
