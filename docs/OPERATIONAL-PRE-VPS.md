@@ -1,5 +1,9 @@
 # Perfil OPERATIONAL — preparação sem deploy
 
+Roteiro consolidado para a VPS vazia após #75: [VPS-REAL-PREPARATION.md](VPS-REAL-PREPARATION.md).
+Inclui esquema até 064, admin privado, modelos, backup e sequência de homologação;
+execução externa continua dependente de autorização explícita.
+
 Estado: IMPLEMENTADO PARCIALMENTE, homologação externa pendente. Complementa HTTPS-OBSERVE-RUNBOOK.md; suas instruções históricas PILOT_OBSERVE continuam próprias do piloto. Não instalar VPS, mudar DNS, criar segredos ou executar migrations de produção nesta etapa.
 
 O Compose base permanece em PILOT_OBSERVE. O opt-in explícito usa os mesmos serviços e imagem:
