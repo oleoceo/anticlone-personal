@@ -102,8 +102,8 @@ sem skips. Resultado oficial final por SHA: PR78; nao tratar simulado como VPS r
 
 A revisão do proprietário em07120c0 encontrou herança acidental de limites HTTPS
 diretos na fixture NPM e uma recomendação opcional no runbook. Substituir essa
-recomendação por fragmento HTTP (map/zonas exclusivos) e admissão obrigatória na
-localização AntiClone:2req/s,burst20nodelay,10ativas/IP,429,dry-run off. Chave vazia
+recomendação por fragmento HTTP (map/zonas exclusivos) e admissão obrigatória no
+server AntiClone:2req/s,burst20nodelay,10ativas/IP,429,dry-run off. Chave vazia
 para outros hosts; nenhum limit_req/limit_conn no HTTP global ou server_proxy.conf.
 Sem hook/módulos ou validação segura no NPM instalado: BLOCKED NPM_TRAFFIC_GATE,
 sem publicação. Node/CF não substituem a proteção pré-upstream;150ms e demais
@@ -111,3 +111,9 @@ contratos não mudam. Teste Nginx independente com upstream sem boundary Node co
 chegadas e prova taxa/concorrência/outro host/nginx-t negativo. Foco6/6 PASS,0skips;
 nova revisão /root/npm_p1_review favorável ao delta (hashes no runbook). Resultado
 integral oficial do SHA final no PR78; nenhuma operação externa/merge autorizada.
+
+Suplemento P1: o revisor confirmou que admissao apenas no regex nao cobriria o
+fallback NPM gerado. Limites/status/dry-run ficam no server AntiClone; a candidata
+nao pode sobrescreve-los em localizacoes. Envelope representa fallback proxy/TLS
+e a prova conta TCP/HTTP por chamada429, independentemente de resposta/TLS admitidos.
+Guards publicos/admin e/login404 preservam smoke, sem alterar autenticacao privada.

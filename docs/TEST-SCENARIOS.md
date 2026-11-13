@@ -94,3 +94,8 @@ Prova taxa2r/s/burst20, dez requisições ativas/11a429 antes do upstream, tráf
 normal, outro host preservado e falha nginx-t sem zonasHTTP. Publicação depende do
 gate operacional NPM_TRAFFIC_GATE documentado na seção4 do runbook; Node/CF não o
 substituem. A variante direta permanece testada separadamente em https-gateway.
+
+A admissao do P1 e no server AntiClone e tambem cobre o fallback gerado NPM; o
+envelope faz proxy/TLS nesse caminho. Para cada429 desconhecido, contadores TCP
+e HTTP upstream nao avancam; respostas admitidas nao atestam identidade no backend
+bare. Nao sobrescrever limites/dry-run herdados em localizacoes geradas.

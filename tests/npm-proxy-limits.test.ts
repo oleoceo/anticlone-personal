@@ -14,10 +14,11 @@ import {npmProxyFixture} from './npm-proxy-fixture.js';
 test('NPM independent config: mandatory pre-upstream rate/concurrency, unrelated host unaffected',{timeout:45000,skip:process.env.HTTPS_GATE_TEST!=='1'?'requires Linux Docker; mandatory in CI':false},async()=>{
   const dir=await mkdtemp(join(tmpdir(),'npm-limits-')),name='anticlone-npm-limits-'+crypto.randomUUID();
   const tls=await syntheticTls(dir);
-  let received=0,hold=false;
+  let received=0,connections=0,hold=false;
   const held=new Set<ServerResponse>();
   // No Node admission/rate boundary here: rejected traffic must be stopped by Nginx.
   const backend=npmServer(tls,(_req,res)=>{received++;if(hold){held.add(res);res.on('close',()=>held.delete(res));}else res.writeHead(200).end('synthetic');});
+  backend.on('connection',()=>connections++);
   backend.listen(0,'127.0.0.1');await once(backend,'listening');const upstream=backend.address();assert.ok(upstream&&typeof upstream!=='string');
   const reserve=createServer().listen(0,'127.0.0.1');await once(reserve,'listening');const front=reserve.address();assert.ok(front&&typeof front!=='string');await new Promise<void>(r=>reserve.close(()=>r()));
   const docker=(args:string[])=>execFileSync('docker',args,{encoding:'utf8',stdio:['ignore','pipe','pipe']});
@@ -41,7 +42,8 @@ test('NPM independent config: mandatory pre-upstream rate/concurrency, unrelated
     await writeFile(join(dir,'nginx.conf'),config);
     await chmod(dir,0o755);for(const file of await readdir(dir))await chmod(join(dir,file),0o444);
     docker(['run','-d','--name',name,'--network','host','--read-only','--tmpfs','/tmp','--tmpfs','/var/cache/nginx','-v',dir+':/run/tls:ro','-v',dir+'/nginx.conf:/etc/nginx/nginx.conf:ro','nginx:1.28-alpine']);
-    const ready=async()=>{for(let i=0;i<50;i++){try{if(await send()===200)return;}catch{/* starting */}await new Promise(r=>setTimeout(r,30));}throw Error('NPM fixture not ready');};
+    // Readiness is a local404; traffic assertions do not depend on upstream TLS session state.
+    const ready=async()=>{for(let i=0;i<50;i++){try{if(await send('gateway.test','/admin')===404)return;}catch{/* starting */}await new Promise(r=>setTimeout(r,30));}throw Error('NPM fixture not ready');};
     await ready();for(let i=0;i<3;i++)assert.equal(await send(),200,'normal traffic');
     const beforeRate=received,statuses:number[]=[];
     for(let i=0;i<40;i++)statuses.push(await send());
@@ -51,6 +53,14 @@ test('NPM independent config: mandatory pre-upstream rate/concurrency, unrelated
     const beforeOther=received;
     for(let i=0;i<40;i++)assert.equal(await send('other.test'),200,'other Proxy Host unchanged even while AntiClone is saturated');
     assert.equal(received-beforeOther,40);
+    docker(['restart',name]);await ready();
+    const fallback:number[]=[];
+    for(let i=0;i<40;i++){
+      const beforeTcp=connections,beforeHttp=received,status=await send('gateway.test','/unlisted');fallback.push(status);
+      if(status===429){assert.equal(connections,beforeTcp,'fallback429 starts no upstream TCP/TLS');assert.equal(received,beforeHttp,'fallback429 sends no upstream HTTP');}
+      else {assert.ok([200,502].includes(status));assert.ok(connections>beforeTcp||received>beforeHttp,'admitted fallback attempted upstream');}
+    }
+    assert.ok(fallback.includes(429));assert.ok(fallback.some(status=>status!==429));
     docker(['restart',name]);await ready();
     hold=true;const beforeConnections=received;
     const active=Array.from({length:10},()=>send('gateway.test','/core.js'));

@@ -170,7 +170,10 @@ for(const npm of [false,true]) test(`${npm?'NPM mTLS':'HTTPS'} Nginx + PostgreSQ
     await page.goto('https://owner.test/');
     for(const response of await aliasLayers)assert.equal(response.status(),response.url().endsWith('.gif')?200:204,response.url());
     await new Promise(resolve=>setTimeout(resolve,3000));
-    assert.equal((await api.get(distributed.distribution.bases.TELEMETRY+'runtime.js')).status(),404);
+    const wrongRole=await api.get(distributed.distribution.bases.TELEMETRY+'runtime.js');
+    // NPM's generated fallback reaches the strict gateway boundary with unsanitized
+    // authority/forwarding, while the direct proxy rejects the route locally.
+    assert.equal(wrongRole.status(),npm?400:404);assert.equal(await wrongRole.text(),'');
     if(npm){
       await resetProxyFixture();
       // Authorize only this synthetic copy after proving the default observation state.

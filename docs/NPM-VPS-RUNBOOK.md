@@ -172,8 +172,8 @@ ou reiniciar esse container. Se não existir caminho seguro, bloquear a instala�
 | Fragmento | Contexto exato e inclusão | Efeito |
 |---|---|---|
 | `http-limits.conf` | Uma única inclusão no bloco `http`, pelo hook `/data/nginx/custom/http_top.conf` se confirmado na versão instalada | Map do hostname e duas zonas exclusivas de1MiB; nenhuma admissão global |
-| `proxy-host.conf` | Aba Advanced **somente** do Proxy Host AntiClone, contexto `server` | Host/proto exatos, corpo2KiB e timeouts |
-| `proxy-location.conf` | Na mesma aba Advanced desse único host, contexto `server` (o arquivo declara a localização de rotas públicas) | Taxa/concorrência efetivas antes de `proxy_pass`, mTLS e headers sanitizados |
+| `proxy-host.conf` | Aba Advanced **somente** do Proxy Host AntiClone, contexto `server` | Admissão pré-upstream em todo o host (inclusive fallback), Host/proto, corpo2KiB, timeouts e guards404 |
+| `proxy-location.conf` | Na mesma aba Advanced desse único host, contexto `server` (o arquivo declara a localização pública) | Herda a admissão do host; mTLS e headers sanitizados nas rotas públicas |
 
 O hook HTTP é compartilhado: preservar seu conteúdo existente e acrescentar
 **somente uma inclusão** do arquivo exclusivo, após revisão do diff. Exemplo para
@@ -203,7 +203,7 @@ nenhuma taxa/concorrência é alterada em outros hosts.
 
 ### Proteção mínima pré-upstream
 
-As rotas públicas do fragmento exigem **2 req/s por IP confiável**, com burst20
+Todo o Proxy Host AntiClone, inclusive o fallback gerado pelo NPM, exige **2 req/s por IP confiável**, com burst20
 `nodelay`, e até **10 requisições simultâneas por IP**. Ambos rejeitam excesso com429,
 com `limit_req_dry_run off` e `limit_conn_dry_run off` explícitos para evitar herança
 de modo apenas observacional. `nodelay` evita criar espera artificial na decisão;
@@ -234,7 +234,7 @@ rejeitada no backend. Os controles Node permanecem inalterados neste ajuste.
    fragmento ou montar a candidata no NPM em execução para esse ensaio.
 3. Revisar o diff da configuração completa: apenas declarações map/zonas no HTTP e
    o novo host devem mudar. Confirmar os nomes/valores exatos no `-T`, dry-run off,
-   nenhuma colisão e nenhuma diretiva de admissão nova em outros hosts. Ausência de
+   nenhuma colisão e nenhuma diretiva de admissão nova em outros hosts. Nenhuma localização gerada pode sobrescrever os limites/dry-run herdados do server AntiClone. Ausência de
    zonas, hook não suportado, erro/supressão da UI ou alteração alheia bloqueia o gate.
 4. Contra o clone isolado, comprovar tráfego normal200, excesso de taxa429, dez
    requisições mantidas no backend e a décima primeira429 **sem chegada upstream**,
@@ -250,9 +250,12 @@ rejeitada no backend. Os controles Node permanecem inalterados neste ajuste.
 
 Selecionar somente o domínio neutro, HTTPS upstream `anticlone-personal-public:3000`,
 certificado público válido e Force SSL. Sem domínio administrativo, WebSocket ou
-cache automático. O NPM gerencia a localização `/`; ela não recebe certificado de
-cliente, e caminhos fora da allowlist falham fechados (normalmente502). Não colocar
-credencial mTLS em escopo global/server. Gateway público não implementa admin.
+cache automático. O NPM gerencia a localização `/`; ela herda os limites do host e
+não recebe certificado de cliente explícito. `/admin` e `/login` têm guards404 no
+fragmento do host. Outros caminhos podem tentar proxy/TLS antes da rejeição ou da
+resposta do backend: o código HTTP não é prova de identidade e depende também do
+estado TLS. Não colocar credencial mTLS em escopo global/server. Gateway público
+não implementa administração.
 
 A fixture representativa usa um envelope Nginx independente, sem importar qualquer
 arquivo de `infra/https`, e os mesmos três fragmentos NPM. Isso comprova os controles
@@ -416,18 +419,27 @@ permanecem complementares. Nenhum arquivo do perfil HTTPS direto foi alterado.
 limitador Node: tráfego normal200; excesso429 sem chegada ao upstream; dez chamadas
 ativas admitidas, décima primeira429; liberação posterior; quarenta chamadas do
 outro host aceitas durante saturação; zonas HTTP ausentes impedem `nginx -t`.
+A admissão fica no server AntiClone e cobre o fallback real do NPM: proxy/TLS sem
+certificado explícito. O teste conta TCP e HTTP a cada chamada desconhecida:
+429 não pode iniciar conexão/TLS nem enviar HTTP upstream; chamadas admitidas
+(200 ou502 no backend bare) devem produzir evidência de tentativa upstream. Esse
+backend de contagem não verifica pins/rotas e não comprova autenticação; o teste
+não depende do estado ou reuso da sessão TLS. Os guards /admin e/login preservam404.
+No E2E, rota inválida/papel incorreto é bloqueada com400 vazio pela boundary NPM
+e404 vazio no proxy direto; a fixture anterior mascarava o primeiro caminho com
+return404 genérico. Não houve alteração no gateway, autenticação ou runtime.
 O teste lê os mesmos fragmentos previstos para implantação e identifica nos logs
 as zonas NPM que rejeitaram taxa/concorrência. O envelope não declara limites e não
 importa `infra/https`. A UI/versão instalada continua sujeita ao gate da seção4.
 
 Foco atualizado: `node --test --test-concurrency=1 dist/tests/npm-proxy-limits.test.js
  dist/tests/npm-boundary.test.js dist/tests/npm-topology.test.js dist/tests/https-gateway.test.js`:
-**6/6 PASS,0 skips** (71,3s), incluindo regressão direta, NPM/mTLS, PAGE_REDIRECT100/151ms,
+**6/6 PASS,0 skips** (72,3s), incluindo regressão direta, NPM/mTLS, PAGE_REDIRECT100/151ms,
 SSH privado e monitor. Lint/typecheck/build, documentos e Python10/10 PASS.
 Logs locais: `test-results/npm-p1-focus.log`; CI integral do SHA final no PR78.
 
 Nova revisão independente read-only `/root/npm_p1_review`: favorável ao delta,
 sem P0/P1/P2 pendente; typecheck/diff-check próprios PASS. SHA256 dos arquivos:
-HTTP610E382D, host16006571, localização29A1AB0A, envelopeE73D5FA6, helperC6486F8D,
-testeC89854D5, integração514D2EB9. Não declarar publicação ou homologação externa
+HTTP610E382D, host4D7657A0, localizaçãoDBF5A988, envelopeB869A316, helper97B53B8E,
+testeE611115A, integraçãoF229C1C9. Não declarar publicação ou homologação externa
 com base nessas provas. Sem VPS/Cloudflare/NPM existentes, deploy ou merge.
