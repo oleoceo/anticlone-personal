@@ -1,4 +1,13 @@
 # STATUS — AntiClone Personal
+## PR #78 — P1: limites NPM obrigatórios
+- Base revisada 07120c0; mesma branch/PR, somente fragmentos NPM, fixtures/testes e documentação; apps/runtime/SQL/HTTPS direto intactos.
+- Zonas HTTP exclusivas com chave vazia fora do hostname; admissão só no host AntiClone: 2 req/s, burst20 nodelay, 10 ativas/IP,429 e dry-run off.
+- Fixture NPM independente; teste comprova normal/excesso, nenhuma chegada rejeitada ao upstream, décima primeira ativa429 e outro host preservado.
+- Foco6/6 PASS,0 skips; regressão direta e NPM/SSH/monitor PASS; lint/typecheck/build, documental e Python10/10 PASS.
+- Gate NPM_TRAFFIC_GATE exige hook HTTP, diff completo, nginx -t/-T e prova no clone antes de publicar; sem suporte seguro, BLOCKED.
+- Nova revisão /root/npm_p1_review favorável, sem P0/P1/P2; hashes/evidências em DECISIONS e runbook; CI final por SHA no PR #78.
+- Node/Cloudflare complementares, sem substituir admissão pré-upstream. Sem VPS/CF/NPM reais, merge ou mudança de mitigação/150ms/autenticação.
+
 ## NPM/VPS — F33, administração privada e monitor — PR #78
 - Base 4e7d5a8; Compose independente, gateway mTLS na proxy, PG privado, admin loopback/socket SCRAM e worker fora da proxy.
 - Foco corrigido 5/5 PASS: perfis direto/NPM, CF simulado/DNS only, PAGE_REDIRECT 100/151 ms, SSH/MFA/CSRF/replay/cookie/logout e monitor.

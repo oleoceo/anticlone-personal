@@ -87,3 +87,10 @@ pontual/tardio sem mudar150ms. Ambos perfis exercitam scripts, canarios, body/ra
 indisponibilidade e navegacao nativa. Suíte integral preserva contratos comerciais.
 NPM UI, Cloudflare/VPS, SMTP e LPs reais exigem homologacao externa autorizada;
 provas simuladas nao certificam esses ambientes. Runbook: NPM-VPS-RUNBOOK.md.
+
+P1 do PR78: `npm-proxy-limits` usa envelope NPM independente e os três fragmentos
+reais, sem configurações HTTPS diretas nem limitador Node no upstream de contagem.
+Prova taxa2r/s/burst20, dez requisições ativas/11a429 antes do upstream, tráfego
+normal, outro host preservado e falha nginx-t sem zonasHTTP. Publicação depende do
+gate operacional NPM_TRAFFIC_GATE documentado na seção4 do runbook; Node/CF não o
+substituem. A variante direta permanece testada separadamente em https-gateway.

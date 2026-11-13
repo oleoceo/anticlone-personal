@@ -149,42 +149,117 @@ Confirmar login real, logout e rejeição de Origin/Host/proxy headers adulterad
 `ss -lnt` deve mostrar3001 somente127.0.0.1; container em bridge não deve alcançar
 essa porta pelo gateway do host. Não criar Proxy Host para administração.
 
-## 4. Proxy Host público no NPM (mudança futura autorizada)
+## 4. Proxy Host público no NPM — gate obrigatório antes da publicação
 
-Selecionar somente o host neutro, HTTPS upstream `anticlone-personal-public:3000`,
-certificado público válido no NPM e Force SSL. Não adicionar domínio administrativo,
-WebSocket ou cache automático. A aba Advanced deste **único** Proxy Host deve conter:
+Esta seção substitui a recomendação anterior de limites opcionais. Não publicar
+até completar o gate abaixo. A configuração exige `http_map`, `http_limit_req` e
+`http_limit_conn` (inclusive dry-run off), além dos módulos TLS/real-IP existentes.
+Se a versão instalada ou o mecanismo de configuração não permitir aplicar tudo
+com segurança, registrar **BLOCKED — NPM_TRAFFIC_GATE** e manter o Proxy Host
+AntiClone desabilitado. Não retirar limites, elevar taxas, confiar só no Node/CF
+ou modificar controles de outros hosts para contornar o bloqueio.
+
+### Contextos e arquivos obrigatórios
+
+Renderizar uma cópia privada de **todos os três** arquivos `infra/npm/*.conf`,
+substituindo todas as ocorrências de `PUBLIC_GATEWAY_HOST` pelo hostname neutro
+verificado. Não usar host obtido de requisição. Os caminhos de inclusão abaixo
+são um modelo interno ao container; conferir os mounts existentes antes de escolher
+onde guardar os arquivos. Não presumir que `/run/anticlone` já esteja montado.
+Preferir diretório exclusivo no mount persistente já existente do NPM, sem recriar
+ou reiniciar esse container. Se não existir caminho seguro, bloquear a instalação.
+
+| Fragmento | Contexto exato e inclusão | Efeito |
+|---|---|---|
+| `http-limits.conf` | Uma única inclusão no bloco `http`, pelo hook `/data/nginx/custom/http_top.conf` se confirmado na versão instalada | Map do hostname e duas zonas exclusivas de1MiB; nenhuma admissão global |
+| `proxy-host.conf` | Aba Advanced **somente** do Proxy Host AntiClone, contexto `server` | Host/proto exatos, corpo2KiB e timeouts |
+| `proxy-location.conf` | Na mesma aba Advanced desse único host, contexto `server` (o arquivo declara a localização de rotas públicas) | Taxa/concorrência efetivas antes de `proxy_pass`, mTLS e headers sanitizados |
+
+O hook HTTP é compartilhado: preservar seu conteúdo existente e acrescentar
+**somente uma inclusão** do arquivo exclusivo, após revisão do diff. Exemplo para
+arquivos guardados no mount `/data` já verificado:
 
 ```nginx
-if ($host != "HOST_NEUTRO") { return 421; }
-if ($http_host != "HOST_NEUTRO") { return 421; }
-if ($scheme != https) { return 400; }
-client_max_body_size 2k;
-client_body_timeout 5s;
-client_header_timeout 5s;
-keepalive_timeout 10s;
-send_timeout 5s;
-# Incluir aqui o conteúdo renderizado de infra/npm/proxy-location.conf.
+# Acrescentar em /data/nginx/custom/http_top.conf, sem substituir conteúdo alheio:
+include /data/nginx/custom/anticlone-personal/http-limits.conf;
 ```
 
-Substituir **todas** as ocorrências `PUBLIC_GATEWAY_HOST` na cópia privada do fragmento
-pelo host verificado, inclusive Host e SNI. O fragmento contém somente as rotas
-públicas existentes e mTLS com validação do servidor. A localização `/` gerada pelo
-NPM não recebe certificado de cliente: caminhos fora da allowlist falham fechados
-(normalmente502); gateway público não implementa admin. Não colocar o certificado
-de cliente em escopo global/server: mantê-lo apenas na localização do fragmento.
-NPM deve suportar os módulos/diretivas usados; confirmar `nginx -t` e configuração
-efetiva antes de habilitar esse host, sem editar globalmente outros hosts.
-O ensaio usa Nginx real com o mesmo fragmento; a UI/versão NPM instalada ainda
-precisa de homologação externa. Se o NPM não aceitar a configuração, parar essa
-instalação, não retirar mTLS nem publicar HTTP interno sem autenticação.
+Na aba Advanced do Proxy Host AntiClone, usar os dois includes renderizados:
 
-Limites globais1200/min e120/min por IP validado no gateway são por processo e
-limitam o mapa a1200 entradas/min. Reutilizar os limites de conexão/taxa do perfil
-direto **somente neste host**, se suportados pela instalação: zonas Nginx exigem
-contexto http e nomes exclusivos. Não editar um arquivo global NPM que afete todos
-os hosts sem autorização específica. Gateway mantém limites de corpo, headers,
-timeouts e admissões existentes; TLS não substitui defesa volumétrica upstream.
+```nginx
+include /data/nginx/custom/anticlone-personal/proxy-host.conf;
+include /data/nginx/custom/anticlone-personal/proxy-location.conf;
+```
+
+Conferir o caminho privado dos certificados no fragmento de localização e os mounts
+inventariados; o modelo usa `/run/anticlone/`. Não usar `server_proxy.conf`: esse hook
+aplica-se a **todos** os Proxy Hosts. Não colocar `limit_req`/`limit_conn` em contexto
+HTTP compartilhado nem sobrescrever arquivos globais existentes. `http-limits.conf`
+declara somente map/zonas com nomes `anticlone_personal_requests` e
+`anticlone_personal_connections`; verificar ausência de colisões/redeclarações.
+O map produz chave vazia para qualquer outro hostname, e esses hosts não recebem
+as diretivas de admissão. Há somente2MiB adicionais de memória compartilhada;
+nenhuma taxa/concorrência é alterada em outros hosts.
+
+### Proteção mínima pré-upstream
+
+As rotas públicas do fragmento exigem **2 req/s por IP confiável**, com burst20
+`nodelay`, e até **10 requisições simultâneas por IP**. Ambos rejeitam excesso com429,
+com `limit_req_dry_run off` e `limit_conn_dry_run off` explícitos para evitar herança
+de modo apenas observacional. `nodelay` evita criar espera artificial na decisão;
+429 mantém o contrato fail-open do runtime, sem ampliar150ms. `limit_conn` conta
+requisições ativas após ler headers completos; em HTTP/2 cada stream ativo conta
+separadamente. Não é limite de todos os sockets/handshakes incompletos nem garantia
+contra DoS distribuído. Timeouts de headers/corpo e a proteção de borda continuam
+necessários. O IP normalizado pelo NPM segue a cadeia de confiança da seção5;
+na ausência de IP de visitante confiável, o orçamento pode agregar no IP do edge.
+
+Os limites Node de120/min por cliente e1200/min globais, timeouts/admissões do
+backend e controles Cloudflare são **camadas complementares**. Não comprovam
+proteção pré-upstream: a prova deve mostrar429 do Nginx e ausência da requisição
+rejeitada no backend. Os controles Node permanecem inalterados neste ajuste.
+
+### Validação segura e recibo de liberação (somente após autorização futura)
+
+1. Manter o Proxy Host AntiClone **não publicado/desabilitado**. Inventariar imagem
+   e versão reais, hooks, mounts, real-IP, zonas e configuração efetiva existente.
+   Guardar cópia privada dos arquivos e do `nginx -T`; esse dump pode conter dados
+   sensíveis e não deve ir ao PR/chat/log público. Não salvar configuração pela UI
+   se essa ação disparar reload antes de concluir o ensaio da candidata.
+2. Em laboratório isolado, usar o mesmo digest do NPM e uma cópia privada da árvore
+   completa de configuração/mounts. Adicionar à candidata somente os três arquivos,
+   o include HTTP e os includes do novo host. Resolver aliases exclusivamente para
+   fixtures controladas nesse laboratório. Rodar `nginx -t -c <nginx.conf-candidato>`
+   e `nginx -T -c <nginx.conf-candidato>` dentro dessa cópia. Não validar só um
+   fragmento ou montar a candidata no NPM em execução para esse ensaio.
+3. Revisar o diff da configuração completa: apenas declarações map/zonas no HTTP e
+   o novo host devem mudar. Confirmar os nomes/valores exatos no `-T`, dry-run off,
+   nenhuma colisão e nenhuma diretiva de admissão nova em outros hosts. Ausência de
+   zonas, hook não suportado, erro/supressão da UI ou alteração alheia bloqueia o gate.
+4. Contra o clone isolado, comprovar tráfego normal200, excesso de taxa429, dez
+   requisições mantidas no backend e a décima primeira429 **sem chegada upstream**,
+   liberação posterior e outro host preservado. Não executar flood contra os outros
+   projetos da VPS. Só sintaxe válida não comprova aplicação efetiva dos limites.
+5. Guardar recibo: SHA/imagem NPM, hostname, hashes dos três arquivos renderizados,
+   diff aprovado, saída de `nginx -t`, testes acima e responsável/autorização. Antes
+   da publicação futura, confirmar novamente no container autorizado a configuração
+   em disco com `docker exec <NPM_ID_VERIFICADO> nginx -t` e `nginx -T`, sem executar
+   reload/restart. Divergência em relação à candidata aprovada bloqueia a liberação.
+   A aplicação/publicação posterior pelo fluxo suportado do NPM exige autorização
+   operacional própria e preservação dos outros hosts; este PR não a executa.
+
+Selecionar somente o domínio neutro, HTTPS upstream `anticlone-personal-public:3000`,
+certificado público válido e Force SSL. Sem domínio administrativo, WebSocket ou
+cache automático. O NPM gerencia a localização `/`; ela não recebe certificado de
+cliente, e caminhos fora da allowlist falham fechados (normalmente502). Não colocar
+credencial mTLS em escopo global/server. Gateway público não implementa admin.
+
+A fixture representativa usa um envelope Nginx independente, sem importar qualquer
+arquivo de `infra/https`, e os mesmos três fragmentos NPM. Isso comprova os controles
+preparados, mas **não homologa a UI/versão instalada**: o gate operacional acima é
+obrigatório. Fonte do hook: [NPM custom configurations](https://nginxproxymanager.com/advanced-config/#custom-nginx-configurations);
+semântica: [limit_req](https://nginx.org/en/docs/http/ngx_http_limit_req_module.html) e
+[limit_conn](https://nginx.org/en/docs/http/ngx_http_limit_conn_module.html).
 
 ## 5. Cadeia Cloudflare → NPM → gateway
 
@@ -305,7 +380,7 @@ Fontes primárias consultadas para a preparação: [NPM advanced config](https:/
 [Cloudflare headers](https://developers.cloudflare.com/fundamentals/reference/http-headers/),
 [Full strict](https://developers.cloudflare.com/ssl/origin-configuration/ssl-modes/full-strict/).
 
-## 9. Evidências da preparação no repositório
+## 9. Evidências históricas da preparação até 07120c0
 
 - Base obrigatória4e7d5a8; código c9d4ddf e correção de harness b1c57b2.
 - Integral local PostgreSQL16/Node22/Chromium:132 PASS/1 FAIL, sem skips; única falha
@@ -329,3 +404,30 @@ Fontes primárias consultadas para a preparação: [NPM advanced config](https:/
   fragmento758B4AE4, topologiaB989AB2C, HTTPS29D44E7E, wrapper87BC5FD1.
   O revisor executou mTLS1/1 PASS e reproduziu o limite Nginx; demais provas acima
   foram executadas pelo implementador. Revisão documental final identificada no PR.
+
+## 10. P1 da revisão — equivalência dos controles NPM
+
+O estado anterior testava NPM sobre um envelope HTTPS direto que já declarava
+limites, enquanto o runbook os considerava opcionais. Essa equivalência não era
+válida. A seção4 e os três fragmentos NPM passam a ser obrigatórios; Node/Cloudflare
+permanecem complementares. Nenhum arquivo do perfil HTTPS direto foi alterado.
+
+`npm-proxy-limits` passou com Nginx real, envelope independente e upstream TLS sem
+limitador Node: tráfego normal200; excesso429 sem chegada ao upstream; dez chamadas
+ativas admitidas, décima primeira429; liberação posterior; quarenta chamadas do
+outro host aceitas durante saturação; zonas HTTP ausentes impedem `nginx -t`.
+O teste lê os mesmos fragmentos previstos para implantação e identifica nos logs
+as zonas NPM que rejeitaram taxa/concorrência. O envelope não declara limites e não
+importa `infra/https`. A UI/versão instalada continua sujeita ao gate da seção4.
+
+Foco atualizado: `node --test --test-concurrency=1 dist/tests/npm-proxy-limits.test.js
+ dist/tests/npm-boundary.test.js dist/tests/npm-topology.test.js dist/tests/https-gateway.test.js`:
+**6/6 PASS,0 skips** (71,3s), incluindo regressão direta, NPM/mTLS, PAGE_REDIRECT100/151ms,
+SSH privado e monitor. Lint/typecheck/build, documentos e Python10/10 PASS.
+Logs locais: `test-results/npm-p1-focus.log`; CI integral do SHA final no PR78.
+
+Nova revisão independente read-only `/root/npm_p1_review`: favorável ao delta,
+sem P0/P1/P2 pendente; typecheck/diff-check próprios PASS. SHA256 dos arquivos:
+HTTP610E382D, host16006571, localização29A1AB0A, envelopeE73D5FA6, helperC6486F8D,
+testeC89854D5, integração514D2EB9. Não declarar publicação ou homologação externa
+com base nessas provas. Sem VPS/Cloudflare/NPM existentes, deploy ou merge.

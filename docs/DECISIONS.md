@@ -97,3 +97,17 @@ contraPG16 e emitiam SETtransaction_timeout incompativel. Reproducao local confi
 wrapper CI-only87BC5FD1 usa clientes16 reais em Docker sem alterar recovery/SQL.
 Revisao do wrapper favoravel, bash-n/diff-checkPASS; foco NPM5/5 e restores2/2PASS,
 sem skips. Resultado oficial final por SHA: PR78; nao tratar simulado como VPS real.
+
+## PR78 P1 — equivalência obrigatória de tráfego NPM
+
+A revisão do proprietário em07120c0 encontrou herança acidental de limites HTTPS
+diretos na fixture NPM e uma recomendação opcional no runbook. Substituir essa
+recomendação por fragmento HTTP (map/zonas exclusivos) e admissão obrigatória na
+localização AntiClone:2req/s,burst20nodelay,10ativas/IP,429,dry-run off. Chave vazia
+para outros hosts; nenhum limit_req/limit_conn no HTTP global ou server_proxy.conf.
+Sem hook/módulos ou validação segura no NPM instalado: BLOCKED NPM_TRAFFIC_GATE,
+sem publicação. Node/CF não substituem a proteção pré-upstream;150ms e demais
+contratos não mudam. Teste Nginx independente com upstream sem boundary Node conta
+chegadas e prova taxa/concorrência/outro host/nginx-t negativo. Foco6/6 PASS,0skips;
+nova revisão /root/npm_p1_review favorável ao delta (hashes no runbook). Resultado
+integral oficial do SHA final no PR78; nenhuma operação externa/merge autorizada.

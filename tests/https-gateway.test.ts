@@ -15,6 +15,7 @@ import { gatewayBoundary } from '../apps/gateway-boundary.js';
 import {publishPagePolicy} from '../apps/protection-admin.js';
 import {managePages} from '../apps/protected-pages.js';
 import {operationalAdmin} from '../apps/operational-authorization.js';
+import {npmProxyFixture} from './npm-proxy-fixture.js';
 
 function rawGet(url: string, headers: Record<string,string> = {}): Promise<{status:number; retry?:string}> {
   return new Promise((resolve,reject) => {
@@ -68,20 +69,18 @@ for(const npm of [false,true]) test(`${npm?'NPM mTLS':'HTTPS'} Nginx + PostgreSQ
   const distributed=await distributionAdmin(db,{action:'publish',project:'https',page:scopedPage},{RUNTIME_PUBLIC_ORIGIN:'https://gateway.test'});assert.ok(distributed.distribution);assert.ok(distributed.snippets);
   await writeFile(gatewayEnv,Object.entries({PGOPTIONS:options,DATABASE_URL:process.env.TEST_DATABASE_URL,PROJECT_ID:'https',SMTP_PORT:'1',PORT:'3000',GATEWAY_MODE:'PILOT_OBSERVE',GATEWAY_TRANSPORT:'HTTPS_PROXY',PUBLIC_GATEWAY_HOST:'gateway.test',PILOT_ORIGINS:'["https://owner.test"]',CHECKOUT_WEBHOOK_SECRET:checkoutSecret}).map(([key,value])=>`${key}=${value}`).join('\n'),{mode:0o600});
   execFileSync('openssl',['req','-x509','-newkey','rsa:2048','-nodes','-keyout',join(dir,'privkey.pem'),'-out',join(dir,'fullchain.pem'),'-days','1','-subj','/CN=gateway.test','-addext','subjectAltName=DNS:gateway.test'],{stdio:'ignore'});
-  execFileSync(process.execPath,['dist/apps/https-config.js',join(dir,'nginx.conf')],{env:{...process.env,PUBLIC_GATEWAY_HOST:'gateway.test'},stdio:'pipe'});
-  assert.equal(await readFile(join(dir,'nginx.conf'),'utf8'),(await readFile('infra/https/nginx.conf','utf8')).replaceAll('PUBLIC_GATEWAY_HOST','gateway.test'));
-  assert.notEqual(spawnSync(process.execPath,['dist/apps/https-config.js',join(dir,'nginx.conf')],{env:{...process.env,PUBLIC_GATEWAY_HOST:'gateway.test'},stdio:'pipe'}).status,0);
+  if(!npm){
+    execFileSync(process.execPath,['dist/apps/https-config.js',join(dir,'nginx.conf')],{env:{...process.env,PUBLIC_GATEWAY_HOST:'gateway.test'},stdio:'pipe'});
+    assert.equal(await readFile(join(dir,'nginx.conf'),'utf8'),(await readFile('infra/https/nginx.conf','utf8')).replaceAll('PUBLIC_GATEWAY_HOST','gateway.test'));
+    assert.notEqual(spawnSync(process.execPath,['dist/apps/https-config.js',join(dir,'nginx.conf')],{env:{...process.env,PUBLIC_GATEWAY_HOST:'gateway.test'},stdio:'pipe'}).status,0);
+  }
   if(npm){
     for(const name of ['npm','monitor'])execFileSync('openssl',['req','-x509','-newkey','rsa:2048','-nodes','-keyout',join(dir,name+'.key'),'-out',join(dir,name+'.crt'),'-days','1','-subj','/CN='+name],{stdio:'ignore'});
     await writeFile(join(dir,'client-ca.crt'),await readFile(join(dir,'npm.crt'),'utf8')+await readFile(join(dir,'monitor.crt'),'utf8'));
     const pin=(name:string)=>execFileSync('openssl',['x509','-in',join(dir,name+'.crt'),'-noout','-fingerprint','-sha256'],{encoding:'utf8'}).trim().split('=')[1];
     await writeFile(gatewayEnv,'\n'+Object.entries({GATEWAY_MODE:'OPERATIONAL',GATEWAY_TRANSPORT:'NPM_MTLS',NPM_TLS_KEY_FILE:'/run/tls/privkey.pem',NPM_TLS_CERT_FILE:'/run/tls/fullchain.pem',NPM_CLIENT_CA_FILE:'/run/tls/client-ca.crt',NPM_PROXY_FINGERPRINT:pin('npm'),NPM_MONITOR_FINGERPRINT:pin('monitor')}).map(([key,value])=>`${key}=${value}`).join('\n'),{flag:'a'});
-    const original=await readFile(join(dir,'nginx.conf'),'utf8');
-    const start=original.indexOf('    location ~'),end=original.indexOf('    location / {');
-    const location=(await readFile('infra/npm/proxy-location.conf','utf8')).replaceAll('PUBLIC_GATEWAY_HOST','gateway.test').replaceAll('/run/anticlone/','/run/tls/').replace('anticlone-personal-public','127.0.0.1');
     await writeFile(join(dir,'server-ca.crt'),await readFile(join(dir,'fullchain.pem')));
-    const config=(original.slice(0,start)+location+original.slice(end)).replace('  access_log off;',`  log_format synthetic_chain '$remote_addr';\n  access_log /tmp/chain.log synthetic_chain;`).replace('    server_name _;','    server_name _;\n    set_real_ip_from 127.0.0.2;\n    real_ip_header CF-Connecting-IP;\n    real_ip_recursive off;');
-    await writeFile(join(dir,'nginx.conf'),config);
+    await npmProxyFixture(dir);
     // Disposable synthetic keys shared by the non-root gateway and root Nginx fixture only.
     await chmod(dir,0o755);for(const file of await readdir(dir))await chmod(join(dir,file),0o444);
   }
