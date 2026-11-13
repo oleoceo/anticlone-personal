@@ -1,12 +1,12 @@
 # STATUS — AntiClone Personal
-## NPM/VPS - F33, administracao privada e monitor
-- Base obrigatoria4e7d5a8; branchfeat/npm-private-deployment; um PR, sem merge/deploy/VPS/DNS/NPM externo.
-- Compose independente: gateway mTLS na proxy, PG privado, admin loopback/socket SCRAM e worker com monitor TLS separado.
-- Topologia Docker/SSH/MFA/CSRF/replay/cookies/logout/monitor falha-recuperacao1/1PASS; mTLS/budgets1/1PASS.
-- Perfil HTTPS direto preservado; variante NPM e PAGE_REDIRECT sintetico150ms em validacao, sem alterar runtime/politicas/SQL.
-- Revisao independente /root/npm_review favoravel ao delta, sem P0/P1/P2; hashes em DECISIONS, teste proprio1PASS.
-- Lint/typecheck/build PASS; regressao integral e CI oficial final por SHA pendentes, nao declaradas verdes.
-- Runbook: docs/NPM-VPS-RUNBOOK.md; homologacao externa e SMTP real pendentes; OPERATIONAL nao autoriza LPs.
+## NPM/VPS — F33, administração privada e monitor — PR #78
+- Base 4e7d5a8; Compose independente, gateway mTLS na proxy, PG privado, admin loopback/socket SCRAM e worker fora da proxy.
+- Foco corrigido 5/5 PASS: perfis direto/NPM, CF simulado/DNS only, PAGE_REDIRECT 100/151 ms, SSH/MFA/CSRF/replay/cookie/logout e monitor.
+- Restores com ferramentas PG16: 2/2 PASS, upgrade 001–064 e rollback; runtime/políticas/migrations intactos.
+- Integral local c9d4ddf: 132 PASS/1 FAIL no harness; saturação da fixture Nginx corrigida em b1c57b2 sem alterar limites/150 ms.
+- CI anterior: cliente PG18 incompatível com servidor16; wrapper CI-only fixa16. Lint/typecheck/build PASS; regressão oficial final por SHA no PR #78.
+- Revisão independente /root/npm_review favorável ao código e deltas, sem P0/P1/P2; hashes/evidências em DECISIONS e NPM-VPS-RUNBOOK.
+- Sem merge/deploy/VPS/DNS/NPM externo/SMTP real; homologação externa pendente. OPERATIONAL não autoriza LPs; runbook e rollback preparados.
 
 ## Hotfix CI pós-merge #76 — F17/F18
 - Base 1c43a9f; branch única fix/ci-entry-deadline; somente harness e evidências em docs/CI-HOTFIX-PR76.md.

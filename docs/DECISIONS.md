@@ -86,3 +86,14 @@ Revisao independente /root/npm_review favoravel ao delta: boundary903D275A,
 transport54805D3D, composeE373DC0C, proxy758B4AE4, topology89BC8B12, https24879EE4,
 runbook9BD7DF11 (prefixos SHA256); teste proprio mTLS1PASS, diff-checkPASS.
 CI/regressao integral devem ser confirmadas por SHA no PR; sem merge/deploy/SMTP externo.
+
+Suplementos da revisao NPM: SHA c9d4ddf305f6fb55d2b457d32e04b6bec4503bb4
+aprovado por /root/npm_review. Os hashes iniciais acima sao historicos; delta de
+harness b1c57b2 aprovado com HTTPS29D44E7E, topologiaB989AB2C (SHA256).
+Revisor reproduziu em Nginx isolado7 respostas429 por divida de burst entre fases;
+reset apenas da fixture e status por URL exata preservam configuracao/limites150ms.
+CIc9d4ddf:130PASS/3FAIL; dois restores usavam pg_dump/restore18.6 do ubuntu-latest
+contraPG16 e emitiam SETtransaction_timeout incompativel. Reproducao local confirmou;
+wrapper CI-only87BC5FD1 usa clientes16 reais em Docker sem alterar recovery/SQL.
+Revisao do wrapper favoravel, bash-n/diff-checkPASS; foco NPM5/5 e restores2/2PASS,
+sem skips. Resultado oficial final por SHA: PR78; nao tratar simulado como VPS real.

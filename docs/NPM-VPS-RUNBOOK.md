@@ -304,3 +304,28 @@ proteção comercial, migrations ou homologação externa.
 Fontes primárias consultadas para a preparação: [NPM advanced config](https://nginxproxymanager.com/advanced-config/),
 [Cloudflare headers](https://developers.cloudflare.com/fundamentals/reference/http-headers/),
 [Full strict](https://developers.cloudflare.com/ssl/origin-configuration/ssl-modes/full-strict/).
+
+## 9. Evidências da preparação no repositório
+
+- Base obrigatória4e7d5a8; código c9d4ddf e correção de harness b1c57b2.
+- Integral local PostgreSQL16/Node22/Chromium:132 PASS/1 FAIL, sem skips; única falha
+  no fanout da fixture Nginx, que descartava429 e virava timeout. Revisão independente
+  reproduziu7 respostas429 numa fixture sem portas; fases agora isolam somente esse
+  proxy descartável e conferem URLs/status exatos, sem alterar limites ou150ms.
+- Foco após correção: `node --test --test-concurrency=1 dist/tests/npm-boundary.test.js
+  dist/tests/npm-topology.test.js dist/tests/https-gateway.test.js`:5/5 PASS,0 skips.
+  Inclui PAGE_REDIRECT real autorizado só para a cópia sintética, entrega em100ms e
+  tardia em151ms de relógio Chromium controlado, com fetch real NPM/mTLS/PostgreSQL.
+- `front3-upgrade` e `recovery` com clientes16 em Docker:2/2 PASS,0 skips. A primeira CI
+  usou clientes18.6 do runner atualizado e falhou no comando transaction_timeout
+  contra servidor16; `scripts/ci-postgres-tool.sh` fixa as ferramentas16 só na CI.
+  A imagem do servidor, código de recuperação e migrations não mudaram.
+- Lint/typecheck/build, validação documental e Python passaram no laboratório.
+  Logs locais ficam fora do Git, em test-results e no laboratório temporário;
+  [PR78](https://github.com/oleoceo/anticlone-personal/pull/78) reúne resultados e CI
+  oficial do SHA final. Exigir o check integral verde desse SHA antes de marcar pronto.
+- Revisão independente read-only `/root/npm_review`: favorável ao código e deltas,
+  sem P0/P1/P2 pendente. SHA256: transporte54805D3D, boundary903D275A, ComposeE373DC0C,
+  fragmento758B4AE4, topologiaB989AB2C, HTTPS29D44E7E, wrapper87BC5FD1.
+  O revisor executou mTLS1/1 PASS e reproduziu o limite Nginx; demais provas acima
+  foram executadas pelo implementador. Revisão documental final identificada no PR.

@@ -38,10 +38,19 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
+      - name: Select PostgreSQL 16 recovery tools matching the database
+        run: |
+          mkdir -p "$RUNNER_TEMP/anticlone-pg16-bin"
+          for tool in pg_dump pg_restore; do
+            ln -s "$GITHUB_WORKSPACE/scripts/ci-postgres-tool.sh" "$RUNNER_TEMP/anticlone-pg16-bin/$tool"
+          done
+          echo "$RUNNER_TEMP/anticlone-pg16-bin" >> "$GITHUB_PATH"
       - name: Verify real PostgreSQL recovery tools
         run: |
           pg_dump --version
           pg_restore --version
+          pg_dump --version | grep -Eq ' 16[.]'
+          pg_restore --version | grep -Eq ' 16[.]'
       - run: npx playwright install chromium
       - name: Smoke real Chromium before integration tests
         run: |
