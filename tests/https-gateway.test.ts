@@ -171,9 +171,16 @@ for(const npm of [false,true]) test(`${npm?'NPM mTLS':'HTTPS'} Nginx + PostgreSQ
     for(const response of await aliasLayers)assert.equal(response.status(),response.url().endsWith('.gif')?200:204,response.url());
     await new Promise(resolve=>setTimeout(resolve,3000));
     const wrongRole=await api.get(distributed.distribution.bases.TELEMETRY+'runtime.js');
-    // NPM's generated fallback reaches the strict gateway boundary with unsanitized
-    // authority/forwarding, while the direct proxy rejects the route locally.
-    assert.equal(wrongRole.status(),npm?400:404);assert.equal(await wrongRole.text(),'');
+    // NPM may reject at TLS or the strict boundary; neither may serve a script.
+    // The direct proxy rejects the invalid route locally.
+    const wrongRoleBody=await wrongRole.text();let wrongRoleProxyError:string|undefined;
+    if(npm){
+      assert.ok([400,502].includes(wrongRole.status()),'invalid role must be denied');
+      assert.doesNotMatch(wrongRole.headers()['content-type']??'',/javascript|ecmascript/i);
+      assert.doesNotMatch(wrongRoleBody,/<script\b|javascript:/i);
+      if(wrongRole.status()===502){assert.match(wrongRole.headers()['content-type']??'',/^text\/html(?:;|$)/i);wrongRoleProxyError=wrongRoleBody;}
+      else assert.equal(wrongRoleBody,'');
+    }else {assert.equal(wrongRole.status(),404);assert.equal(wrongRoleBody,'');}
     if(npm){
       await resetProxyFixture();
       // Authorize only this synthetic copy after proving the default observation state.
@@ -199,6 +206,7 @@ for(const npm of [false,true]) test(`${npm?'NPM mTLS':'HTTPS'} Nginx + PostgreSQ
     await new Promise(r=>setTimeout(r,1500));
     child.kill('SIGTERM'); await once(child,'exit');
     const outage = await api.get('https://gateway.test/healthz'); assert.equal(outage.status(),502);
+    if(wrongRoleProxyError!==undefined)assert.equal(wrongRoleProxyError,await outage.text(),'invalid role502 is exactly the generic proxy outage page');
     await page.goto('https://copy.test/'); await page.locator('a').click(); assert.equal(new URL(page.url()).pathname,'/checkout');
   } finally {
     await browser?.close();

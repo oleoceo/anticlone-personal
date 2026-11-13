@@ -117,3 +117,10 @@ fallback NPM gerado. Limites/status/dry-run ficam no server AntiClone; a candida
 nao pode sobrescreve-los em localizacoes. Envelope representa fallback proxy/TLS
 e a prova conta TCP/HTTP por chamada429, independentemente de resposta/TLS admitidos.
 Guards publicos/admin e/login404 preservam smoke, sem alterar autenticacao privada.
+
+CI 4abd275: 133 PASS/1 FAIL; apenas a asserção wrongRole esperava400 fixo, mas o runner retornou502.
+Diagnóstico /root/npm_p1_review: testar denegação, sem fixar o estado TLS. Aceitar
+somente400 vazio ou502 HTML sem JS, idêntico à página de outage real do mesmo proxy;
+direto404 vazio preservado. Não alterar SSL reuse, app, limites ou timeouts.
+Foco corrigido6/6 PASS,0 skips em75,9s; integração SHA25620686122.
+Resultado integral oficial final continua exigido no PR78.

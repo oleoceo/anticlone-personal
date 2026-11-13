@@ -425,21 +425,25 @@ certificado explícito. O teste conta TCP e HTTP a cada chamada desconhecida:
 (200 ou502 no backend bare) devem produzir evidência de tentativa upstream. Esse
 backend de contagem não verifica pins/rotas e não comprova autenticação; o teste
 não depende do estado ou reuso da sessão TLS. Os guards /admin e/login preservam404.
-No E2E, rota inválida/papel incorreto é bloqueada com400 vazio pela boundary NPM
-e404 vazio no proxy direto; a fixture anterior mascarava o primeiro caminho com
-return404 genérico. Não houve alteração no gateway, autenticação ou runtime.
+No E2E, rota inválida/papel incorreto exige denegação:400 vazio pela boundary NPM
+ou502 HTML genérico do proxy (TLS), sem JavaScript. O corpo502 deve ser idêntico
+ao502 do cenário em que o gateway foi parado; não basta aceitar um erro qualquer.
+O perfil direto mantém404 vazio. A fixture anterior mascarava esse caminho com
+return404 genérico. A CI de4abd275 teve133 PASS/1 FAIL por fixar400, enquanto o
+runner rejeitou no TLS com502. A correção é só dessa expectativa de denegação;
+não muda gateway, reuso TLS, autenticação, limites, timeouts ou runtime.
 O teste lê os mesmos fragmentos previstos para implantação e identifica nos logs
 as zonas NPM que rejeitaram taxa/concorrência. O envelope não declara limites e não
 importa `infra/https`. A UI/versão instalada continua sujeita ao gate da seção4.
 
 Foco atualizado: `node --test --test-concurrency=1 dist/tests/npm-proxy-limits.test.js
  dist/tests/npm-boundary.test.js dist/tests/npm-topology.test.js dist/tests/https-gateway.test.js`:
-**6/6 PASS,0 skips** (72,3s), incluindo regressão direta, NPM/mTLS, PAGE_REDIRECT100/151ms,
+**6/6 PASS,0 skips** (75,9s), incluindo regressão direta, NPM/mTLS, PAGE_REDIRECT100/151ms,
 SSH privado e monitor. Lint/typecheck/build, documentos e Python10/10 PASS.
 Logs locais: `test-results/npm-p1-focus.log`; CI integral do SHA final no PR78.
 
 Nova revisão independente read-only `/root/npm_p1_review`: favorável ao delta,
 sem P0/P1/P2 pendente; typecheck/diff-check próprios PASS. SHA256 dos arquivos:
 HTTP610E382D, host4D7657A0, localizaçãoDBF5A988, envelopeB869A316, helper97B53B8E,
-testeE611115A, integraçãoF229C1C9. Não declarar publicação ou homologação externa
+testeE611115A, integração20686122. Não declarar publicação ou homologação externa
 com base nessas provas. Sem VPS/Cloudflare/NPM existentes, deploy ou merge.
