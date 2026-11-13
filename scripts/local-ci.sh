@@ -58,6 +58,7 @@ step chromium npx playwright install --with-deps chromium
 step browser-version node --input-type=module -e 'import {chromium} from "playwright"; const b=await chromium.launch(); console.log("Playwright",(await import("playwright/package.json",{with:{type:"json"}})).default.version); console.log("Chromium",b.version()); await b.close();'
 step nginx docker pull nginx:1.28-alpine
 step image docker build -f infra/https/Dockerfile -t anticlone-pilot:test .
+step ssh-image docker build -f infra/npm/ssh-test.Dockerfile -t anticlone-ssh:test .
 step verifier-image docker build -f infra/verifier/Dockerfile -t anticlone-verifier:test .
 step compose env GATEWAY_IMAGE=anticlone-pilot:test GATEWAY_ENV_FILE=/dev/null DATABASE_PASSWORD_FILE=/dev/null NGINX_CONFIG=/tmp/nginx.conf TLS_DIRECTORY=/tmp/tls docker compose -f infra/https/compose.yaml config --quiet
 step postgres docker run -d --name "$pg_container" --publish 127.0.0.1::5432 --tmpfs /var/lib/postgresql/data -e POSTGRES_USER=anticlone -e POSTGRES_PASSWORD=test-only -e POSTGRES_DB=anticlone_test postgres:16

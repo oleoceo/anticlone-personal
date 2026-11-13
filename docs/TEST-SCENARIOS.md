@@ -74,3 +74,16 @@ Correção PR #64: operational-authorization.test.ts acrescenta HTTPS sintético
 
 runtime-distribution.test.ts cobre rotação na mesma origem, histórico estável, revisões anteriores, recursos neutros v2, papéis, camadas e duas LPs no mesmo hostname/pathnames distintos. Headers ausentes/forjados e snippets copiados não certificam execução. verify com loopback/metadata/não autorizados é recusado; diagnóstico NOT_VERIFIED/UNKNOWN. GS10/F08 integral BLOCKED até isolamento deny-by-default comprovado; não há navegador de verificação no backend.
 Complemento final PR #64: o teste operational-authorization.test.ts agora une OPERATIONAL + distribuicao v2 /r/v2/ + painel MFA/CSRF no mesmo fluxo. Publica/rotaciona e autoriza/suspende pela interface; PAGE e CTA recebem respostas reais sem reescrita, clique sem decisao de rede, original/copia HTTPS, aliases antigos e isolamento, falha de rede e upstream parado. Runner local-ci.sh executa a suite integral sem skips em Node22; comandos e evidencias em LOCAL-CI.md.
+
+## F33 / GS11 / GS16 / GS21 - transporte NPM privado
+
+`tests/npm-boundary.test.ts` verifica TLS real/pins, papel monitor health-only,
+headers hostis/ambiguos e budgets. `tests/npm-topology.test.ts` inicia o Compose
+independente com SQL001-064, socket SCRAM, admin por SSH real direto-tcpip,
+MFA/replay/CSRF/sessao/cookie/logout, isolamento e monitor em outro container.
+`tests/https-gateway.test.ts` conserva a variante HTTPS direta e acrescenta NPM mTLS,
+Cloudflare simulado/DNS only, aliases v2, autorizacao sintetica e PAGE_REDIRECT
+pontual/tardio sem mudar150ms. Ambos perfis exercitam scripts, canarios, body/rate,
+indisponibilidade e navegacao nativa. Suíte integral preserva contratos comerciais.
+NPM UI, Cloudflare/VPS, SMTP e LPs reais exigem homologacao externa autorizada;
+provas simuladas nao certificam esses ambientes. Runbook: NPM-VPS-RUNBOOK.md.

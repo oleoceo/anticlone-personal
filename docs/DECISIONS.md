@@ -70,3 +70,19 @@ Opt-in comercial persistido por projeto/LP, contexto HTTPS explícito, revisão 
 
 Rotação na mesma origem cria revisão explícita auditável (053); recursos neutros v2 preservam v1. Canários registram chegada por alias separada da presença alegada da LP; Referer raiz não distingue LPs. Verificador navegável BLOCKED por falta de isolamento de rede demonstrado; URLs arbitrárias são recusadas, sem estados positivos. Esta pendência impede declarar consolidação integral.
 PR #64, decisao expressa posterior do proprietario: opcao A de validacao integral local WSL/Linux como gate desta revisao, sem minutos pagos do GitHub Actions. Reproduzir workflow real, manter Actions BLOCKED e PR Draft ate autorizacao expressa. Nao alterar workflow, cobranca ou fabricar status remoto. Evidencias em LOCAL-CI.md; F08 e os demais limites nao mudam.
+
+## Implantacao NPM e administracao exclusivamente SSH (2026-11-13)
+
+Decisao expressa do proprietario nesta tarefa substitui o desenho historico de dominio
+administrativo do Blueprint: nenhum dominio/admin no NPM ou Cloudflare Access.
+Perfil independente infra/npm/compose.yaml; so gateway na bridge proxy externa,
+NPM autenticado por mTLS+pin; monitor com certificado distinto limitado a healthz.
+Admin preserva loopback em namespace host e acessa PostgreSQL via socket Unix SCRAM;
+banco sem TCP publicado, worker fora da rede proxy. Nao mesclar com network_mode:host
+do perfil HTTPS direto. env_file raw exige Compose2.30+ para preservar hashes/segredos.
+Sem mudancas de runtime/politicas/migrations; OPERATIONAL exige autorizacoes persistidas.
+Runbook e riscos: docs/NPM-VPS-RUNBOOK.md. Simulacao nao homologa Cloudflare/NPM/VPS.
+Revisao independente /root/npm_review favoravel ao delta: boundary903D275A,
+transport54805D3D, composeE373DC0C, proxy758B4AE4, topology89BC8B12, https24879EE4,
+runbook9BD7DF11 (prefixos SHA256); teste proprio mTLS1PASS, diff-checkPASS.
+CI/regressao integral devem ser confirmadas por SHA no PR; sem merge/deploy/SMTP externo.

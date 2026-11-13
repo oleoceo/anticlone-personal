@@ -1,4 +1,13 @@
 # STATUS — AntiClone Personal
+## NPM/VPS - F33, administracao privada e monitor
+- Base obrigatoria4e7d5a8; branchfeat/npm-private-deployment; um PR, sem merge/deploy/VPS/DNS/NPM externo.
+- Compose independente: gateway mTLS na proxy, PG privado, admin loopback/socket SCRAM e worker com monitor TLS separado.
+- Topologia Docker/SSH/MFA/CSRF/replay/cookies/logout/monitor falha-recuperacao1/1PASS; mTLS/budgets1/1PASS.
+- Perfil HTTPS direto preservado; variante NPM e PAGE_REDIRECT sintetico150ms em validacao, sem alterar runtime/politicas/SQL.
+- Revisao independente /root/npm_review favoravel ao delta, sem P0/P1/P2; hashes em DECISIONS, teste proprio1PASS.
+- Lint/typecheck/build PASS; regressao integral e CI oficial final por SHA pendentes, nao declaradas verdes.
+- Runbook: docs/NPM-VPS-RUNBOOK.md; homologacao externa e SMTP real pendentes; OPERATIONAL nao autoriza LPs.
+
 ## Hotfix CI pós-merge #76 — F17/F18
 - Base 1c43a9f; branch única fix/ci-entry-deadline; somente harness e evidências em docs/CI-HOTFIX-PR76.md.
 - Árvores aprovada/pós-merge idênticas; shadow tardio preservou página corretamente; causa histórica específica do optional segue inconclusiva.

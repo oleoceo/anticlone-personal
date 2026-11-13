@@ -1,0 +1,107 @@
+# Independent Linux profile. Never combine with infra/https/compose.yaml.
+name: anticlone-personal
+x-app: &app
+  image: ${GATEWAY_IMAGE:?set SHA-tagged image}
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  restart: unless-stopped
+  mem_limit: 256m
+  pids_limit: 64
+  logging: &logs
+    driver: local
+    options: {max-size: 5m, max-file: '2'}
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:?set postgres16 digest}
+    environment:
+      POSTGRES_USER: anticlone
+      POSTGRES_DB: anticlone
+      POSTGRES_PASSWORD_FILE: /run/secrets/database_password
+      POSTGRES_INITDB_ARGS: --auth-local=scram-sha-256 --auth-host=scram-sha-256
+    secrets: [database_password]
+    networks: [private]
+    volumes:
+      - data:/var/lib/postgresql/data
+      - db_socket:/var/run/postgresql
+      - ../:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -h 127.0.0.1 -U anticlone -d anticlone']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    mem_limit: 512m
+    pids_limit: 128
+    security_opt: [no-new-privileges:true]
+    logging: *logs
+  gateway:
+    <<: *app
+    depends_on:
+      postgres: {condition: service_healthy}
+    env_file:
+      - path: ${GATEWAY_ENV_FILE:?absolute private gateway env}
+        format: raw
+    environment:
+      GATEWAY_MODE: OPERATIONAL
+      GATEWAY_TRANSPORT: NPM_MTLS
+      PORT: '3000'
+      NPM_TLS_KEY_FILE: /run/tls/server.key
+      NPM_TLS_CERT_FILE: /run/tls/server.crt
+      NPM_CLIENT_CA_FILE: /run/tls/client-ca.crt
+    volumes:
+      - ${GATEWAY_TLS_DIRECTORY:?private gateway TLS directory}:/run/tls:ro
+    networks:
+      private:
+      proxy:
+        aliases: [anticlone-personal-public]
+  admin:
+    <<: *app
+    command: [node, dist/apps/admin-server.js]
+    # Keeps BOTH socket endpoints loopback; no bridge proxy or relaxed auth.
+    network_mode: host
+    depends_on:
+      postgres: {condition: service_healthy}
+    env_file:
+      - path: ${ADMIN_ENV_FILE:?absolute private admin env}
+        format: raw
+    environment:
+      ADMIN_PORT: '3001'
+    volumes:
+      - db_socket:/run/anticlone-db:ro
+  notifications:
+    <<: *app
+    profiles: [notifications]
+    command: [node, dist/apps/cta-delivery-worker.js]
+    depends_on:
+      postgres: {condition: service_healthy}
+    env_file:
+      - path: ${WORKER_ENV_FILE:?absolute private worker env}
+        format: raw
+    environment:
+      GATEWAY_MODE: OPERATIONAL
+      GATEWAY_TRANSPORT: NPM_MTLS
+      NOTIFICATION_WORKER_MODE: PROVIDER
+      MONITOR_LOCAL_GATEWAY: '1'
+      MONITOR_GATEWAY_HOST: gateway
+      MONITOR_GATEWAY_PORT: '3000'
+      MONITOR_CA_FILE: /run/monitor/server-ca.crt
+      MONITOR_CERT_FILE: /run/monitor/monitor.crt
+      MONITOR_KEY_FILE: /run/monitor/monitor.key
+    volumes:
+      - ${MONITOR_TLS_DIRECTORY:?private monitor TLS directory}:/run/monitor:ro
+    networks: [private, worker_egress]
+    stop_grace_period: 20s
+networks:
+  proxy:
+    external: true
+    name: ${NPM_PROXY_NETWORK:?inspect existing NPM network}
+  private:
+    internal: true
+  worker_egress:
+volumes:
+  data:
+  db_socket:
+secrets:
+  database_password:
+    file: ${DATABASE_PASSWORD_FILE:?absolute private password file}

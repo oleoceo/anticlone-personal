@@ -2,15 +2,19 @@ import {distributionAdmin} from '../apps/runtime-distribution.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
-import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rm,chmod,readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer, request } from 'node:http';
+import {request as tlsRequest} from 'node:https';
 import { Pool } from 'pg';
 import { chromium } from 'playwright';
 import { gatewayBoundary } from '../apps/gateway-boundary.js';
+import {publishPagePolicy} from '../apps/protection-admin.js';
+import {managePages} from '../apps/protected-pages.js';
+import {operationalAdmin} from '../apps/operational-authorization.js';
 
 function rawGet(url: string, headers: Record<string,string> = {}): Promise<{status:number; retry?:string}> {
   return new Promise((resolve,reject) => {
@@ -36,7 +40,7 @@ test('HTTPS boundary rejects spoofed authority and applies a bounded independent
   } finally { await new Promise<void>(resolve => server.close(() => resolve())); }
 });
 
-test('HTTPS Nginx + PostgreSQL + Chromium: install, spoofing, limits, outage and native navigation', {timeout:90000, skip:process.env.HTTPS_GATE_TEST !== '1' ? 'requires Linux Docker; mandatory in CI' : false}, async () => {
+for(const npm of [false,true]) test(`${npm?'NPM mTLS':'HTTPS'} Nginx + PostgreSQL + Chromium: install, spoofing, limits, outage and native navigation`, {timeout:90000, skip:process.env.HTTPS_GATE_TEST !== '1' ? 'requires Linux Docker; mandatory in CI' : false}, async () => {
   assert.ok(process.env.TEST_DATABASE_URL);
   const dir = await mkdtemp(join(tmpdir(),'anticlone-https-'));
   const container = 'anticlone-https-' + crypto.randomUUID();
@@ -47,13 +51,18 @@ test('HTTPS Nginx + PostgreSQL + Chromium: install, spoofing, limits, outage and
   await root.query(`CREATE SCHEMA ${schema}`);
   const options = `-c search_path=${schema}`;
   const db = new Pool({connectionString:process.env.TEST_DATABASE_URL,options});
-  for (const file of ['001_initial','002_alerts','003_projects','004_observation_sources','005_canaries','008_traffic_observations','009_risk_assessments','024_risk_evidence','018_notification_budget','019_alert_outbox_expiry','025_installation_signals']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
-  await db.query("INSERT INTO projects VALUES('https','HTTPS','https://owner.test')");
-  await db.query(await readFile('infra/035_checkout_receipts.sql','utf8'));
+  if(npm){for(const file of (await readdir('infra')).filter(f=>/^\d{3}_.*\.sql$/.test(f)).sort())await db.query((await readFile('infra/'+file,'utf8')).replace(/^\uFEFF/,''));}
+  else for (const file of ['001_initial','002_alerts','003_projects','004_observation_sources','005_canaries','008_traffic_observations','009_risk_assessments','024_risk_evidence','018_notification_budget','019_alert_outbox_expiry','025_installation_signals']) await db.query(await readFile(`infra/${file}.sql`,'utf8'));
+  await db.query("INSERT INTO projects(id,name,origin) VALUES('https','HTTPS','https://owner.test')");
+  if(!npm)await db.query(await readFile('infra/035_checkout_receipts.sql','utf8'));
   const checkoutSecret='cd'.repeat(32);
   const scopedInstallation=crypto.randomUUID();
   await db.query("INSERT INTO installations(project_id,id,origin) VALUES('https',$1,'https://owner.test')",[scopedInstallation]);
-  for(const file of ['037_protected_pages','042_page_installation_signals','047_observed_metrics','051_runtime_distribution'])await db.query(await readFile(`infra/${file}.sql`,'utf8'));
+  if(!npm)for(const file of ['037_protected_pages','042_page_installation_signals','047_observed_metrics','051_runtime_distribution'])await db.query(await readFile(`infra/${file}.sql`,'utf8'));
+  else{
+    const id=crypto.randomUUID();await db.query("INSERT INTO protected_pages(id,project_id,installation_id,name) VALUES($1,'https',$2,'Synthetic LP')",[id,scopedInstallation]);
+    await db.query("INSERT INTO protected_page_urls(page_id,origin,pathname) VALUES($1,'https://owner.test','/')",[id]);
+  }
 
   const scopedPage=(await db.query('SELECT id FROM protected_pages WHERE installation_id=$1',[scopedInstallation])).rows[0].id;
   const distributed=await distributionAdmin(db,{action:'publish',project:'https',page:scopedPage},{RUNTIME_PUBLIC_ORIGIN:'https://gateway.test'});assert.ok(distributed.distribution);assert.ok(distributed.snippets);
@@ -62,16 +71,30 @@ test('HTTPS Nginx + PostgreSQL + Chromium: install, spoofing, limits, outage and
   execFileSync(process.execPath,['dist/apps/https-config.js',join(dir,'nginx.conf')],{env:{...process.env,PUBLIC_GATEWAY_HOST:'gateway.test'},stdio:'pipe'});
   assert.equal(await readFile(join(dir,'nginx.conf'),'utf8'),(await readFile('infra/https/nginx.conf','utf8')).replaceAll('PUBLIC_GATEWAY_HOST','gateway.test'));
   assert.notEqual(spawnSync(process.execPath,['dist/apps/https-config.js',join(dir,'nginx.conf')],{env:{...process.env,PUBLIC_GATEWAY_HOST:'gateway.test'},stdio:'pipe'}).status,0);
+  if(npm){
+    for(const name of ['npm','monitor'])execFileSync('openssl',['req','-x509','-newkey','rsa:2048','-nodes','-keyout',join(dir,name+'.key'),'-out',join(dir,name+'.crt'),'-days','1','-subj','/CN='+name],{stdio:'ignore'});
+    await writeFile(join(dir,'client-ca.crt'),await readFile(join(dir,'npm.crt'),'utf8')+await readFile(join(dir,'monitor.crt'),'utf8'));
+    const pin=(name:string)=>execFileSync('openssl',['x509','-in',join(dir,name+'.crt'),'-noout','-fingerprint','-sha256'],{encoding:'utf8'}).trim().split('=')[1];
+    await writeFile(gatewayEnv,'\n'+Object.entries({GATEWAY_MODE:'OPERATIONAL',GATEWAY_TRANSPORT:'NPM_MTLS',NPM_TLS_KEY_FILE:'/run/tls/privkey.pem',NPM_TLS_CERT_FILE:'/run/tls/fullchain.pem',NPM_CLIENT_CA_FILE:'/run/tls/client-ca.crt',NPM_PROXY_FINGERPRINT:pin('npm'),NPM_MONITOR_FINGERPRINT:pin('monitor')}).map(([key,value])=>`${key}=${value}`).join('\n'),{flag:'a'});
+    const original=await readFile(join(dir,'nginx.conf'),'utf8');
+    const start=original.indexOf('    location ~'),end=original.indexOf('    location / {');
+    const location=(await readFile('infra/npm/proxy-location.conf','utf8')).replaceAll('PUBLIC_GATEWAY_HOST','gateway.test').replaceAll('/run/anticlone/','/run/tls/').replace('anticlone-personal-public','127.0.0.1');
+    await writeFile(join(dir,'server-ca.crt'),await readFile(join(dir,'fullchain.pem')));
+    const config=(original.slice(0,start)+location+original.slice(end)).replace('  access_log off;',`  log_format synthetic_chain '$remote_addr';\n  access_log /tmp/chain.log synthetic_chain;`).replace('    server_name _;','    server_name _;\n    set_real_ip_from 127.0.0.2;\n    real_ip_header CF-Connecting-IP;\n    real_ip_recursive off;');
+    await writeFile(join(dir,'nginx.conf'),config);
+    // Disposable synthetic keys shared by the non-root gateway and root Nginx fixture only.
+    await chmod(dir,0o755);for(const file of await readdir(dir))await chmod(join(dir,file),0o444);
+  }
   // Match production ownership and hardening: Nginx root cannot bypass DAC permissions.
   execFileSync('docker',['run','--rm','--network','none','-v',`${dir}:/files`,'--entrypoint','chown','nginx:1.28-alpine','-R','0:0','/files'],{stdio:'pipe'});
-  const child = spawn('docker',['run','--rm','--name',gatewayContainer,'--network','host','--env-file',gatewayEnv,'--read-only','--cap-drop','ALL','--security-opt','no-new-privileges:true','anticlone-pilot:test'],{stdio:['ignore','ignore','inherit']});
+  const child = spawn('docker',['run','--rm','--name',gatewayContainer,'--network','host','--env-file',gatewayEnv,...(npm?['-v',`${dir}:/run/tls:ro`]:[]),'--read-only','--cap-drop','ALL','--security-opt','no-new-privileges:true','anticlone-pilot:test'],{stdio:['ignore','ignore','inherit']});
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
   try {
     const authority = {host:'gateway.test','x-forwarded-proto':'https','x-forwarded-for':'127.0.0.1'};
     let ready = false;
-    for (let i=0;i<100&&!ready;i++) {try {ready=(await rawGet('http://127.0.0.1:3000/healthz',authority)).status===200;} catch {/* startup */} if (!ready) await new Promise(r=>setTimeout(r,50));}
+    for (let i=0;i<100&&!ready;i++) {try {ready=npm?spawnSync('docker',['exec',gatewayContainer,'node','--input-type=module','-e',`import{request}from'node:https';import{readFileSync as r}from'node:fs';const q=request({host:'127.0.0.1',port:3000,path:'/healthz',servername:'gateway.test',ca:r('/run/tls/fullchain.pem'),cert:r('/run/tls/monitor.crt'),key:r('/run/tls/monitor.key'),headers:${JSON.stringify(authority)}},s=>{s.resume();s.on('end',()=>process.exit(s.statusCode===200?0:1))});q.on('error',()=>process.exit(1));q.end();`],{stdio:'ignore'}).status===0:(await rawGet('http://127.0.0.1:3000/healthz',authority)).status===200;} catch {/* startup */} if (!ready) await new Promise(r=>setTimeout(r,50));}
     assert.ok(ready);
-    assert.equal((await fetch('http://127.0.0.1:3000/runtime.js')).status,400);
+    if(npm)await assert.rejects(fetch('http://127.0.0.1:3000/runtime.js'));else assert.equal((await fetch('http://127.0.0.1:3000/runtime.js')).status,400);
     execFileSync('docker',['run','-d','--name',container,'--network','host','--read-only','--tmpfs','/tmp','--tmpfs','/var/cache/nginx','--cap-drop','ALL','--cap-add','NET_BIND_SERVICE','--cap-add','SETUID','--cap-add','SETGID','--cap-add','CHOWN','--security-opt','no-new-privileges:true','-v',`${dir}/nginx.conf:/etc/nginx/nginx.conf:ro`,'-v',`${dir}:/run/tls:ro`,'nginx:1.28-alpine'],{stdio:'pipe'});
     browser = await chromium.launch({args:['--no-proxy-server','--host-resolver-rules=MAP gateway.test 127.0.0.1']});
     const context = await browser.newContext({ignoreHTTPSErrors:true}); // synthetic certificate only
@@ -79,11 +102,18 @@ test('HTTPS Nginx + PostgreSQL + Chromium: install, spoofing, limits, outage and
     await context.grantPermissions(['local-network-access'],{origin:'https://copy.test'});
     const api = context.request;
     for (let i=0;i<100;i++) {try {if ((await api.get('https://gateway.test/healthz')).ok()) break;} catch {/* startup */} await new Promise(r=>setTimeout(r,50));}
+    if(npm){
+      const edge=async(localAddress:string,claimed:string)=>new Promise<void>((resolve,reject)=>{const req=tlsRequest({hostname:'127.0.0.1',port:443,localAddress,rejectUnauthorized:false,headers:{Host:'gateway.test','CF-Connecting-IP':claimed,'X-Forwarded-For':'203.0.113.99','X-Real-IP':'203.0.113.98',Forwarded:'for=evil'},path:'/healthz'},res=>{res.resume();res.on('end',()=>{assert.equal(res.statusCode,200);resolve();});});req.on('error',reject);req.end();});
+      await edge('127.0.0.2','192.0.2.55'); // synthetic trusted Cloudflare edge
+      await edge('127.0.0.1','192.0.2.66'); // DNS only: injected CF claim is ignored
+      const chain=execFileSync('docker',['exec',container,'cat','/tmp/chain.log'],{encoding:'utf8'});
+      assert.ok(chain.includes('192.0.2.55'));assert.ok(!chain.includes('192.0.2.66'));
+    }
     // Read the synthetic CA through a root helper: private directory is root-owned.
     const caFile = join(tmpdir(), container + '.pem');
     await writeFile(caFile,execFileSync('docker',['exec',container,'cat','/run/tls/fullchain.pem']),{mode:0o600});
     try {
-      const smoke = spawn(process.execPath,['dist/apps/installation-smoke.js','https://gateway.test'],{env:{...process.env,NODE_EXTRA_CA_CERTS:caFile},stdio:['ignore','pipe','pipe']});
+      const smoke = spawn(process.execPath,['dist/apps/installation-smoke.js','https://gateway.test',...(npm?['OPERATIONAL',scopedInstallation]:[])],{env:{...process.env,NODE_EXTRA_CA_CERTS:caFile},stdio:['ignore','pipe','pipe']});
       let output = ''; smoke.stderr.on('data',chunk=>{output+=chunk.toString();});
       assert.equal((await once(smoke,'exit'))[0],0,output);
     } finally {await rm(caFile,{force:true});}
@@ -129,10 +159,28 @@ test('HTTPS Nginx + PostgreSQL + Chromium: install, spoofing, limits, outage and
     await page.getByText('Native scoped',{exact:true}).click();assert.equal(new URL(page.url()).pathname,'/checkout');
     await new Promise(resolve=>setTimeout(resolve,3000));
     await page.route('https://owner.test/**',route=>route.fulfill({contentType:'text/html',body:'<style>'+distributed.snippets!.css+'</style><div class="anticlone-canary">Owned</div>'+distributed.snippets!.html}));
-    const aliasLayers=Promise.all(['observe','observe/fallback','html.gif','css.gif'].map(path=>page.waitForResponse(response=>response.url().startsWith('https://gateway.test/d/v1/')&&response.url().endsWith('/'+path)&&response.ok())));
+    const aliasLayers=Promise.all(['observe','observe/fallback','html.gif','css.gif'].map(path=>page.waitForResponse(response=>response.url().startsWith(npm?'https://gateway.test/r/v2/':'https://gateway.test/d/v1/')&&response.url().endsWith('/'+(distributed.distribution!.paths?.[path]??path))&&response.ok())));
     await page.goto('https://owner.test/');await aliasLayers;
     await new Promise(resolve=>setTimeout(resolve,3000));
     assert.equal((await api.get(distributed.distribution.bases.TELEMETRY+'runtime.js')).status(),404);
+    if(npm){
+      // Authorize only this synthetic copy after proving the default observation state.
+      const policy=await publishPagePolicy(db,'https',{enabled:true,approved_destination:'https://owner.test/approved',stealth:false,stealth_version:2,allocation:{PAID_ATTRIBUTED:100,ORGANIC:100,REFERRAL:100,DIRECT_UNKNOWN:100}});
+      const generation=(await db.query('SELECT url_generation,config_generation FROM protected_pages WHERE id=$1',[scopedPage])).rows[0];
+      await managePages(db,{action:'approve',project:'https',page:scopedPage,generation:generation.url_generation,configGeneration:generation.config_generation,entryVersion:policy.version,ctaVersions:[]});
+      await operationalAdmin(db,{action:'authorize',project:'https',page:scopedPage,revision:0,copyOrigin:'https://copy.test',copyPathname:'/',acknowledgeUntrustedContext:true});
+      await context.route('https://copy.test/**',route=>route.fulfill({contentType:'text/html',body:`<a href="/native">Native entry</a><script src="https://gateway.test/i/${scopedInstallation}/runtime.js"></script>`}));
+      await context.route('https://owner.test/**',route=>route.fulfill({contentType:'text/html',body:'<h1>Controlled approved destination</h1>'}));
+      for(const late of [false,true]){
+        const timed=await context.newPage();await timed.clock.install();await timed.clock.pauseAt(new Date());
+        await timed.route('**/entry-decision',async route=>{const response=await route.fetch();assert.equal((await response.json()).action,'PAGE_REDIRECT');await timed.clock.runFor(late?151:100);await route.fulfill({response});},{times:1});
+        const received=timed.waitForResponse(r=>r.url().endsWith('/entry-decision'));
+        await timed.goto('https://copy.test/');await received;
+        if(late){await timed.unrouteAll({behavior:'wait'});assert.equal(timed.url(),'https://copy.test/');await timed.getByText('Native entry',{exact:true}).evaluate((el:HTMLElement)=>el.click());await timed.waitForURL('https://copy.test/native');}
+        else await timed.waitForURL('https://owner.test/approved');
+        await timed.close();
+      }
+    }
     const statuses = await Promise.all(Array.from({length:35},async()=> (await api.get('https://gateway.test/runtime.js')).status()));
     assert.ok(statuses.includes(429));
     // Let the proxy burst refill, then verify an actual upstream outage.
