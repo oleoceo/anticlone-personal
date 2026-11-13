@@ -101,6 +101,13 @@ for(const npm of [false,true]) test(`${npm?'NPM mTLS':'HTTPS'} Nginx + PostgreSQ
     // The synthetic public fixture reaches loopback TLS; real public deployments do not.
     await context.grantPermissions(['local-network-access'],{origin:'https://copy.test'});
     const api = context.request;
+    const resetProxyFixture=async()=>{
+      // Independent scenarios must not inherit the preceding scenario's burst debt.
+      // Restart only this disposable Nginx fixture; gateway/DB/budgets and all limits stay intact.
+      execFileSync('docker',['restart',container],{stdio:'pipe'});
+      for(let i=0;i<100;i++){try{if((await api.get('https://gateway.test/healthz')).ok())return;}catch{/* starting */}await new Promise(r=>setTimeout(r,50));}
+      throw Error('synthetic proxy restart failed');
+    };
     for (let i=0;i<100;i++) {try {if ((await api.get('https://gateway.test/healthz')).ok()) break;} catch {/* startup */} await new Promise(r=>setTimeout(r,50));}
     if(npm){
       const edge=async(localAddress:string,claimed:string)=>new Promise<void>((resolve,reject)=>{const req=tlsRequest({hostname:'127.0.0.1',port:443,localAddress,rejectUnauthorized:false,headers:{Host:'gateway.test','CF-Connecting-IP':claimed,'X-Forwarded-For':'203.0.113.99','X-Real-IP':'203.0.113.98',Forwarded:'for=evil'},path:'/healthz'},res=>{res.resume();res.on('end',()=>{assert.equal(res.statusCode,200);resolve();});});req.on('error',reject);req.end();});
@@ -158,12 +165,15 @@ for(const npm of [false,true]) test(`${npm?'NPM mTLS':'HTTPS'} Nginx + PostgreSQ
     assert.equal((await db.query("SELECT count(*)::int n FROM observed_action_facts WHERE project_id='https' AND action='SESSION_OBSERVED'")).rows[0].n,1);
     await page.getByText('Native scoped',{exact:true}).click();assert.equal(new URL(page.url()).pathname,'/checkout');
     await new Promise(resolve=>setTimeout(resolve,3000));
+    if(npm)await resetProxyFixture();
     await page.route('https://owner.test/**',route=>route.fulfill({contentType:'text/html',body:'<style>'+distributed.snippets!.css+'</style><div class="anticlone-canary">Owned</div>'+distributed.snippets!.html}));
-    const aliasLayers=Promise.all(['observe','observe/fallback','html.gif','css.gif'].map(path=>page.waitForResponse(response=>response.url().startsWith(npm?'https://gateway.test/r/v2/':'https://gateway.test/d/v1/')&&response.url().endsWith('/'+(distributed.distribution!.paths?.[path]??path))&&response.ok())));
-    await page.goto('https://owner.test/');await aliasLayers;
+    const aliasLayers=Promise.all(['observe','observe/fallback','html.gif','css.gif'].map(path=>page.waitForResponse(response=>response.url()===distributed.distribution!.bases[path.endsWith('.gif')?'STATIC_ASSETS':'TELEMETRY']+(distributed.distribution!.paths?.[path]??path))));
+    await page.goto('https://owner.test/');
+    for(const response of await aliasLayers)assert.equal(response.status(),response.url().endsWith('.gif')?200:204,response.url());
     await new Promise(resolve=>setTimeout(resolve,3000));
     assert.equal((await api.get(distributed.distribution.bases.TELEMETRY+'runtime.js')).status(),404);
     if(npm){
+      await resetProxyFixture();
       // Authorize only this synthetic copy after proving the default observation state.
       const policy=await publishPagePolicy(db,'https',{enabled:true,approved_destination:'https://owner.test/approved',stealth:false,stealth_version:2,allocation:{PAID_ATTRIBUTED:100,ORGANIC:100,REFERRAL:100,DIRECT_UNKNOWN:100}});
       const generation=(await db.query('SELECT url_generation,config_generation FROM protected_pages WHERE id=$1',[scopedPage])).rows[0];
