@@ -6,6 +6,7 @@ import {createServer} from 'node:http';
 import {once} from 'node:events';
 import {Pool} from 'pg';
 import {chromium} from 'playwright';
+import {entryProbe} from './entry-probe.js';
 import {scopedGateway} from '../apps/scoped-gateway.js';
 import {publishPagePolicy} from '../apps/protection-admin.js';
 import {publishCtaPolicy,ctaDecision} from '../apps/cta-policy.js';
@@ -113,7 +114,49 @@ test('GS05/GS19 optional Stealth: PostgreSQL and Chromium, two projects/two LPs,
     await page.goto(original+'/one');await page.waitForTimeout(200);assert.equal(page.url(),original+'/one');await page.locator('a').click();await page.waitForURL(original+'/native');
     await page.route('**/entry-decision',r=>r.abort());await page.goto(copy+'/one');await page.waitForTimeout(250);assert.equal(page.url(),copy+'/one');await page.locator('a').click();await page.waitForURL(copy+'/native');
     await page.unroute('**/entry-decision');await page.unroute('**/cta-refresh');
-    await page.goto(copy+'/two');await page.waitForURL(original+'/beta-page');
+    // Observe real timing, force a late negative, and prove the policy positive
+    // independently of runner throughput. All decisions come from PostgreSQL.
+    for(const mode of ['real','late','controlled','original'] as const) {
+      const betaContext=await browser.newContext();
+      await betaContext.addInitScript(()=>sessionStorage.setItem('anticlone.lab.attribution',JSON.stringify({medium:'cpc'})));
+      const beta=await betaContext.newPage();
+      if(mode==='controlled'){await beta.clock.install();await beta.clock.pauseAt(new Date());}
+      const probe=await entryProbe(beta);
+      if(mode==='late')await betaContext.route('**/entry-decision',async route=>{
+        const upstream=await route.fetch({maxRedirects:0}),body=await upstream.body();
+        await new Promise(resolve=>setTimeout(resolve,250));
+        await route.fulfill({response:upstream,body});
+      });
+      // Prove CTA readiness is observed, rather than assumed after 100 ms.
+      if(mode==='late')await betaContext.route('**/cta-refresh',async route=>{
+        const upstream=await route.fetch({maxRedirects:0}),body=await upstream.body();
+        await new Promise(resolve=>setTimeout(resolve,250));
+        await route.fulfill({response:upstream,body});
+      });
+      try {
+        await beta.goto((mode==='original'?original:copy)+'/two');const result=await probe.parsed;
+        if(mode==='original') {
+          assert.equal(result.decision.action,'OBSERVE_ONLY','authorized origin must reject mitigation');
+          assert.equal(beta.url(),original+'/two');
+          await beta.locator('a').click();await beta.waitForURL(original+'/native');continue;
+        }
+        assert.equal(result.decision.action,'PAGE_REDIRECT','policy must permit beta independently of latency');
+        assert.equal(result.decision.destination,original+'/beta-page');
+        const armed=probe.events.find(e=>e.event==='deadline-armed');assert.ok(armed);
+        const late=result.mono>=Number(armed.deadline)||probe.events.some(e=>e.event==='deadline-expired');
+        if(mode==='late')assert.ok(late,'injected delay must exceed the real browser budget');
+        if(mode==='controlled')assert.equal(late,false);
+        if(late) {
+          await beta.waitForTimeout(100);assert.ok(probe.events.some(e=>e.event==='deadline-expired'));
+          assert.equal(beta.url(),copy+'/two','late PAGE must preserve the copy');
+          await probe.ctaReady();
+          await beta.locator('a').click();await beta.waitForURL(original+'/beta-cta');
+        } else await beta.waitForURL(original+'/beta-page');
+      } finally {
+        process.stdout.write('OPTIONAL_ENTRY_TIMING '+JSON.stringify({mode,browser:browser.version(),events:probe.events,finalUrl:beta.url()})+'\n');
+        await betaContext.close();
+      }
+    }
     await context.close();
     // A partial migration must be rejected before risk selection; no legacy
     // history prerequisite may condition OFF mappings in the same envelope.
