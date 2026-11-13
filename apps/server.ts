@@ -5,6 +5,7 @@ import { observedSessionGateway } from './observed-session-gateway.js';
 import { withAttribution } from './attribution.js';
 import { authorizedHosts, collectInfrastructure, realResolver } from './infrastructure-dns.js';
 import http from 'node:http';
+import {npmServer} from './npm-transport.js';
 import { randomUUID } from 'node:crypto';
 import { operationallyEligible } from './operational-eligibility.js';
 import { projectMaintenance } from './project-maintenance.js';
@@ -156,7 +157,7 @@ const handleObservedSession=observedSessionGateway(pool);
 const handleCheckout = checkoutWebhook(pool,activeProject,project ? process.env : {...process.env,CHECKOUT_WEBHOOK_SECRET:undefined});
 const handleProjectCheckout = projectCheckoutWebhooks(pool,process.env);
 const distributed = distributionGateway(pool, {'runtime.js':bootstrap,'core.js':core,'fallback.js':fallback,'cta-inventory.js':inventoryScript},(req,res)=>{if (!handleObservedSession(req,res) && !scoped(req,res)) res.writeHead(404).end();},layerObservations);
-const server = http.createServer((req, res) => {
+const handler: http.RequestListener = (req, res) => {
   if (!boundary(req, res)) return;
   if (handleCommerce(req,res)) return;
   if (handleProjectCheckout(req,res)) return;
@@ -176,7 +177,7 @@ const server = http.createServer((req, res) => {
   }
   if (req.method === 'GET' && (req.url === '/canary/html.gif' || req.url === '/canary/css.gif')) {
     if (Date.now() - windowStart >= 60_000) { windowStart = Date.now(); count = 0; }
-    if (++count > 60 && process.env.GATEWAY_TRANSPORT !== 'HTTPS_PROXY') { void withLegacyEligibility(lostDegradationClaim).catch(()=>{}); res.writeHead(429).end(); return; }
+    if (++count > 60 && !['HTTPS_PROXY','NPM_MTLS'].includes(process.env.GATEWAY_TRANSPORT??'')) { void withLegacyEligibility(lostDegradationClaim).catch(()=>{}); res.writeHead(429).end(); return; }
     const source = req.url === '/canary/html.gif' ? 'html_canary' : 'css_canary';
     void withLegacyEligibility(async () => {
       await observeCanary(pool, activeProject, req.headers.referer, source);
@@ -208,10 +209,10 @@ const server = http.createServer((req, res) => {
     try { origin = configuredOrigin(req.headers.origin ?? ''); } catch { res.writeHead(400).end(); return; }
     if (refresh) {
       if (Date.now() - refreshWindowStart >= 60_000) { refreshWindowStart = Date.now(); refreshCount = 0; }
-      if (++refreshCount > 60 && process.env.GATEWAY_TRANSPORT !== 'HTTPS_PROXY') { res.writeHead(429).end(); return; }
+      if (++refreshCount > 60 && !['HTTPS_PROXY','NPM_MTLS'].includes(process.env.GATEWAY_TRANSPORT??'')) { res.writeHead(429).end(); return; }
     } else {
       if (Date.now() - decisionWindowStart >= 60_000) { decisionWindowStart = Date.now(); decisionCount = 0; }
-      if (++decisionCount > 60 && process.env.GATEWAY_TRANSPORT !== 'HTTPS_PROXY') { res.writeHead(429).end(); return; }
+      if (++decisionCount > 60 && !['HTTPS_PROXY','NPM_MTLS'].includes(process.env.GATEWAY_TRANSPORT??'')) { res.writeHead(429).end(); return; }
     }
     if (!/^text\/plain(?:\s*;|$)/i.test(req.headers['content-type'] ?? '')) { res.writeHead(415).end(); return; }
     let body = ''; let rejected = false; let bodyBytes = 0;
@@ -249,7 +250,7 @@ const server = http.createServer((req, res) => {
   }
   if (req.method !== 'POST' || req.url !== '/observe' && req.url !== '/observe/fallback') { res.writeHead(404).end(); return; }
   if (Date.now() - windowStart >= 60_000) { windowStart = Date.now(); count = 0; }
-  if (++count > 60 && process.env.GATEWAY_TRANSPORT !== 'HTTPS_PROXY') { void withLegacyEligibility(lostDegradationClaim).catch(()=>{}); res.writeHead(429).end(); return; }
+  if (++count > 60 && !['HTTPS_PROXY','NPM_MTLS'].includes(process.env.GATEWAY_TRANSPORT??'')) { void withLegacyEligibility(lostDegradationClaim).catch(()=>{}); res.writeHead(429).end(); return; }
   if (!/^text\/plain(?:\s*;|$)/i.test(req.headers['content-type'] ?? '')) { res.writeHead(415).end(); return; }
   let length = 0; const chunks: Buffer[] = []; let rejected = false;
   req.on('data', (chunk: Buffer) => {
@@ -296,11 +297,12 @@ const server = http.createServer((req, res) => {
       res.writeHead(503).end();
     });
   });
-});
+};
+const server = process.env.GATEWAY_TRANSPORT==='NPM_MTLS'?npmServer(process.env,handler):http.createServer(handler);
 server.requestTimeout = 5000; server.headersTimeout = 6000;
 server.maxHeadersCount = 40;
 server.setTimeout(10_000, socket => socket.destroy());
-server.listen(port, '127.0.0.1');
+server.listen(port, process.env.GATEWAY_TRANSPORT==='NPM_MTLS'?'0.0.0.0':'127.0.0.1');
 let busy = false;
 let installationCleanupAfter = 0;
 let healthCleanupAfter = 0;

@@ -14,6 +14,10 @@ Projeto **privado, single-owner**, para proteger sites próprios. Em construçã
 
 ## Referências originais
 
+Implantação preparada para NPM existente e admin privado por SSH:
+[runbook NPM/VPS](docs/NPM-VPS-RUNBOOK.md). Não executar deploy sem autorização;
+o perfil HTTPS direto permanece disponível separadamente.
+
 Ficam em `C:\projetos\anticlone-saas-referencias` (pasta irmã **fora** do repositório). Para a auditoria inicial, descompactar o RAR dentro dessa pasta, em `projetosaas-anticlone/`, e conceder acesso somente de leitura se o ambiente do agente permitir. Não copiar o arquivo compactado para o GitHub.
 
 ## Estado deste kit

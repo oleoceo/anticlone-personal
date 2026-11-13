@@ -70,3 +70,57 @@ Opt-in comercial persistido por projeto/LP, contexto HTTPS explícito, revisão 
 
 Rotação na mesma origem cria revisão explícita auditável (053); recursos neutros v2 preservam v1. Canários registram chegada por alias separada da presença alegada da LP; Referer raiz não distingue LPs. Verificador navegável BLOCKED por falta de isolamento de rede demonstrado; URLs arbitrárias são recusadas, sem estados positivos. Esta pendência impede declarar consolidação integral.
 PR #64, decisao expressa posterior do proprietario: opcao A de validacao integral local WSL/Linux como gate desta revisao, sem minutos pagos do GitHub Actions. Reproduzir workflow real, manter Actions BLOCKED e PR Draft ate autorizacao expressa. Nao alterar workflow, cobranca ou fabricar status remoto. Evidencias em LOCAL-CI.md; F08 e os demais limites nao mudam.
+
+## Implantacao NPM e administracao exclusivamente SSH (2026-11-13)
+
+Decisao expressa do proprietario nesta tarefa substitui o desenho historico de dominio
+administrativo do Blueprint: nenhum dominio/admin no NPM ou Cloudflare Access.
+Perfil independente infra/npm/compose.yaml; so gateway na bridge proxy externa,
+NPM autenticado por mTLS+pin; monitor com certificado distinto limitado a healthz.
+Admin preserva loopback em namespace host e acessa PostgreSQL via socket Unix SCRAM;
+banco sem TCP publicado, worker fora da rede proxy. Nao mesclar com network_mode:host
+do perfil HTTPS direto. env_file raw exige Compose2.30+ para preservar hashes/segredos.
+Sem mudancas de runtime/politicas/migrations; OPERATIONAL exige autorizacoes persistidas.
+Runbook e riscos: docs/NPM-VPS-RUNBOOK.md. Simulacao nao homologa Cloudflare/NPM/VPS.
+Revisao independente /root/npm_review favoravel ao delta: boundary903D275A,
+transport54805D3D, composeE373DC0C, proxy758B4AE4, topology89BC8B12, https24879EE4,
+runbook9BD7DF11 (prefixos SHA256); teste proprio mTLS1PASS, diff-checkPASS.
+CI/regressao integral devem ser confirmadas por SHA no PR; sem merge/deploy/SMTP externo.
+
+Suplementos da revisao NPM: SHA c9d4ddf305f6fb55d2b457d32e04b6bec4503bb4
+aprovado por /root/npm_review. Os hashes iniciais acima sao historicos; delta de
+harness b1c57b2 aprovado com HTTPS29D44E7E, topologiaB989AB2C (SHA256).
+Revisor reproduziu em Nginx isolado7 respostas429 por divida de burst entre fases;
+reset apenas da fixture e status por URL exata preservam configuracao/limites150ms.
+CIc9d4ddf:130PASS/3FAIL; dois restores usavam pg_dump/restore18.6 do ubuntu-latest
+contraPG16 e emitiam SETtransaction_timeout incompativel. Reproducao local confirmou;
+wrapper CI-only87BC5FD1 usa clientes16 reais em Docker sem alterar recovery/SQL.
+Revisao do wrapper favoravel, bash-n/diff-checkPASS; foco NPM5/5 e restores2/2PASS,
+sem skips. Resultado oficial final por SHA: PR78; nao tratar simulado como VPS real.
+
+## PR78 P1 — equivalência obrigatória de tráfego NPM
+
+A revisão do proprietário em07120c0 encontrou herança acidental de limites HTTPS
+diretos na fixture NPM e uma recomendação opcional no runbook. Substituir essa
+recomendação por fragmento HTTP (map/zonas exclusivos) e admissão obrigatória no
+server AntiClone:2req/s,burst20nodelay,10ativas/IP,429,dry-run off. Chave vazia
+para outros hosts; nenhum limit_req/limit_conn no HTTP global ou server_proxy.conf.
+Sem hook/módulos ou validação segura no NPM instalado: BLOCKED NPM_TRAFFIC_GATE,
+sem publicação. Node/CF não substituem a proteção pré-upstream;150ms e demais
+contratos não mudam. Teste Nginx independente com upstream sem boundary Node conta
+chegadas e prova taxa/concorrência/outro host/nginx-t negativo. Foco6/6 PASS,0skips;
+nova revisão /root/npm_p1_review favorável ao delta (hashes no runbook). Resultado
+integral oficial do SHA final no PR78; nenhuma operação externa/merge autorizada.
+
+Suplemento P1: o revisor confirmou que admissao apenas no regex nao cobriria o
+fallback NPM gerado. Limites/status/dry-run ficam no server AntiClone; a candidata
+nao pode sobrescreve-los em localizacoes. Envelope representa fallback proxy/TLS
+e a prova conta TCP/HTTP por chamada429, independentemente de resposta/TLS admitidos.
+Guards publicos/admin e/login404 preservam smoke, sem alterar autenticacao privada.
+
+CI 4abd275: 133 PASS/1 FAIL; apenas a asserção wrongRole esperava400 fixo, mas o runner retornou502.
+Diagnóstico /root/npm_p1_review: testar denegação, sem fixar o estado TLS. Aceitar
+somente400 vazio ou502 HTML sem JS, idêntico à página de outage real do mesmo proxy;
+direto404 vazio preservado. Não alterar SSL reuse, app, limites ou timeouts.
+Foco corrigido6/6 PASS,0 skips em75,9s; integração SHA25620686122.
+Resultado integral oficial final continua exigido no PR78.
