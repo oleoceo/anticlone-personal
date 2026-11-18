@@ -774,3 +774,177 @@ for (const width of [1440, 390]) {
     assert.deepEqual(errors, []);
   });
 }
+
+for (const width of [1440, 390]) {
+  test('overview, SMTP, commercial catalog and lifecycle at ' + width + ' px', {timeout: 100_000}, async t => {
+    const lab = await fixture(t);
+    const original = 'https://curso.frontend.test';
+    const project = await registerProject(lab.db, {name: 'Curso Horizonte', origin: original});
+    const lp = await managePages(lab.db, {project: project.id, action: 'create', name: 'Oferta principal', url: original + '/oferta'}) as {page: string};
+    await observe(lab.db, project.id, original, 'https://sinal.frontend.test');
+    await recordObservedFact(lab.db, project.id, {page: lp.page, event: randomUUID(), session: 'ca'.repeat(16),
+      action: 'CTA_CLICK_OBSERVED', traffic: 'DIRECT_UNKNOWN', version: null, evidence: 'BROWSER_UNVERIFIED'});
+    await lab.db.query("INSERT INTO estimate_assumptions(project_id,version,ticket_minor,conversion_basis_points,currency) VALUES($1,1,12000,500,'BRL')", [project.id]);
+    const checkoutEnv = process.env.COMMERCE_ENCRYPTION_KEY;
+    process.env.COMMERCE_ENCRYPTION_KEY = 'cd'.repeat(32);
+    t.after(() => {
+      if (checkoutEnv === undefined) delete process.env.COMMERCE_ENCRYPTION_KEY;
+      else process.env.COMMERCE_ENCRYPTION_KEY = checkoutEnv;
+    });
+    const context = await lab.browser.newContext({viewport: {width, height: width < 760 ? 844 : 1000}, hasTouch: width < 760, isMobile: width < 760});
+    const page = await context.newPage();
+    const errors: string[] = [];
+    const foreign: string[] = [];
+    page.on('pageerror', error => errors.push(error.message));
+    page.on('request', request => {if (!request.url().startsWith(lab.origin + '/')) foreign.push(request.url());});
+    const captureRoot = process.env.TEST_FRONTEND_C_CAPTURES;
+    async function capture(name: string, heading?: string) {
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      if (!captureRoot) return;
+      const folder = join(captureRoot, width < 760 ? 'mobile' : 'desktop');
+      await mkdir(folder, {recursive: true});
+      if (heading) await page.getByRole('heading', {name:heading, exact:true}).evaluate(node =>
+        window.scrollBy(0, node.getBoundingClientRect().top - 20));
+      else await page.evaluate(() => window.scrollTo(0, 0));
+      await page.screenshot({path: join(folder, name + '.png'), animations: 'disabled'});
+    }
+
+    assert.equal((await page.goto(lab.origin + ui + '/visao-geral'))?.status(), 200);
+    assert.equal(await login(page, lab.code()), 204);
+    await page.getByRole('heading', {name:'Visão Geral'}).waitFor();
+    await page.getByText('R$ 6,00', {exact:true}).waitFor();
+    await page.getByRole('link', {name:'sinal.frontend.test'}).waitFor();
+    await page.getByText('1 LP habilitada e ativa no cadastro', {exact:false}).waitFor();
+    await page.getByText('1 incidente no histórico retornado', {exact:true}).waitFor();
+    await page.getByLabel('Período dos resultados').selectOption('1');
+    await page.getByRole('combobox', {name:/^Projeto/}).selectOption(project.id);
+    await page.getByLabel('LP para diagnóstico').selectOption(lp.page);
+    await page.getByText('Endereços ainda não publicados', {exact:false}).waitFor();
+    await page.getByText('0 alertas no recorte de revisão', {exact:true}).waitFor();
+    await capture('01-visao-geral');
+    await capture('02-instalacoes-alertas', 'Instalações e alertas');
+    await page.getByRole('link', {name:'Administrar oferta'}).click();
+    await action(page, 'Pausar projeto').click();
+    await action(page, 'Confirmar').click();
+    await action(page, 'Reativar projeto').click();
+    await action(page, 'Confirmar').click();
+    await action(page, 'Pausar projeto').waitFor();
+    await page.getByText('Arquivar projeto', {exact:true}).click();
+    await page.getByLabel('Justificativa', {exact:true}).fill('Arquivar projeto de laboratório');
+    await action(page, 'Revisar mudança de estado').click();
+    await action(page, 'Confirmar').click();
+    await page.getByText('Exclusão lógica do projeto', {exact:true}).click();
+    await action(page, 'Consultar impacto').click();
+    await action(page, 'Confirmar').click();
+    const confirmProject = project.id + ':' + project.name;
+    await page.getByLabel('Confirmação exata').fill(confirmProject);
+    await page.getByRole('button', {name:'Revisar exclusão', exact:true}).locator('..').getByLabel('Justificativa').fill('Exclusão reversível de teste');
+    await action(page, 'Revisar exclusão').click();
+    await action(page, 'Confirmar').click();
+    await page.getByText('Excluído', {exact:true}).waitFor();
+    const restore = page.locator('details').filter({has: page.getByText('Restaurar projeto', {exact:true})});
+    if (!await restore.getByLabel('Justificativa').isVisible()) await restore.getByText('Restaurar projeto', {exact:true}).click();
+    await restore.getByLabel('Justificativa').fill('Restaurar cadastro de laboratório');
+    await action(page, 'Revisar mudança de estado').click();
+    await action(page, 'Confirmar').click();
+    await action(page, 'Reativar projeto').waitFor();
+    assert.deepEqual((await lab.db.query('SELECT lifecycle_state,deleted_at FROM projects WHERE id=$1',[project.id])).rows,
+      [{lifecycle_state:'PAUSED',deleted_at:null}]);
+    await action(page, 'Consultar histórico de cadastro').click();
+    await page.getByText('Registros de cadastro', {exact:true}).waitFor();
+    await capture('03-gestao-projeto', 'Gestão do projeto');
+    await page.getByRole('link', {name:'Abrir página', exact:true}).click();
+    await action(page, 'Pausar LP').click();
+    await action(page, 'Confirmar').click();
+    await action(page, 'Reativar LP').click();
+    await action(page, 'Confirmar').click();
+    await page.getByLabel('Nova URL autorizada').fill(original + '/variacao');
+    await action(page, 'Revisar nova URL').click();
+    await action(page, 'Confirmar').click();
+    await page.getByRole('button', {name:'Remover URL', exact:true}).first().waitFor();
+    await page.getByRole('status').filter({hasText:/^URL autorizada para a LP\.$/}).waitFor();
+    assert.equal(await page.getByText('undefined · alteração registrada.', {exact:true}).count(), 0);
+    await capture('04-gestao-lp', 'Gestão da LP');
+    await page.getByRole('listitem').filter({hasText:original + '/variacao Remover URL'}).getByRole('button', {name:'Remover URL'}).click();
+    await action(page, 'Confirmar').click();
+    await action(page, 'Remover URL').first().waitFor({state:'hidden'});
+    await page.getByRole('status').filter({hasText:/^URL removida da LP\.$/}).waitFor();
+    assert.equal(await page.getByText('undefined · alteração registrada.', {exact:true}).count(), 0);
+    await page.getByText('Exclusão da LP', {exact:true}).click();
+    await action(page, 'Consultar impacto').click();
+    await action(page, 'Confirmar').click();
+    await page.getByLabel('Confirmação exata').fill('DELETE PAGE ' + project.id + '/' + lp.page + '/Oferta principal');
+    await page.getByLabel('Justificativa', {exact:true}).fill('Encerrar LP sintética de laboratório');
+    await action(page, 'Revisar exclusão').click();
+    await action(page, 'Confirmar').click();
+    await page.getByText('Excluído', {exact:true}).waitFor();
+    assert.ok((await lab.db.query('SELECT deleted_at FROM protected_pages WHERE id=$1',[lp.page])).rows[0].deleted_at);
+
+    await page.getByRole('link', {name:'Configurações',exact:true}).click();
+    await page.getByRole('combobox', {name:/^Provedor/}).selectOption('smtp');
+    await page.getByLabel('Host SMTP').fill('smtp.frontend.test');
+    await page.getByLabel('Porta').fill('465');
+    await page.getByRole('combobox', {name:/^TLS/}).selectOption('implicit');
+    await page.getByLabel('Remetente').fill('origem@frontend.test');
+    await page.getByLabel('Destinatário').fill('destino@frontend.test');
+    await action(page, 'Revisar configuração SMTP').click();
+    await action(page, 'Confirmar').click();
+    await action(page, 'Solicitar habilitação').click();
+    await action(page, 'Confirmar').click();
+    await page.getByText('Habilitação solicitada', {exact:true}).waitFor();
+    await page.getByText('Ambiente privado sem SMTP configurado', {exact:true}).waitFor();
+    await capture('05-notificacoes', 'Notificações e SMTP');
+    await action(page, 'Desativar solicitação').click();
+    await action(page, 'Confirmar').click();
+    await page.getByLabel('Projeto dos alertas').selectOption(project.id);
+    const alert = (await lab.db.query('SELECT id::text FROM alert_outbox')).rows[0].id;
+    await page.getByText(/^CLONE · /).click();
+    await capture('06-revisao-alertas', 'Alertas em revisão');
+    await page.getByLabel('Ação de revisão').selectOption('CANCEL');
+    await page.getByLabel('Digite CLONE:' + alert).fill('CLONE:' + alert);
+    await page.getByLabel('Justificativa').fill('Cancelar tentativa sintética em revisão');
+    await action(page, 'Revisar ação de alerta').click();
+    await page.getByText('Um envio já admitido pelo transporte ainda pode concluir.').waitFor();
+    await action(page, 'Confirmar').click();
+    await page.getByText('Nenhum alerta em revisão no recorte retornado.').waitFor();
+    assert.ok((await lab.db.query('SELECT expired_at FROM alert_outbox WHERE id=$1',[alert])).rows[0].expired_at);
+
+    await page.getByRole('link', {name:'Integrações', exact:true}).click();
+    await page.getByText('Criar ou versionar modelo', {exact:true}).click();
+    await page.getByLabel('Identificador do modelo').fill('Modelo-Horizonte');
+    await page.getByLabel('Configuração do modelo (JSON)').fill(JSON.stringify({
+      auth:'HMAC_SHA256_TIMESTAMP', fields:{event:'event',order:'order',amount:'amount',currency:'currency',
+        status:'status',occurred:'occurred',product:'product'}, statuses:{paid:'PAID'}, money:{unit:'DECIMAL',exponent:2},
+    }));
+    await page.getByLabel('Amostra sintética (JSON)').fill(JSON.stringify({
+      event:'e1', order:'o1', amount:'19.99', currency:'BRL', status:'paid', occurred:new Date().toISOString(), product:'p1',
+    }));
+    assert.equal(await page.getByLabel('Modelo para editar').isDisabled(), true);
+    await action(page, 'Testar modelo').click();
+    await action(page, 'Confirmar').click();
+    await page.getByText('Resultado sanitizado', {exact:true}).waitFor();
+    await action(page, 'Revisar aprovação do modelo').click();
+    await action(page, 'Confirmar').click();
+    await page.getByText('Modelo-Horizonte', {exact:true}).waitFor();
+    await capture('07-modelos', 'Integrações comerciais');
+    await page.getByText('Cadastrar conta', {exact:true}).click();
+    await page.getByLabel('Identificador da conta').fill('Checkout-Horizonte');
+    await page.getByLabel('Modelo aprovado').selectOption({label:'Modelo-Horizonte · v1'});
+    await action(page, 'Revisar conta de checkout').click();
+    await action(page, 'Confirmar').click();
+    await page.getByText('Checkout-Horizonte · Em teste', {exact:true}).waitFor();
+    await page.getByText('Webhook e manutenção', {exact:true}).click();
+    assert.equal(await action(page, 'Ativar conta').isDisabled(), true);
+    await page.getByText(/\/commerce-webhook\//).waitFor();
+    await capture('08-contas-webhooks', 'Contas e webhooks');
+    await action(page, 'Desativar conta').click();
+    await action(page, 'Confirmar').click();
+    await page.getByText('Checkout-Horizonte · Inativa', {exact:true}).waitFor();
+    await page.getByRole('link', {name:'Saúde e operações', exact:true}).click();
+    await page.getByRole('heading', {name:'Diagnósticos e operações privadas'}).waitFor();
+    assert.equal(await page.getByRole('link', {name:'Abrir painel anterior'}).getAttribute('href'), '/admin/ui/');
+    await capture('09-operacoes');
+    assert.deepEqual(errors, []);
+    assert.deepEqual(foreign, []);
+  });
+}

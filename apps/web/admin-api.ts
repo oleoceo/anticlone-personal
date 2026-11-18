@@ -101,8 +101,8 @@ export class AdminApi {
 export type Project = {id: string; name: string};
 export type PageUrl = {origin: string; pathname: string};
 export type Page = {id: string; project_id: string; name: string; enabled: boolean; urls: PageUrl[]};
-export type ProjectState = {state: string; pages: {id: string; lifecycle_state: string}[]};
-export type ProjectHistory = {registration: {project_id: string; name: string; origin: string}[]};
+export type ProjectState = {state: string; pages: {id: string; lifecycle_state: string; name: string; enabled: boolean}[]};
+export type ProjectHistory = {registration: {project_id: string; name: string; origin: string}[]; changes?: unknown[]};
 
 export const pageList = (api: AdminApi, project: string, signal?: AbortSignal) =>
   api.request<{pages: Page[]}>('pages', {action: 'list', project}, signal);
