@@ -1,5 +1,6 @@
 import type {Pool,PoolClient} from 'pg';
 import {assertProjectAdministrativeWrite,assertPageAdministrativeWrite} from './admin-project-write.js';
+import {PageConflict} from './protected-pages.js';
 import {currentApproval} from './page-policy-approval.js';
 import {operationallyEligible} from './operational-eligibility.js';
 
@@ -42,6 +43,9 @@ export async function operationalAdmin(db:Pool,body:unknown) {
         const official=await client.query('SELECT 1 FROM protected_page_urls WHERE origin=$1 UNION ALL SELECT 1 FROM projects WHERE origin=$1',[url.origin]);
         if(urls.rowCount!==1||official.rowCount)throw new TypeError('original context forbidden');
         const approval=(await client.query('SELECT max(id) AS id FROM page_policy_approvals WHERE project_id=$1 AND page_id=$2',[data.project,data.page])).rows[0];
+        if (data.expectedApprovalId !== undefined && data.expectedApprovalId !== approval.id) {
+          throw new PageConflict('stale page approval');
+        }
         configuration={...page,approval_id:approval.id,copy_origin:url.origin,copy_pathname:data.copyPathname};
       }
       if(!configuration)throw new TypeError('no authorization to suspend');

@@ -3,20 +3,22 @@ import {errorMessage} from './admin-api';
 
 export function useQuery<T>(key: string, load: (signal: AbortSignal) => Promise<T>) {
   const [version, setVersion] = useState(0);
-  const [result, setResult] = useState<{key: string; data?: T; error?: unknown}>();
+  const [result, setResult] = useState<{key: string; version: number; data?: T; error?: unknown}>();
   useEffect(() => {
     if (!key) return;
     const controller = new AbortController();
     load(controller.signal).then(
-      data => { if (!controller.signal.aborted) setResult({key, data}); },
-      error => { if (!controller.signal.aborted) setResult({key, error}); },
+      data => { if (!controller.signal.aborted) setResult({key, version, data}); },
+      error => { if (!controller.signal.aborted) setResult(previous => ({key, version, data: previous?.key === key ? previous.data : undefined, error})); },
     );
     return () => controller.abort();
   }, [key, version]); // The key names the contract and its parameters.
   return {
+    pending: Boolean(key) && (result?.key !== key || result.version !== version),
     data: result?.key === key ? result.data : undefined,
     error: result?.key === key ? result.error : undefined,
     retry: () => { setResult(undefined); setVersion(value => value + 1); },
+    revalidate: () => setVersion(value => value + 1),
   };
 }
 

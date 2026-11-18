@@ -1,9 +1,12 @@
 import {useEffect, useRef, useState, type FormEvent} from 'react';
 import {createRoot} from 'react-dom/client';
+import {DraftGuard, uuid} from './operations';
+import {Conversions} from './conversions';
+import {IncidentProjects, Incidents} from './incidents';
 import {createBrowserRouter, Link, RouterProvider, useBlocker, useLocation, useNavigate} from 'react-router-dom';
 import {AdminApi, type Project, type ProjectState, pageList} from './admin-api';
 import {base, Back, Breadcrumbs, type Crumb, installPath, newPagePath, offerPath, pagePath,
-  projectPath, projectsPath, readRoute, useContextNavigation, useRestoreScroll} from './navigation';
+  projectPath, projectsPath, readRoute, useContextNavigation, useRestoreScroll, conversionsPath, incidentsPath, projectIncidentsPath} from './navigation';
 import {emptyFields, OfferForm} from './offer-form';
 import {Installation} from './installation';
 import {Brand, Confirm, Failure, Heading, labels, Loading, useQuery} from './ui';
@@ -135,7 +138,9 @@ function Workspace({api, projects, project, pageId, installation, setGuard}: {
     {!installation && <Back to={pageId ? projectHref : projectsPath}>
       {pageId ? 'Voltar para ' + project.name : 'Voltar para Meus Projetos'}</Back>}
     {!installation && <Heading title={project.name} description="Oferta, páginas e instalação."
-      actions={<Link className="button" {...nav.link(newPagePath(project.id))}>Adicionar página / variação</Link>}/>}
+      actions={<div className="action-links">
+        <Link className="button" {...nav.link(projectIncidentsPath(project.id), pageId ? '?lp=' + pageId : '')}>Incidentes da oferta</Link>
+        <Link className="button" {...nav.link(newPagePath(project.id))}>Adicionar página / variação</Link></div>}/>}
     <div className="filters selectors">
       <label>Oferta / projeto<select value={project.id} onChange={event => {
         const next = event.target.value;
@@ -162,7 +167,8 @@ function Workspace({api, projects, project, pageId, installation, setGuard}: {
         <h3>URLs autorizadas</h3>
         <ul className="plain">{page.urls.map(url => <li key={url.origin + url.pathname}>{url.origin + url.pathname}</li>)}</ul>
         {!page.urls.length && <p className="muted">Nenhuma URL está vinculada à página.</p>}
-        <Link className="button primary" {...nav.link(installPath(project.id, page.id))}>Instalar e conferir</Link>
+        <div className="action-links"><Link className="button primary" {...nav.link(installPath(project.id, page.id))}>Instalar e conferir</Link>
+          <Link className="button" {...nav.link(conversionsPath(project.id, page.id))}>Conversões</Link></div>
       </section> : <section className="panel">
         <h2>Páginas da oferta</h2>
         {!pages.length ? <p className="empty">Cadastre a primeira página para publicar os endereços de instalação.</p> :
@@ -175,6 +181,17 @@ function Workspace({api, projects, project, pageId, installation, setGuard}: {
   </>;
 }
 
+function PageConversions({api, project, pageId, subview, setGuard}: {
+  api: AdminApi; project: Project; pageId: string; subview?: string; setGuard: (guard: Guard) => void;
+}) {
+  const list = useQuery(project.id, signal => pageList(api, project.id, signal));
+  const page = list.data?.pages.find(page => page.id === pageId);
+  if (list.error !== undefined) return <Failure error={list.error} retry={list.retry}/>;
+  if (!list.data) return <Loading/>;
+  return page ? <Conversions key={page.id + ':' + (subview ?? '')} api={api} project={project} page={page} subview={subview} setGuard={setGuard}/> :
+    <><Heading title="Página indisponível"/><Back to={projectPath(project.id)}>Voltar para {project.name}</Back></>;
+}
+
 function Authenticated({api, logout, guard, fields, setFields, setGuard}: {
   api: AdminApi; logout: () => void; guard: Guard; fields: typeof emptyFields;
   setFields: (fields: typeof emptyFields) => void; setGuard: (guard: Guard) => void;
@@ -185,6 +202,11 @@ function Authenticated({api, logout, guard, fields, setFields, setGuard}: {
   const route = readRoute(location.pathname);
   const projects = useQuery('projects', signal => api.request<Project[]>('projects', undefined, signal));
   const project = projects.data?.find(item => item.id === route.project);
+  const incidentActive = route.kind === 'incidents-home' || route.kind === 'incidents' || route.kind === 'incident';
+  const requestedPage = new URLSearchParams(location.search).get('lp');
+  const queryPage = requestedPage && uuid.test(requestedPage) ? requestedPage : null;
+  const currentPage = route.page ?? queryPage ?? (project ? nav.rememberedPage(project.id) : '');
+  const incidentLink = nav.link(project ? projectIncidentsPath(project.id) : incidentsPath, currentPage ? '?lp=' + encodeURIComponent(currentPage) : '');
 
   function finish(projectId: string, page: string) {
     const next = nav.link(installPath(projectId, page));
@@ -198,8 +220,9 @@ function Authenticated({api, logout, guard, fields, setFields, setGuard}: {
     <aside className="sidebar">
       <Brand/>
       <nav aria-label="Navegação principal">
-        <Link className="nav-current" aria-current={route.kind === 'projects' ? 'page' : 'location'}
+        <Link className={!incidentActive ? "nav-current" : undefined} aria-current={!incidentActive ? "location" : undefined}
           {...nav.link(projectsPath)}>Meus Projetos</Link>
+        <Link className={incidentActive ? "nav-current" : undefined} aria-current={incidentActive ? "location" : undefined} {...incidentLink}>Incidentes</Link>
         <a href="/admin/ui/">Painel anterior</a>
       </nav>
       <button type="button" disabled={guard === 'saving'} onClick={logout}>Sair da sessão</button>
@@ -211,15 +234,25 @@ function Authenticated({api, logout, guard, fields, setFields, setGuard}: {
         projects.error !== undefined ? <Failure error={projects.error} retry={projects.retry}/> :
         !projects.data ? <Loading/> :
         route.kind === 'projects' ? <ProjectList api={api} projects={projects.data}/> :
+        route.kind === 'incidents-home' ? <IncidentProjects projects={projects.data}/> :
         !project ? <><Heading title="Projeto indisponível"/><Back to={projectsPath}>Voltar para Meus Projetos</Back></> :
         route.kind === 'new-page' ? <OfferForm key={project.id} api={api} project={project} fields={fields}
           setFields={setFields} setGuard={setGuard} finish={finish}/> :
+        route.kind === 'incidents' || route.kind === 'incident' ?
+          <DraftGuard key={location.pathname + location.search} setGuard={setGuard}>
+            <Incidents api={api} project={project} id={route.incident} action={route.action} setGuard={setGuard}/>
+          </DraftGuard> :
+        route.kind === 'conversions' ?
+          <DraftGuard key={location.pathname + location.search} setGuard={setGuard}>
+            <PageConversions api={api} project={project} pageId={route.page} subview={route.subview} setGuard={setGuard}/>
+          </DraftGuard> :
         <Workspace api={api} project={project} projects={projects.data} pageId={route.page}
           installation={route.kind === 'installation'} setGuard={setGuard}/>}
     </main>
     <nav className="bottom-nav" aria-label="Navegação principal">
-      <Link className="nav-current" aria-current={route.kind === 'projects' ? 'page' : 'location'}
+      <Link className={!incidentActive ? "nav-current" : undefined} aria-current={!incidentActive ? "location" : undefined}
         {...nav.link(projectsPath)}>Meus Projetos</Link>
+      <Link className={incidentActive ? "nav-current" : undefined} aria-current={incidentActive ? "location" : undefined} {...incidentLink}>Incidentes</Link>
       <a href="/admin/ui/">Painel anterior</a>
     </nav>
   </div>;
@@ -246,13 +279,13 @@ function App() {
   }
 
   const blocker = useBlocker(({currentLocation, nextLocation}) =>
-    guardRef.current !== 'clean' && currentLocation.pathname !== nextLocation.pathname);
+    guardRef.current !== 'clean' && (currentLocation.pathname !== nextLocation.pathname || currentLocation.search !== nextLocation.search));
   useRestoreScroll(authenticated === true);
 
   useEffect(() => {
     setFields(emptyFields);
     setGuard('clean');
-  }, [location.pathname]);
+  }, [location.pathname, location.search]);
 
   useEffect(() => {
     if (guard === 'clean') return;

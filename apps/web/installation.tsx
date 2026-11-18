@@ -40,6 +40,11 @@ const layerLabels: Record<string, string> = {
 };
 const roleLabels: Record<Role, string> = {SCRIPT: 'Scripts', TELEMETRY: 'Telemetria', STATIC_ASSETS: 'Recursos estáticos'};
 const utcDate = new Intl.DateTimeFormat('pt-BR', {dateStyle: 'short', timeStyle: 'short'});
+const diagnosticReasons: Record<string, string> = {
+  ISOLATED_VERIFIER_UNAVAILABLE: 'O verificador isolado não está disponível para esta consulta.',
+  CONFIGURATION_CHANGED: 'A configuração mudou durante a verificação. Confira a LP antes de executar outra consulta.',
+};
+
 function date(value: string) {
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? utcDate.format(parsed) : 'Data indisponível';
@@ -133,7 +138,9 @@ export function Installation({api, project, page, setGuard}: {
           onClick={() => setConfirmation('publish')}>Publicar endereços de instalação</button>
       </>}
       {data?.snippets && <>
-        <p>Insira o HTML e o CSS na página oficial. Aplique a classe <code>anticlone-canary</code> a um elemento existente.</p>
+        <ol className="installation-guide"><li>Copie o HTML para a página oficial.</li>
+          <li>Copie o CSS para os estilos da página e aplique a classe <code>anticlone-canary</code> a um elemento existente.</li>
+          <li>Publique as alterações no seu site e volte para conferir a situação.</li></ol>
         <div className="snippets">
           <Snippet key={'html:' + published?.version} code={data.snippets.html} language="HTML"/>
           <Snippet key={'css:' + published?.version} code={data.snippets.css} language="CSS"/>
@@ -171,6 +178,9 @@ export function Installation({api, project, page, setGuard}: {
         <button type="button" disabled={busy || !published || !page.enabled || page.urls.length !== 1}
           onClick={() => setConfirmation('verify')}>Verificar instalação</button>
         {published && page.urls.length !== 1 && <p className="muted">A verificação exige uma única URL oficial.</p>}
+        {diagnostic.controlledVerification.reason && <p className="muted">
+          {diagnosticReasons[diagnostic.controlledVerification.reason] ?? 'Consulte o detalhe técnico do resultado abaixo.'}
+        </p>}
         <details><summary>Detalhes do diagnóstico</summary>
           <dl className="review"><dt>Verificação controlada</dt>
             <dd>{diagnostic.controlledVerification.reason ?? labels[diagnostic.controlledVerification.status] ?? diagnostic.controlledVerification.status}</dd>
