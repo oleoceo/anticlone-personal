@@ -52,7 +52,10 @@ async function fixture(test: TestContext) {
   const record = 'scrypt$' + salt.toString('hex') + '$' + scryptSync(password, salt, 64).toString('hex');
   const server = createAdminServer(record, secret, db, () => clock).listen(0, '127.0.0.1');
   await once(server, 'listening');
-  test.after(() => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())));
+  test.after(() => new Promise<void>((resolve, reject) => {
+    server.close(error => error ? reject(error) : resolve());
+    server.closeAllConnections();
+  }));
   const origin = 'http://127.0.0.1:' + (server.address() as AddressInfo).port;
   const browser = await chromium.launch();
   test.after(() => browser.close());
@@ -331,6 +334,7 @@ test('new and legacy consoles share the same MFA, session lifetime and private r
   }});
   assert.equal(stillActive.status, 200);
   lab.advance(1);
+  await modern.bringToFront();
   await modern.evaluate(() => window.dispatchEvent(new Event('focus')));
   await modern.getByText('Sua sessão terminou. Entre novamente para continuar.').waitFor();
   await legacy.reload();
@@ -346,6 +350,7 @@ test('new and legacy consoles share the same MFA, session lifetime and private r
   await anotherLegacy.goto(lab.origin + '/admin/ui/');
   assert.equal(await login(anotherLegacy, lab.code(), true), 204);
   await anotherLegacy.getByText('Configuração incompleta', {exact: true}).waitFor();
+  await modern.bringToFront();
   await modern.evaluate(() => window.dispatchEvent(new Event('focus')));
   await modern.getByText('Sua sessão terminou. Entre novamente para continuar.').waitFor();
 
@@ -366,6 +371,7 @@ test('new and legacy consoles share the same MFA, session lifetime and private r
   });
   const staleResponse = modern.waitForResponse(response => response.url().endsWith('/admin/ui/bootstrap') &&
     (response.headers()['x-test-stale-bootstrap'] === '1'));
+  await modern.bringToFront();
   await modern.evaluate(() => window.dispatchEvent(new Event('focus')));
   const release = await earlyRead;
   try {

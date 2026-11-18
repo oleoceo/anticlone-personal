@@ -2,7 +2,7 @@
 
 ## Frontend V2.2 — Entrega A, base operacional (BLOCKED)
 - Painel React/TypeScript/Vite em `/admin/ui/novo/`, com sessão web e fronteira privada existentes, cadastro e instalação por LP.
-- Chromium/PostgreSQL: 18 testes no recorte de regressão, incluindo 5 do frontend, incluindo dois tamanhos de tela, MFA, histórico, conflitos e perda de resposta após cabeçalhos.
+- Chromium/PostgreSQL: 18 testes no recorte de regressão, dos quais 5 exercitam o frontend com dois tamanhos de tela, MFA, histórico, conflitos e perda de resposta após cabeçalhos.
 - Revisão independente em `/root/review_entrega_a`: P1 reproduzido em queda pré-cabeçalhos, quando o Chromium repetiu o POST e o backend gravou dois projetos.
 - Cadastro sem duplicação nesse cenário depende da autorização de idempotência administrativa. Prova e cobertura pendente em [ADMIN-FRONTEND](docs/ADMIN-FRONTEND.md).
 
