@@ -24,7 +24,7 @@ type Catalog = {connections: Connection[]; bindings: Binding[]; models: Model[]}
 
 const commonCurrencies = ['BRL', 'USD', 'EUR', 'GBP', 'JPY', 'KWD', 'BHD', 'CAD', 'AUD', 'CHF'];
 const currencyCatalog = Intl.supportedValuesOf('currency');
-const commerceExponents: Record<string, number> = {BRL:2,USD:2,EUR:2,GBP:2,CAD:2,AUD:2,CHF:2,JPY:0,KWD:3,BHD:3,OMR:3,TND:3,JOD:3};
+export const commerceExponents: Record<string, number> = {BRL:2,USD:2,EUR:2,GBP:2,CAD:2,AUD:2,CHF:2,JPY:0,KWD:3,BHD:3,OMR:3,TND:3,JOD:3};
 
 function exponent(currency: string) {
   return currencyCatalog.includes(currency)
@@ -42,7 +42,7 @@ function amountInput(minor: string | bigint, precision: number, grouped = false)
   return sign + head + (precision ? ',' + str.slice(-precision) : '');
 }
 
-function money(minor: string | bigint | null, currency: string, precision = exponent(currency)) {
+export function money(minor: string | bigint | null, currency: string, precision = exponent(currency)) {
   if (minor === null) return 'Indisponível';
   return precision === null ? String(minor) + ' unidades menores · ' + currency : (currency === 'BRL' ? 'R$' : currency) + ' ' + amountInput(minor, precision, true);
 }

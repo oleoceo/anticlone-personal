@@ -2,6 +2,8 @@ import {useEffect, useLayoutEffect, useRef, type PropsWithChildren} from 'react'
 import {Link, useLocation, useNavigate, useNavigationType} from 'react-router-dom';
 
 export const base = '/admin/ui/novo';
+export const overviewPath = '/visao-geral';
+export const settingsPath = '/configuracoes';
 export const projectsPath = '/projetos';
 export const offerPath = '/proteger-oferta';
 export const projectPath = (project: string) => projectsPath + '/' + project;
@@ -37,6 +39,10 @@ export function searchOf(params: URLSearchParams) {
 
 export function readRoute(path: string) {
   const [, , project, area, page, view, subview] = path.replace(/\/$/, '').split('/');
+  if (path.replace(/\/$/, '') === overviewPath) return {kind: 'overview' as const};
+  if (path === settingsPath || path.startsWith(settingsPath + '/')) {
+    return {kind: 'settings' as const, section: path.split('/')[2]};
+  }
   if (path === offerPath || path === offerPath + '/') return {kind: 'offer' as const};
   if (path.replace(/\/$/, '') === incidentsPath) return {kind: 'incidents-home' as const};
   if (!project) return {kind: 'projects' as const};

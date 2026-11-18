@@ -125,6 +125,7 @@ function PolicyEditor({api, project, page, protection, pageState, pageAction, op
     <p>{pageAction ? 'Escolha o destino e a proporção de tráfego por origem.' : 'Selecione a superfície e a proporção de tráfego que pode receber os destinos aprovados da superfície.'} A publicação gera uma versão para a etapa de aprovação.</p>
     {!pageAction && <>
       <h3>CTAs e destinos da LP</h3>
+      <p className="muted">A lista mostra o mapeamento cadastrado. A elegibilidade de cada clique depende da decisão em execução.</p>
       <CheckoutPoints protection={protection} state={pageState} surfaces={scoped.ctaSurfaces
         .filter(policy => pageState.urls.some(url => url.pathname === policy.pathname)).map(policy => policy.surface)}/>
       <button type="button" onClick={() => {

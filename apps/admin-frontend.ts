@@ -7,7 +7,7 @@ const page = '[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}';
 const incident = '[1-9][0-9]{0,18}';
 const projectArea = '(?:/nova-lp|/incidentes(?:/' + incident + '(?:/redirecionar|/substituir-cta)?)?|/lps/' + page +
   '(?:/instalacao|/conversoes(?:/estimativa|/vinculos)?)?)?';
-const screens = new RegExp('^' + root + '(?:/proteger-oferta|/incidentes|/projetos(?:/' + project + projectArea + ')?)?/?$');
+const screens = new RegExp('^' + root + '(?:/visao-geral|/configuracoes(?:/notificacoes|/integracoes|/operacoes)?|/proteger-oferta|/incidentes|/projetos(?:/' + project + projectArea + ')?)?/?$');
 const asset = /^\/admin\/ui\/novo\/(assets\/[a-zA-Z0-9_-]+\.(js|css))$/;
 
 export function serveAdminFrontend(url: string, site: string | undefined, res: ServerResponse): boolean {

@@ -1,5 +1,11 @@
 # STATUS — AntiClone Personal
 
+## Frontend V2.2 — Entrega C
+- Base 64ad977, branch feat/admin-frontend-completion. Visão Geral usa relatórios existentes, com cliques, estimativas e vendas por moeda, projetos, incidentes e diagnóstico por LP.
+- Configurações integra SMTP, preferência de envio, revisão de alertas, modelos, contas e webhooks. A gestão inclui URLs, pausa, reativação, arquivo, exclusão e restauração de projeto.
+- Playwright desktop/mobile e regressões A+B+C com PostgreSQL isolado. Lint, typecheck e build. Revisão independente `/root/b_review` com correções de rascunho, cancelamento e interação mobile.
+- Galeria local em `docs/design/frontend-entrega-c/`. Paridade parcial, lacunas e retorno ao painel anterior em [ADMIN-FRONTEND-C](docs/ADMIN-FRONTEND-C.md). Sem mudança de API, migrations ou VPS.
+
 ## Frontend V2.2 — Entrega B, operações a partir de incidentes
 - Refinamento visual no PR #80: resultado financeiro no formulário, resumo de destinos de CTA e estado/escopo da proteção. Consultas existentes, sem mudança no servidor. Nove testes integrados passaram, com Chromium em desktop e mobile emulado. Revisão independente `/root/b_review` favorável ao delta.
 - Base c35180e, branch feat/admin-frontend-protection. Incidentes, triagem, PAGE_REDIRECT, REPLACE_CONVERSION, inventário de CTAs, estimativas e vínculos usam APIs administrativas reais.

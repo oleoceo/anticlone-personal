@@ -6,8 +6,11 @@ import {IncidentProjects, Incidents} from './incidents';
 import {createBrowserRouter, Link, RouterProvider, useBlocker, useLocation, useNavigate} from 'react-router-dom';
 import {AdminApi, type Project, type ProjectState, pageList} from './admin-api';
 import {base, Back, Breadcrumbs, type Crumb, installPath, newPagePath, offerPath, pagePath,
-  projectPath, projectsPath, readRoute, useContextNavigation, useRestoreScroll, conversionsPath, incidentsPath, projectIncidentsPath} from './navigation';
+  projectPath, projectsPath, readRoute, useContextNavigation, useRestoreScroll, conversionsPath, incidentsPath, projectIncidentsPath, overviewPath, settingsPath} from './navigation';
 import {emptyFields, OfferForm} from './offer-form';
+import {Overview} from './overview';
+import {Settings} from './settings';
+import {LifecycleControls} from './lifecycle';
 import {Installation} from './installation';
 import {Brand, Confirm, Failure, Heading, labels, Loading, useQuery} from './ui';
 import './style.css';
@@ -178,6 +181,9 @@ function Workspace({api, projects, project, pageId, installation, setGuard}: {
             <Link className="button" {...nav.link(pagePath(project.id, item.id))}>Abrir página</Link>
           </li>)}</ul>}
       </section>}
+    {!installation && (!pageId || page) && <DraftGuard key={page?.id ?? project.id} setGuard={setGuard}>
+      <LifecycleControls api={api} project={project} page={page} afterChange={list.revalidate} setGuard={setGuard}/>
+    </DraftGuard>}
   </>;
 }
 
@@ -208,6 +214,15 @@ function Authenticated({api, logout, guard, fields, setFields, setGuard}: {
   const currentPage = route.page ?? queryPage ?? (project ? nav.rememberedPage(project.id) : '');
   const incidentLink = nav.link(project ? projectIncidentsPath(project.id) : incidentsPath, currentPage ? '?lp=' + encodeURIComponent(currentPage) : '');
 
+  const active = route.kind === 'overview' ? 'overview' : route.kind === 'settings' ? 'settings' : incidentActive ? 'incidents' : 'projects';
+  const mainLinks = [
+    {id: 'overview', label: 'Visão Geral', link: nav.link(overviewPath)},
+    {id: 'projects', label: 'Meus Projetos', link: nav.link(projectsPath)},
+    {id: 'incidents', label: 'Incidentes', link: incidentLink},
+    {id: 'settings', label: 'Configurações', link: nav.link(settingsPath)},
+  ].map(item => <Link key={item.id} className={active === item.id ? 'nav-current' : undefined}
+    aria-current={active === item.id ? 'location' : undefined} {...item.link}>{item.label}</Link>);
+
   function finish(projectId: string, page: string) {
     const next = nav.link(installPath(projectId, page));
     setGuard('clean');
@@ -220,10 +235,7 @@ function Authenticated({api, logout, guard, fields, setFields, setGuard}: {
     <aside className="sidebar">
       <Brand/>
       <nav aria-label="Navegação principal">
-        <Link className={!incidentActive ? "nav-current" : undefined} aria-current={!incidentActive ? "location" : undefined}
-          {...nav.link(projectsPath)}>Meus Projetos</Link>
-        <Link className={incidentActive ? "nav-current" : undefined} aria-current={incidentActive ? "location" : undefined} {...incidentLink}>Incidentes</Link>
-        <a href="/admin/ui/">Painel anterior</a>
+        {mainLinks}
       </nav>
       <button type="button" disabled={guard === 'saving'} onClick={logout}>Sair da sessão</button>
     </aside>
@@ -233,6 +245,10 @@ function Authenticated({api, logout, guard, fields, setFields, setGuard}: {
         setFields={setFields} setGuard={setGuard} finish={finish}/> :
         projects.error !== undefined ? <Failure error={projects.error} retry={projects.retry}/> :
         !projects.data ? <Loading/> :
+        route.kind === 'overview' ? <Overview api={api} projects={projects.data}/> :
+        route.kind === 'settings' ? <DraftGuard key={location.pathname} setGuard={setGuard}>
+          <Settings api={api} projects={projects.data} section={route.section} setGuard={setGuard}/>
+        </DraftGuard> :
         route.kind === 'projects' ? <ProjectList api={api} projects={projects.data}/> :
         route.kind === 'incidents-home' ? <IncidentProjects projects={projects.data}/> :
         !project ? <><Heading title="Projeto indisponível"/><Back to={projectsPath}>Voltar para Meus Projetos</Back></> :
@@ -250,10 +266,7 @@ function Authenticated({api, logout, guard, fields, setFields, setGuard}: {
           installation={route.kind === 'installation'} setGuard={setGuard}/>}
     </main>
     <nav className="bottom-nav" aria-label="Navegação principal">
-      <Link className={!incidentActive ? "nav-current" : undefined} aria-current={!incidentActive ? "location" : undefined}
-        {...nav.link(projectsPath)}>Meus Projetos</Link>
-      <Link className={incidentActive ? "nav-current" : undefined} aria-current={incidentActive ? "location" : undefined} {...incidentLink}>Incidentes</Link>
-      <a href="/admin/ui/">Painel anterior</a>
+      {mainLinks}
     </nav>
   </div>;
 }
