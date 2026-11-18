@@ -1,4 +1,11 @@
 # STATUS — AntiClone Personal
+
+## Frontend V2.2 — Entrega A, base operacional
+- Painel React/TypeScript/Vite em `/admin/ui/novo/`, com sessão web e fronteira privada existentes, cadastro e instalação por LP.
+- Chromium/PostgreSQL: 18 testes no recorte de regressão, incluindo 5 do frontend, incluindo dois tamanhos de tela, MFA, histórico, conflitos e perda de resposta após cabeçalhos.
+- Revisão independente em `/root/review_entrega_a`: P1 reproduzido em queda pré-cabeçalhos, quando o Chromium repetiu o POST e o backend gravou dois projetos.
+- Cadastro sem duplicação nesse cenário depende da autorização de idempotência administrativa. Prova e cobertura pendente em [ADMIN-FRONTEND](docs/ADMIN-FRONTEND.md).
+
 ## PR #78 — P1: limites NPM obrigatórios
 - Base revisada 07120c0; mesma branch/PR, somente fragmentos NPM, fixtures/testes e documentação; apps/runtime/SQL/HTTPS direto intactos.
 - Zonas HTTP exclusivas com chave vazia fora do hostname; admissão no server AntiClone (inclui fallback): 2 req/s, burst20 nodelay, 10 ativas/IP,429 e dry-run off.

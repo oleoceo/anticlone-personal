@@ -1,3 +1,4 @@
+import {serveAdminFrontend} from './admin-frontend.js';
 import {registerProject,registrationHistory} from './project-registration.js';
 import {commerceAdmin,CommerceConflict} from './commerce.js';
 import {commerceScript} from './commerce-ui.js';
@@ -43,6 +44,7 @@ export function handleAdminUi(req: IncomingMessage, res: ServerResponse, db: Poo
   if (key && session && now() >= session.expiry) sessions.delete(key);
   if (req.method === 'GET') {
     if ((req.headers.origin && req.headers.origin !== origin) || (site && !['same-origin', 'none'].includes(site))) { res.writeHead(403).end(); return false; }
+    if (req.url && serveAdminFrontend(req.url, site, res)) return false;
     if (req.url === '/admin/ui/') { res.writeHead(200, {'Content-Type':'text/html; charset=utf-8'}).end(page); return false; }
     if (site !== 'same-origin') { res.writeHead(403).end(); return false; }
     if (req.url === '/admin/ui/app.css') { res.writeHead(200, {'Content-Type':'text/css; charset=utf-8'}).end(stylesheet); return false; }
