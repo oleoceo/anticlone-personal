@@ -1,10 +1,11 @@
 # STATUS — AntiClone Personal
 
-## Frontend V2.2 — Entrega A, base operacional (BLOCKED)
-- Painel React/TypeScript/Vite em `/admin/ui/novo/`, com sessão web e fronteira privada existentes, cadastro e instalação por LP.
-- Chromium/PostgreSQL: 18 testes no recorte de regressão, dos quais 5 exercitam o frontend com dois tamanhos de tela, MFA, histórico, conflitos e perda de resposta após cabeçalhos.
-- Revisão independente em `/root/review_entrega_a`: P1 reproduzido em queda pré-cabeçalhos, quando o Chromium repetiu o POST e o backend gravou dois projetos.
-- Cadastro sem duplicação nesse cenário depende da autorização de idempotência administrativa. Prova e cobertura pendente em [ADMIN-FRONTEND](docs/ADMIN-FRONTEND.md).
+## Frontend V2.2 — Entrega A, base operacional — PR #79
+- React/TypeScript/Vite em `/admin/ui/novo/`, sessão privada compartilhada com painel antigo, histórico, projetos e instalação por LP.
+- Cadastro de projeto usa UUID por intenção, chave primária e auditoria transacional. Equivalentes retornam 200 com a mesma identidade. Divergências retornam 409. Clientes sem chave seguem suportados.
+- Queda após commit e antes dos cabeçalhos: Chromium enviou dois POSTs e o servidor manteve um projeto e uma criação auditada. LP: 200 e 409, uma LP/URL e retomada na instalação.
+- 20 testes com PostgreSQL/Chromium, incluindo 7 da nova interface. Lint, typecheck e build passaram.
+- Revisão independente em `/root/review_entrega_a`, CI por SHA no PR em rascunho. Contrato e cobertura restante em [ADMIN-FRONTEND](docs/ADMIN-FRONTEND.md).
 
 ## PR #78 — P1: limites NPM obrigatórios
 - Base revisada 07120c0; mesma branch/PR, somente fragmentos NPM, fixtures/testes e documentação; apps/runtime/SQL/HTTPS direto intactos.

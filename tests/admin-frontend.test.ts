@@ -212,7 +212,66 @@ for (const width of [1440, 390]) {
   });
 }
 
-test('recovers the real committed project and LP after lost responses without repeating POST', {timeout: 90_000}, async t => {
+type CreationWrite = {target: 'project' | 'page'; status: number; key?: string | string[]};
+
+function interruptCreations(server: Awaited<ReturnType<typeof fixture>>['server'], beforeHeaders: boolean) {
+  const writes: CreationWrite[] = [];
+  server.prependListener('request', (req, res) => {
+    if (req.method !== 'POST' || !['/admin/ui/project-create', '/admin/ui/pages'].includes(req.url ?? '')) return;
+    let body = '';
+    req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+    res.end = new Proxy(res.end, {apply(end, response, args) {
+      const target = req.url === '/admin/ui/project-create' ? 'project' :
+        JSON.parse(body).action === 'create' ? 'page' : undefined;
+      if (target) {
+        const first = !writes.some(write => write.target === target);
+        writes.push({target, status: res.statusCode, key: req.headers['idempotency-key']});
+        if (first && res.statusCode === 200) {
+          // The real handler has committed before it prepares the HTTP response.
+          if (beforeHeaders) return res.destroy();
+          res.write('{', () => res.destroy());
+          return res;
+        }
+      }
+      return Reflect.apply(end, response, args);
+    }});
+  });
+  return writes;
+}
+
+test('transport replay before headers registers and audits one project, and LP uniqueness prevents a second page', {timeout: 90_000}, async t => {
+  const lab = await fixture(t);
+  const page = await lab.browser.newPage();
+  await page.goto(lab.origin + ui + '/projetos');
+  assert.equal(await login(page, lab.code()), 204);
+  await offer(page, 'Oferta retransmitida', 'https://transport.frontend.test');
+  await firstPage(page, 'Página retransmitida', 'https://transport.frontend.test/oferta');
+  const writes = interruptCreations(lab.server, true);
+  assert.equal(await page.evaluate(async () => (await fetch('/admin/ui/projects')).status), 200);
+
+  await action(page, 'Cadastrar oferta e página').click();
+  await page.getByRole('alert').filter({hasText: 'conflito'}).waitFor();
+  await action(page, 'Abrir instalação de Página retransmitida').click();
+  await page.getByRole('heading', {name: 'Instalar a proteção'}).waitFor();
+
+  const projectWrites = writes.filter(write => write.target === 'project');
+  const key = projectWrites[0].key;
+  assert.equal(typeof key, 'string');
+  assert.deepEqual(projectWrites.map(write => [write.status, write.key]), [[200, key], [200, key]]);
+  assert.deepEqual(writes.filter(write => write.target === 'page').map(write => write.status), [200, 409]);
+  assert.deepEqual((await lab.db.query('SELECT id, name, origin FROM projects')).rows,
+    [{id: key, name: 'Oferta retransmitida', origin: 'https://transport.frontend.test'}]);
+  assert.deepEqual((await lab.db.query('SELECT project_id, action FROM project_registration_audit')).rows,
+    [{project_id: key, action: 'CREATE_PROJECT'}]);
+  const pages = (await lab.db.query('SELECT id, project_id FROM protected_pages')).rows;
+  assert.equal(pages.length, 1);
+  assert.equal(pages[0].project_id, key);
+  assert.deepEqual((await lab.db.query('SELECT page_id, origin, pathname FROM protected_page_urls')).rows,
+    [{page_id: pages[0].id, origin: 'https://transport.frontend.test', pathname: '/oferta'}]);
+  assert.ok(page.url().endsWith('/lps/' + pages[0].id + '/instalacao'));
+});
+
+test('recovers the committed project and LP by their saved identities after truncated responses', {timeout: 90_000}, async t => {
   const lab = await fixture(t);
   const page = await lab.browser.newPage();
   await page.goto(lab.origin + ui + '/projetos');
@@ -220,35 +279,18 @@ test('recovers the real committed project and LP after lost responses without re
   const earlier = await registerProject(lab.db, {name: 'Oferta Retomada', origin: 'https://resume.frontend.test'});
   await offer(page, 'Oferta Retomada', 'https://resume.frontend.test');
   await firstPage(page, 'Página retomada', 'https://resume.frontend.test/inscricao');
-  const writes = {project: 0, page: 0};
+  const writes = interruptCreations(lab.server, false);
 
-  // Close the actual server connection after commit, with the browser's original auth headers.
-  lab.server.prependListener('request', (req, res) => {
-    if (req.method !== 'POST' || !['/admin/ui/project-create', '/admin/ui/pages'].includes(req.url ?? '')) return;
-    let body = '';
-    req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
-    res.end = new Proxy(res.end, {apply(end, response, args) {
-      const target = req.url === '/admin/ui/project-create' ? 'project' :
-        JSON.parse(body).action === 'create' ? 'page' : undefined;
-      if (target && ++writes[target] === 1 && res.statusCode === 200) {
-        if (target === 'project' && process.env.TEST_FRONTEND_DROP_BEFORE_HEADERS === '1') return res.destroy();
-        // A partial 200 body forces a lost response without triggering transport retry.
-        res.write('{', () => res.destroy());
-        return res;
-      }
-      return Reflect.apply(end, response, args);
-    }});
-  });
   await action(page, 'Cadastrar oferta e página').click();
   await page.getByRole('heading', {name: 'Conferir cadastro'}).waitFor();
   await page.getByRole('alert').waitFor();
-  assert.equal(writes.project, 1, 'project POSTs observed by the administrative server');
-  assert.equal((await lab.db.query('SELECT count(*)::int AS count FROM projects')).rows[0].count, 2);
+  assert.equal(writes.length, 1);
+  const recovered = (await lab.db.query('SELECT id FROM projects WHERE id <> $1', [earlier.id])).rows[0].id as string;
+  assert.equal(recovered, writes[0].key);
   page.once('dialog', dialog => void dialog.accept());
   assert.equal((await page.reload())?.status(), 200);
   await action(page, 'Consultar cadastro').click();
   await page.getByText('Oferta localizada.', {exact: false}).waitFor();
-  const recovered = (await lab.db.query('SELECT id FROM projects WHERE id <> $1', [earlier.id])).rows[0].id as string;
   assert.equal(await page.locator('.identifier').innerText(), recovered);
   await page.route('**/admin/ui/project-history', route => route.abort());
   await action(page, 'Consultar cadastro').click();
@@ -263,31 +305,115 @@ test('recovers the real committed project and LP after lost responses without re
   await action(page, 'Consultar cadastro').click();
   await action(page, 'Abrir instalação de Página retomada').click();
   await page.getByRole('heading', {name: 'Instalar a proteção'}).waitFor();
-  assert.deepEqual(writes, {project: 1, page: 1});
+  assert.deepEqual(writes.map(write => write.target), ['project', 'page']);
   assert.equal((await lab.db.query('SELECT count(*)::int AS count FROM projects')).rows[0].count, 2);
   assert.deepEqual((await lab.db.query('SELECT project_id FROM protected_pages')).rows, [{project_id: recovered}]);
 });
 
-test('an interrupted project write does not attach to a pre-existing homonym or reissue the command', {timeout: 60_000}, async t => {
+test('a project request lost before commit can be deliberately retried with the original key after reload', {timeout: 60_000}, async t => {
   const lab = await fixture(t);
-  await registerProject(lab.db, {name: 'Outra tentativa', origin: 'https://pending.frontend.test'});
+  const {id: homonym} = await registerProject(lab.db, {name: 'Outra tentativa', origin: 'https://pending.frontend.test'});
   const page = await lab.browser.newPage();
   await page.goto(lab.origin + ui + '/projetos');
   assert.equal(await login(page, lab.code()), 204);
   await offer(page, 'Outra tentativa', 'https://pending.frontend.test');
   await firstPage(page, 'Página pendente', 'https://pending.frontend.test/oferta');
-  let attempted = 0;
-  await page.route('**/admin/ui/project-create', async route => { attempted++; await route.abort(); });
+  const keys: string[] = [];
+  await page.route('**/admin/ui/project-create', async route => {
+    keys.push(route.request().headers()['idempotency-key']);
+    if (keys.length === 1) await route.abort();
+    else await route.continue();
+  });
   await action(page, 'Cadastrar oferta e página').click();
   await page.getByRole('alert').waitFor();
+  page.once('dialog', dialog => void dialog.accept());
+  assert.equal((await page.reload())?.status(), 200);
   await action(page, 'Consultar cadastro').click();
-  await page.getByText('Nenhuma oferta nova foi localizada.', {exact: false}).waitFor();
+  await page.getByText('O cadastro ainda não aparece', {exact: false}).waitFor();
   assert.equal(await action(page, 'Usar oferta localizada').count(), 0);
-  assert.equal(await action(page, 'Cadastrar oferta e página').count(), 0);
-  assert.equal(attempted, 1);
-  assert.equal((await lab.db.query('SELECT count(*)::int AS count FROM projects')).rows[0].count, 1);
+
+  await page.getByLabel('Nome da oferta').fill('Dados diferentes');
+  await page.getByLabel('Origem oficial').fill('https://pending.frontend.test');
+  await action(page, 'Reenviar cadastro da oferta').click();
+  await page.getByText('Informe o mesmo nome e a mesma origem do primeiro envio.').waitFor();
+  assert.equal(keys.length, 1);
+
+  await page.getByLabel('Nome da oferta').fill('Outra tentativa');
+  await action(page, 'Reenviar cadastro da oferta').click();
+  await page.getByRole('heading', {name: 'Informar página'}).waitFor();
+  assert.equal(typeof keys[0], 'string');
+  assert.deepEqual(keys, [keys[0], keys[0]]);
+  assert.deepEqual((await lab.db.query('SELECT id FROM projects WHERE id <> $1', [homonym])).rows, [{id: keys[0]}]);
+  assert.deepEqual((await lab.db.query('SELECT project_id FROM project_registration_audit WHERE project_id <> $1', [homonym])).rows,
+    [{project_id: keys[0]}]);
   assert.equal((await lab.db.query('SELECT count(*)::int AS count FROM protected_pages')).rows[0].count, 0);
 });
+
+test('project registration key handles concurrent replay, changed payload, legacy calls and audit rollback', {timeout: 60_000}, async t => {
+  const lab = await fixture(t);
+  const context = await lab.browser.newContext();
+  const page = await context.newPage();
+  await page.goto(lab.origin + ui);
+  assert.equal(await login(page, lab.code()), 204);
+  await page.getByRole('heading', {name: 'Meus Projetos'}).waitFor();
+
+  const session = (await context.cookies()).find(cookie => cookie.name === 'admin_session');
+  assert.ok(session);
+  const csrf = await page.evaluate(async () => (await (await fetch('/admin/ui/bootstrap')).json()).csrf as string);
+  const post = (name: string, origin: string, key?: string, extra: Record<string, string> = {}) =>
+    fetch(lab.origin + '/admin/ui/project-create', {
+      method: 'POST', body: JSON.stringify({name, origin}),
+      headers: {
+        origin: lab.origin, 'sec-fetch-site': 'same-origin', cookie: 'admin_session=' + session.value,
+        'content-type': 'application/json', 'x-csrf-token': csrf, ...(key ? {'idempotency-key': key} : {}), ...extra,
+      },
+    });
+
+  const key = randomUUID();
+  const origin = 'https://concurrent.frontend.test';
+  const replies = await Promise.all(Array.from({length: 8}, (_, index) =>
+    index % 2 ? post('  Oferta concorrente  ', 'https://CONCURRENT.frontend.test:443/', key.toUpperCase())
+      : post('Oferta concorrente', origin, key)));
+  for (const reply of replies) {
+    assert.equal(reply.status, 200);
+    assert.deepEqual(await reply.json(), {id: key, name: 'Oferta concorrente', origin});
+  }
+  assert.equal((await post('Outro nome', origin, key)).status, 409);
+  assert.equal((await post('Oferta concorrente', 'https://other.frontend.test', key)).status, 409);
+  assert.equal((await post('Oferta concorrente', origin, 'invalid')).status, 400);
+  assert.equal((await post('Oferta concorrente', origin, key, {'x-csrf-token': 'wrong'})).status, 403);
+  assert.deepEqual((await lab.db.query('SELECT id, name, origin FROM projects')).rows,
+    [{id: key, name: 'Oferta concorrente', origin}]);
+  assert.equal((await lab.db.query('SELECT count(*)::int AS count FROM project_registration_audit WHERE project_id=$1', [key])).rows[0].count, 1);
+
+  const raceKey = randomUUID();
+  const competing = await Promise.all([post('Oferta Alfa', origin, raceKey), post('Oferta Beta', origin, raceKey)]);
+  assert.deepEqual(competing.map(reply => reply.status).sort(), [200, 409]);
+  const winner = await competing.find(reply => reply.ok)!.json();
+  assert.deepEqual((await lab.db.query('SELECT name, origin FROM project_registration_audit WHERE project_id=$1', [raceKey])).rows,
+    [{name: winner.name, origin}]);
+
+  const legacy = await post('Oferta concorrente', origin);
+  assert.equal(legacy.status, 200);
+  const legacyId: string = (await legacy.json()).id;
+  assert.notEqual(legacyId, key);
+  assert.equal((await lab.db.query('SELECT count(*)::int AS count FROM project_registration_audit WHERE project_id=$1', [legacyId])).rows[0].count, 1);
+
+  const historicalKey = randomUUID();
+  await lab.db.query('INSERT INTO project_registration_audit(project_id,name,origin) VALUES($1,$2,$3)',
+    [historicalKey, 'Oferta histórica', origin]);
+  assert.equal((await post('Oferta histórica', origin, historicalKey)).status, 409);
+  assert.equal((await lab.db.query('SELECT count(*)::int AS count FROM projects WHERE id=$1', [historicalKey])).rows[0].count, 0);
+  assert.equal((await lab.db.query('SELECT count(*)::int AS count FROM project_registration_audit WHERE project_id=$1', [historicalKey])).rows[0].count, 1);
+
+  await lab.db.query("ALTER TABLE project_registration_audit ADD CHECK (name <> 'Bloqueio sintético')");
+  const rollbackKey = randomUUID();
+  assert.equal((await post('Bloqueio sintético', origin, rollbackKey)).status, 503);
+  assert.equal((await lab.db.query('SELECT count(*)::int AS count FROM projects WHERE id=$1', [rollbackKey])).rows[0].count, 0);
+  assert.equal((await lab.db.query('SELECT count(*)::int AS count FROM project_registration_audit WHERE project_id=$1', [rollbackKey])).rows[0].count, 0);
+  assert.equal((await post('Cadastro após rollback', origin, rollbackKey)).status, 200);
+});
+
 
 test('new and legacy consoles share the same MFA, session lifetime and private route boundary', {timeout: 90_000}, async t => {
   const lab = await fixture(t);

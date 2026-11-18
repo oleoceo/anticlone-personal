@@ -5,18 +5,13 @@ import {Failure, Heading, useQuery} from './ui';
 
 type Fields = {name: string; origin: string; pageName: string; url: string};
 export const emptyFields: Fields = {name: '', origin: '', pageName: '', url: ''};
+type PendingProject = {phase: 'project-write'; intent: string; digest: string};
 type Checkpoint =
-  | {phase: 'project-write'; digest: string; nameDigest: string; before: string[]}
+  | PendingProject
   | {phase: 'project-ready'; project: string}
   | {phase: 'page-write'; project: string; digest: string};
 
 const checkpointPrefix = 'anticlone:register:';
-
-export function clearRegistrationCheckpoints() {
-  try {
-    Object.keys(sessionStorage).filter(key => key.startsWith(checkpointPrefix)).forEach(key => sessionStorage.removeItem(key));
-  } catch { /* Storage may be unavailable in a private browser profile. */ }
-}
 
 function readCheckpoint(key: string): Checkpoint | null {
   try {
@@ -59,6 +54,7 @@ export function OfferForm({api, project, fields, setFields, setGuard, finish}: {
   const [busy, setBusy] = useState(false);
   const inFlight = useRef(false);
   const [canEdit, setCanEdit] = useState(false);
+  const [retryProject, setRetryProject] = useState(false);
   const [recoveredProject, setRecoveredProject] = useState<Project>();
   const [error, setError] = useState<unknown>();
   const [message, setMessage] = useState('');
@@ -95,6 +91,7 @@ export function OfferForm({api, project, fields, setFields, setGuard, finish}: {
     inFlight.current = true;
     setExistingPage(undefined);
     setRecoveredProject(undefined);
+    setRetryProject(false);
     setCanEdit(false);
     setBusy(true);
     setGuard('saving');
@@ -116,26 +113,34 @@ export function OfferForm({api, project, fields, setFields, setGuard, finish}: {
     finish(projectId, pageId);
   }
 
-  async function submit() {
+  async function createProject(pending?: PendingProject) {
     const name = fields.name.trim();
+    const origin = normalizedUrl(fields.origin, true);
+    const digest = await identity(name, origin);
+    if (pending && digest !== pending.digest) {
+      setRetryProject(true);
+      setMessage('Informe o mesmo nome e a mesma origem do primeiro envio.');
+      return;
+    }
+
+    const operation: PendingProject = pending ?? {phase: 'project-write', intent: crypto.randomUUID(), digest};
+    saveCheckpoint(operation);
+    let created: Project;
+    try {
+      created = await api.createProject(name, origin, operation.intent);
+    } catch (problem) {
+      if (!pending && problem instanceof AdminError && [400, 413].includes(problem.status)) saveCheckpoint(null);
+      throw problem;
+    }
+    saveCheckpoint({phase: 'project-ready', project: created.id});
+    return created.id;
+  }
+
+  async function submit() {
     const pageName = fields.pageName.trim();
     const url = normalizedUrl(fields.url, false);
-    let projectId = savedProject;
-    if (!projectId) {
-      const origin = normalizedUrl(fields.origin, true);
-      const projects = await api.request<Project[]>('projects');
-      saveCheckpoint({
-        phase: 'project-write', digest: await identity(name, origin), nameDigest: await identity(name),
-        before: projects.filter(candidate => candidate.name === name).map(candidate => candidate.id),
-      });
-      try {
-        projectId = (await api.request<Project>('project-create', {name, origin})).id;
-      } catch (problem) {
-        if (rejected(problem)) saveCheckpoint(null);
-        throw problem;
-      }
-      saveCheckpoint({phase: 'project-ready', project: projectId});
-    }
+    const projectId = savedProject ?? await createProject();
+    if (!projectId) return;
 
     saveCheckpoint({phase: 'page-write', project: projectId, digest: await identity(pageName, url)});
     let page: string;
@@ -157,24 +162,26 @@ export function OfferForm({api, project, fields, setFields, setGuard, finish}: {
 
   async function reconcile(pending: Exclude<Checkpoint, {phase: 'project-ready'}>) {
     if (pending.phase === 'project-write') {
-      const projects = await api.request<Project[]>('projects');
-      const matches = [];
-      for (const candidate of projects) {
-        if (pending.before.includes(candidate.id) || await identity(candidate.name) !== pending.nameDigest) continue;
-        const history = await api.request<ProjectHistory>('project-history', {project: candidate.id});
-        for (const entry of history.registration) {
-          if (entry.project_id === candidate.id && await identity(entry.name, entry.origin) === pending.digest) {
-            matches.push(candidate);
-            break;
-          }
-        }
+      if (!pending.intent) {
+        setMessage('Esta tentativa é anterior à identificação do cadastro. Confira Meus Projetos.');
+        return;
       }
-      if (matches.length === 1) {
-        setRecoveredProject(matches[0]);
-        setMessage('Oferta localizada. Confira a identificação antes de vincular a página.');
+      const history = await api.request<ProjectHistory>('project-history', {project: pending.intent});
+      const original = history.registration.at(-1);
+      if (!original) {
+        setRetryProject(true);
+        setMessage('O cadastro ainda não aparece no histórico. Você pode reenviar a mesma tentativa.');
+      } else if (await identity(original.name, original.origin) !== pending.digest) {
+        setMessage('A identificação desta tentativa pertence a outro cadastro. Confira Meus Projetos.');
       } else {
-        setMessage(matches.length ? 'Mais de uma oferta nova corresponde ao cadastro. Abra Meus Projetos para conferir.' :
-          'Nenhuma oferta nova foi localizada. Consulte novamente ou confira Meus Projetos. A gravação pode ainda estar em andamento.');
+        const projects = await api.request<Project[]>('projects');
+        const candidate = projects.find(project => project.id === pending.intent);
+        if (candidate) {
+          setRecoveredProject(candidate);
+          setMessage('Oferta localizada. Confira a identificação antes de vincular a página.');
+        } else {
+          setMessage('O cadastro aparece no histórico, mas a oferta está indisponível.');
+        }
       }
       return;
     }
@@ -211,6 +218,13 @@ export function OfferForm({api, project, fields, setFields, setGuard, finish}: {
     setStep(step + 1);
   }
 
+  const projectFields = <>
+    <label>Nome da oferta<input autoComplete="off" required maxLength={100} value={fields.name}
+      onChange={event => update('name', event.target.value)}/></label>
+    <label>Origem oficial<input type="url" inputMode="url" required maxLength={2048} value={fields.origin}
+      placeholder="https://…" onChange={event => update('origin', event.target.value)}/></label>
+  </>;
+
   return <>
     <Breadcrumbs items={[{label: 'Meus Projetos', path: projectsPath},
       ...(project ? [{label: project.name, path: parent}] : []),
@@ -231,6 +245,18 @@ export function OfferForm({api, project, fields, setFields, setGuard, finish}: {
         <p>O servidor pode ter gravado o cadastro. Consulte o resultado antes de enviar novamente.</p>
         <button className="primary" type="button" disabled={busy}
           onClick={() => void run(() => reconcile(checkpoint))}>{busy ? 'Consultando…' : 'Consultar cadastro'}</button>
+        {retryProject && checkpoint.phase === 'project-write' && <form onSubmit={event => {
+          event.preventDefault();
+          void run(async () => {
+            if (await createProject(checkpoint)) {
+              setStep(1);
+              setAcknowledged(false);
+            }
+          });
+        }}>
+          {projectFields}
+          <div className="actions"><button type="submit" disabled={busy}>Reenviar cadastro da oferta</button></div>
+        </form>}
         {recoveredProject && <div className="notice">
           <strong>{recoveredProject.name}</strong>
           <p className="identifier">{recoveredProject.id}</p>
@@ -251,12 +277,7 @@ export function OfferForm({api, project, fields, setFields, setGuard, finish}: {
         }}>Revisar dados do cadastro</button>}
       </> : <form onSubmit={advance}>
         <h2>{['Identificar oferta', 'Informar página', 'Confira antes de cadastrar'][step]}</h2>
-        {step === 0 && <>
-          <label>Nome da oferta<input autoComplete="off" required maxLength={100} value={fields.name}
-            onChange={event => update('name', event.target.value)}/></label>
-          <label>Origem oficial<input type="url" inputMode="url" required maxLength={2048} value={fields.origin}
-            placeholder="https://…" onChange={event => update('origin', event.target.value)}/></label>
-        </>}
+        {step === 0 && projectFields}
         {step === 1 && <>
           <label>Nome da página<input autoComplete="off" required maxLength={100} value={fields.pageName}
             onChange={event => update('pageName', event.target.value)}/></label>

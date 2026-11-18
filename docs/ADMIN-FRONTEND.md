@@ -5,7 +5,7 @@ O painel abre em `/admin/ui/novo/` pela conexão privada já usada para `/admin/
 ## Base operacional
 
 - **Meus Projetos.** Lista real com filtro por nome e estado, seleção de projeto e LP e URLs autorizadas. O endereço da tela identifica projeto e LP. O estado do navegador conserva busca e contexto do retorno.
-- **Proteger oferta.** Revisão seguida de cadastro do projeto e da primeira LP em duas operações. Uma LP também pode ser cadastrada em um projeto existente. O formulário mantém os campos enquanto a aba estiver aberta. Após resultado incerto, a UI consulta o catálogo e a auditoria de cadastro ou a lista de LPs para identificar a gravação anterior. Sem um candidato novo de projeto, mantém a tentativa pendente. O checkpoint por aba guarda identificadores e resumos SHA-256, sem senha, TOTP, CSRF ou valores do formulário.
+- **Proteger oferta.** Revisão seguida de cadastro do projeto e da primeira LP em duas operações. Uma LP também pode ser cadastrada em um projeto existente. O formulário mantém os campos enquanto a aba estiver aberta. Após uma resposta incerta, a UI consulta a auditoria pelo UUID da tentativa ou a lista de LPs. O operador pode reenviar a mesma intenção de projeto com os dados originais. O checkpoint por aba guarda identificadores e resumos SHA-256, sem senha, TOTP, CSRF ou valores do formulário.
 - **Instalar e conferir.** Publicação explícita por LP, HTML e CSS do servidor, três papéis com 12 recursos, rotação e histórico, diagnóstico e coleta na origem principal. Verificação controlada depende do verificador isolado configurado no admin. Sinais e tráfego de aliases conservam o nível de evidência do servidor.
 
 ## Cobertura a migrar
@@ -18,12 +18,8 @@ O painel abre em `/admin/ui/novo/` pela conexão privada já usada para `/admin/
 
 Com `TEST_DATABASE_URL` de laboratório, execute `npm run build` e `node --test dist/tests/admin-frontend.test.js`. O teste usa Chromium, o servidor administrativo real, TOTP e schemas PostgreSQL descartáveis, com URLs reservadas ao laboratório. As perdas de resposta são induzidas após o servidor real confirmar a gravação. O teste mobile usa toque e viewport reduzido. O verificador isolado continua coberto pela suíte de backend HTTPS quando habilitada.
 
-### Reenvio de transporte no cadastro de projeto
+### Idempotência e retransmissão
 
-O comando abaixo ativa a queda da conexão depois do commit e antes dos cabeçalhos da resposta. No Chromium, uma confirmação chegou duas vezes ao servidor. Como o contrato de cadastro permite projetos com o mesmo nome e origem, as duas tentativas gravaram projetos distintos. O caso fica pendente de mudança de escopo no servidor.
+`POST /admin/ui/project-create` aceita o cabeçalho opcional `Idempotency-Key` com UUID v4. O painel novo guarda o UUID antes da primeira chamada e o reutiliza após erro ou atualização da página. O servidor usa a chave primária do projeto e a auditoria na mesma transação. Para um UUID já usado, nome normalizado e origem equivalentes retornam o projeto existente com HTTP 200. Uma divergência retorna HTTP 409. Clientes anteriores podem continuar enviando apenas nome e origem.
 
-```powershell
-$env:TEST_FRONTEND_DROP_BEFORE_HEADERS = '1'
-node --test --test-name-pattern=recovers dist/tests/admin-frontend.test.js
-Remove-Item Env:TEST_FRONTEND_DROP_BEFORE_HEADERS
-```
+O teste `transport replay before headers` corta a conexão depois do commit e antes dos cabeçalhos da primeira resposta. O Chromium retransmite os dois cadastros. Projeto retorna 200 nas duas tentativas e mantém uma linha e uma criação auditada. A segunda tentativa de LP recebe 409 pela unicidade de origem e caminho. O teste confirma uma única LP e URL e abre a instalação do registro confirmado. O contrato de LP foi mantido. A mesma suíte cobre corpo truncado, retomada com o mesmo UUID, concorrência, payload divergente e rollback por falha de auditoria.

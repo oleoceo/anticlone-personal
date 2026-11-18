@@ -64,9 +64,13 @@ export class AdminApi {
     this.session = undefined;
   }
 
-  async request<T>(path: string, body?: object, signal?: AbortSignal): Promise<T> {
+  createProject(name: string, origin: string, intent: string) {
+    return this.request<Project>('project-create', {name, origin}, undefined, intent);
+  }
+
+  async request<T>(path: string, body?: object, signal?: AbortSignal, intent?: string): Promise<T> {
     try {
-      return await this.send<T>(path, body, signal);
+      return await this.send<T>(path, body, signal, intent);
     } catch (error) {
       if (error instanceof AdminError && [401, 403].includes(error.status)) {
         // The existing server can return 403 before checking session expiry.
@@ -77,12 +81,15 @@ export class AdminApi {
     }
   }
 
-  private async send<T>(path: string, body?: object, signal?: AbortSignal): Promise<T> {
+  private async send<T>(path: string, body?: object, signal?: AbortSignal, intent?: string): Promise<T> {
     const response = await fetch(apiRoot + path, {
       credentials: 'same-origin', cache: 'no-store', signal,
       ...(body === undefined ? {} : {
         method: 'POST',
-        headers: {'Content-Type': 'application/json', 'X-CSRF-Token': this.session?.csrf ?? ''},
+        headers: {
+        'Content-Type': 'application/json', 'X-CSRF-Token': this.session?.csrf ?? '',
+        ...(intent ? {'Idempotency-Key': intent} : {}),
+      },
         body: JSON.stringify(body),
       }),
     });

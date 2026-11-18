@@ -4,7 +4,7 @@ import {createBrowserRouter, Link, RouterProvider, useBlocker, useLocation, useN
 import {AdminApi, type Project, type ProjectState, pageList} from './admin-api';
 import {base, Back, Breadcrumbs, type Crumb, installPath, newPagePath, offerPath, pagePath,
   projectPath, projectsPath, readRoute, useContextNavigation, useRestoreScroll} from './navigation';
-import {clearRegistrationCheckpoints, emptyFields, OfferForm} from './offer-form';
+import {emptyFields, OfferForm} from './offer-form';
 import {Installation} from './installation';
 import {Brand, Confirm, Failure, Heading, labels, Loading, useQuery} from './ui';
 import './style.css';
@@ -293,7 +293,6 @@ function App() {
     previouslyAuthenticated.current = false;
     try {
       await api.logout();
-      clearRegistrationCheckpoints();
       setFields(emptyFields);
       setGuard('clean');
     } catch (error) {
