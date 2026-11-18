@@ -15,6 +15,10 @@ const reviewStates: Record<string, string> = {unverified: 'Não verificado', inv
   confirmed_copy: 'Cópia confirmada', false_positive: 'Falso positivo'};
 type InstallationSummary = {state: string; diagnostic?: {status: string; controlledVerification: {status: string}}};
 
+function quantity(count: number, singular: string, plural: string) {
+  return count + ' ' + (count === 1 ? singular : plural);
+}
+
 export function Overview({api, projects}: {api: AdminApi; projects: Project[]}) {
   const nav = useContextNavigation();
   const location = useLocation();
@@ -98,10 +102,11 @@ export function Overview({api, projects}: {api: AdminApi; projects: Project[]}) 
           <div className="panel-heading"><strong>{row.project.name}</strong>
             <Link {...nav.link(projectPath(row.project.id))}>Administrar oferta</Link></div>
           <p>{row.state ? (labels[row.state.state] ?? row.state.state) + ' · ' +
-            row.state.pages.filter(item => item.enabled && item.lifecycle_state === 'ACTIVE').length + ' LP(s) habilitadas e ativas no cadastro' :
+            quantity(row.state.pages.filter(item => item.enabled && item.lifecycle_state === 'ACTIVE').length,
+              'LP habilitada e ativa no cadastro', 'LPs habilitadas e ativas no cadastro') :
             'Cadastro de LPs indisponível'}</p>
           {row.incidents ? <>
-            <p>{row.incidents.length} incidente(s) no histórico retornado</p>
+            <p>{quantity(row.incidents.length, 'incidente', 'incidentes')} no histórico retornado</p>
             {row.incidents.slice(0, 3).map(item => <div key={item.incident_id}>
               <Link {...nav.link(incidentPath(row.project.id, item.incident_id))}>{item.host}</Link> · {reviewStates[item.status] ?? item.status}
             </div>)}
@@ -112,7 +117,7 @@ export function Overview({api, projects}: {api: AdminApi; projects: Project[]}) 
       <h2>Instalações e alertas</h2>
       {!project ? <p>Selecione um projeto para consultar alertas em revisão e uma LP para ver o diagnóstico.</p> : <>
         {alerts.error !== undefined ? <Failure error={alerts.error} retry={alerts.revalidate}/> : alerts.pending ? <Loading/> :
-          <p>{alerts.data?.state === 'AVAILABLE' ? alerts.data.items.length + ' alerta(s) no recorte de revisão' : 'Revisão de alertas indisponível'}</p>}
+          <p>{alerts.data?.state === 'AVAILABLE' ? quantity(alerts.data.items.length, 'alerta', 'alertas') + ' no recorte de revisão' : 'Revisão de alertas indisponível'}</p>}
         {page ? <>
           {installation.error !== undefined ? <Failure error={installation.error} retry={installation.revalidate}/> :
             installation.pending ? <Loading/> : <p>{installation.data?.state === 'PUBLISHED' ? 'Endereços publicados' :

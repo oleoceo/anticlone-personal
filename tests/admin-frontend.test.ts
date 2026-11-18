@@ -814,10 +814,13 @@ for (const width of [1440, 390]) {
     await page.getByRole('heading', {name:'Visão Geral'}).waitFor();
     await page.getByText('R$ 6,00', {exact:true}).waitFor();
     await page.getByRole('link', {name:'sinal.frontend.test'}).waitFor();
+    await page.getByText('1 LP habilitada e ativa no cadastro', {exact:false}).waitFor();
+    await page.getByText('1 incidente no histórico retornado', {exact:true}).waitFor();
     await page.getByLabel('Período dos resultados').selectOption('1');
     await page.getByRole('combobox', {name:/^Projeto/}).selectOption(project.id);
     await page.getByLabel('LP para diagnóstico').selectOption(lp.page);
     await page.getByText('Endereços ainda não publicados', {exact:false}).waitFor();
+    await page.getByText('0 alertas no recorte de revisão', {exact:true}).waitFor();
     await capture('01-visao-geral');
     await capture('02-instalacoes-alertas', 'Instalações e alertas');
     await page.getByRole('link', {name:'Administrar oferta'}).click();
@@ -859,10 +862,14 @@ for (const width of [1440, 390]) {
     await action(page, 'Revisar nova URL').click();
     await action(page, 'Confirmar').click();
     await page.getByRole('button', {name:'Remover URL', exact:true}).first().waitFor();
+    await page.getByRole('status').filter({hasText:/^URL autorizada para a LP\.$/}).waitFor();
+    assert.equal(await page.getByText('undefined · alteração registrada.', {exact:true}).count(), 0);
     await capture('04-gestao-lp', 'Gestão da LP');
     await page.getByRole('listitem').filter({hasText:original + '/variacao Remover URL'}).getByRole('button', {name:'Remover URL'}).click();
     await action(page, 'Confirmar').click();
     await action(page, 'Remover URL').first().waitFor({state:'hidden'});
+    await page.getByRole('status').filter({hasText:/^URL removida da LP\.$/}).waitFor();
+    assert.equal(await page.getByText('undefined · alteração registrada.', {exact:true}).count(), 0);
     await page.getByText('Exclusão da LP', {exact:true}).click();
     await action(page, 'Consultar impacto').click();
     await action(page, 'Confirmar').click();

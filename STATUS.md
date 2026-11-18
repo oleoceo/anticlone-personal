@@ -1,6 +1,7 @@
 # STATUS — AntiClone Personal
 
 ## Frontend V2.2 — Entrega C
+- Fechamento A+B+C no PR #81. Confirmações de URL e contagens corrigidas no frontend, com regressões integradas. Sequência de integração e checklist de homologação documentados.
 - Base 64ad977, branch feat/admin-frontend-completion. Visão Geral usa relatórios existentes, com cliques, estimativas e vendas por moeda, projetos, incidentes e diagnóstico por LP.
 - Configurações integra SMTP, preferência de envio, revisão de alertas, modelos, contas e webhooks. A gestão inclui URLs, pausa, reativação, arquivo, exclusão e restauração de projeto.
 - Playwright desktop/mobile e regressões A+B+C com PostgreSQL isolado. Lint, typecheck e build. Revisão independente `/root/b_review` com correções de rascunho, cancelamento e interação mobile.

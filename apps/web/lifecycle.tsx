@@ -5,9 +5,11 @@ import {Failure, labels, Loading, useQuery} from './ui';
 
 type Lifecycle = {state: string; version: string; deletedAt: string | null; audit?: unknown[];
   confirmation?: string; inventory?: Record<string, number>; remove?: Record<string, number>; retain?: Record<string, number>};
-const names: Record<string, string> = {'pause-project': 'Pausar projeto', 'resume-project': 'Reativar projeto',
+const names = {'pause-project': 'Pausar projeto', 'resume-project': 'Reativar projeto',
   'pause-page': 'Pausar LP', 'resume-page': 'Reativar LP', 'archive-project': 'Arquivar projeto',
-  'restore-project': 'Restaurar projeto', 'delete-project': 'Excluir projeto', 'delete-page': 'Excluir LP'};
+  'restore-project': 'Restaurar projeto', 'delete-project': 'Excluir projeto', 'delete-page': 'Excluir LP',
+  'add-url': 'Autorizar URL', 'remove-url': 'Remover URL autorizada'};
+type LifecycleAction = keyof typeof names;
 
 export function LifecycleControls({api, project, page, afterChange, setGuard}: {
   api: AdminApi; project: Project; page?: Page; afterChange: () => void; setGuard: SetGuard;
@@ -25,13 +27,15 @@ export function LifecycleControls({api, project, page, afterChange, setGuard}: {
   const record = lifecycle.data;
   const scope = {project: project.id, ...(page ? {page: page.id} : {})};
   const refresh = () => { projectState.revalidate(); lifecycle.revalidate(); setPreview(undefined); };
-  const apply = async (action: string, fields: object = {}) => {
+  const apply = async (action: LifecycleAction, fields: object = {}) => {
     await api.request('pages', {...scope, action, ...fields});
     refresh();
     afterChange();
+    if (action === 'add-url') return 'URL autorizada para a LP.';
+    if (action === 'remove-url') return 'URL removida da LP.';
     return names[action] + ' · alteração registrada.';
   };
-  function stateButton(action: string) {
+  function stateButton(action: LifecycleAction) {
     return <button type="button" disabled={disabled} onClick={() => operation.review(names[action],
       <><p>{project.name}{page ? ' · ' + page.name : ''}</p>
         <p>{action.startsWith('pause') ? 'A pausa suspende novas decisões neste escopo.' :
@@ -55,7 +59,7 @@ export function LifecycleControls({api, project, page, afterChange, setGuard}: {
           <form onSubmit={event => {
             const fields = formData(event);
             const url = value(fields, 'url');
-            operation.review('Autorizar URL', <p>{page.name} · {url}</p>, () => apply('add-url', {url}), fields);
+            operation.review(names['add-url'], <p>{page.name} · {url}</p>, () => apply('add-url', {url}), fields);
           }}>
             <label>Nova URL autorizada<input name="url" type="url" required maxLength={2048}/></label>
             <button type="submit" disabled={disabled}>Revisar nova URL</button>
@@ -63,7 +67,7 @@ export function LifecycleControls({api, project, page, afterChange, setGuard}: {
           {page.urls.length > 1 && <ul className="plain evidence-list">{page.urls.map(item => {
             const url = item.origin + item.pathname;
             return <li key={url}>{url} <button type="button" disabled={disabled} onClick={() =>
-              operation.review('Remover URL autorizada', <p>{page.name} · {url}</p>, () => apply('remove-url', {url}))}>Remover URL</button></li>;
+              operation.review(names['remove-url'], <p>{page.name} · {url}</p>, () => apply('remove-url', {url}))}>Remover URL</button></li>;
           })}</ul>}
         </>}
       </> : <>
