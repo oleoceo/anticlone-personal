@@ -35,7 +35,7 @@ export type Incident = {
   first_observed_at: string; last_observed_at: string;
   observation_sources: {source: string; day: string}[];
   browser_claims: {traffic_class: string; source: string; observed_at: string}[];
-  contextual_assessment: unknown;
+  contextual_assessment: {reason?: string} | null;
   operator_profile: unknown;
   assessments: unknown[];
   linked_evidence: {available: boolean; events: Record<string, unknown>[]; total: number; omitted: number};

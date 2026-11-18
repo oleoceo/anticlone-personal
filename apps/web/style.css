@@ -137,6 +137,7 @@ code { font-family: Consolas, "Courier New", monospace; }
 .allocation { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; }
 fieldset { border: 1px solid var(--border); border-radius: 8px; padding: .8rem; min-inline-size: 0; margin: 0; }
 legend { color: var(--muted); padding-inline: .25rem; }
+.estimate-grid { align-items: start; }
 .operation-grid { display: grid; gap: .8rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); }
 .operation-card { min-width: 0; padding: 1rem; border: 1px solid var(--border); border-radius: 8px; }
 .operation-card > * + * { margin-top: .65rem; }

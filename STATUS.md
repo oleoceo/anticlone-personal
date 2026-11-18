@@ -1,6 +1,7 @@
 # STATUS — AntiClone Personal
 
 ## Frontend V2.2 — Entrega B, operações a partir de incidentes
+- Refinamento visual no PR #80: resultado financeiro no formulário, resumo de destinos de CTA e estado/escopo da proteção. Consultas existentes, sem mudança no servidor. Nove testes integrados passaram, com Chromium em desktop e mobile emulado. Revisão independente `/root/b_review` favorável ao delta.
 - Base c35180e, branch feat/admin-frontend-protection. Incidentes, triagem, PAGE_REDIRECT, REPLACE_CONVERSION, inventário de CTAs, estimativas e vínculos usam APIs administrativas reais.
 - Publicação, aprovação da LP e autorização são etapas distintas. Autorização React confere a aprovação esperada sob lock; clientes legados seguem compatíveis.
 - E2E desktop/mobile com PostgreSQL e Chromium passou, incluindo aprovação concorrente HTTP 409 sem escrita, superfície de outra LP, premissas e isolamento comercial.

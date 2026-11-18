@@ -77,7 +77,7 @@ export function Incidents({api, project, id, action, setGuard}: {
 
   return <>
     <Breadcrumbs items={[...trail, ...(id ? [{label: incident?.host ?? 'Incidente', path: action ? detailPath : undefined, search: scopeSearch}] : []),
-      ...(action ? [{label: action === 'redirecionar' ? 'Redirecionar página' : 'Substituir CTA'}] : [])]}/>
+      ...(action ? [{label: action === 'redirecionar' ? 'Redirecionar página' : 'Substituir checkout/CTA'}] : [])]}/>
     {id ? <Back to={action ? detailPath : listPath} search={scopeSearch}>
       {action ? 'Voltar para investigação' : 'Voltar para Incidentes'}</Back> :
       <Back to={projectPath(project.id)}>Voltar para {project.name}</Back>}
@@ -110,7 +110,7 @@ export function Incidents({api, project, id, action, setGuard}: {
     </>}
     {id && incidents.data && !incident && <Heading title="Incidente indisponível" description="Confira o projeto e o histórico disponível."/>}
     {incident && <>
-      {!action && <Heading title={incident.host} description={statuses[incident.status] ?? incident.status}
+      {!action && <Heading title={incident.host} description={'Situação da investigação · ' + (statuses[incident.status] ?? incident.status)}
         actions={<button type="button" onClick={incidents.revalidate}>Atualizar investigação</button>}/>}
       <div className="selectors">{choosePage()}</div>
       {selected && <p><Link {...nav.link(pagePath(project.id, selected.id))}>Abrir {selected.name} na oferta</Link></p>}
@@ -121,6 +121,11 @@ export function Incidents({api, project, id, action, setGuard}: {
         actionUrl={detailPath} search={scopeSearch} refresh={incidents.revalidate} setGuard={setGuard}/>}
     </>}
   </>;
+}
+
+function riskLabel(assessment: Incident['contextual_assessment']) {
+  if (assessment?.reason === 'insufficient_evidence') return 'Indeterminado · evidência insuficiente';
+  return 'Sem avaliação conclusiva disponível';
 }
 
 function IncidentDetail({incident, project, api, pid, actionUrl, search, refresh, setGuard}: {
@@ -136,12 +141,13 @@ function IncidentDetail({incident, project, api, pid, actionUrl, search, refresh
       <p>Selecione a LP e revise as etapas de publicação, aprovação e autorização para o contexto observado.</p>
       <div className="action-links">
         <Link className="button primary" {...nav.link(actionUrl + '/redirecionar', search)}>Redirecionar página</Link>
-        <Link className="button" {...nav.link(actionUrl + '/substituir-cta', search)}>Substituir CTA</Link>
+        <Link className="button" {...nav.link(actionUrl + '/substituir-cta', search)}>Substituir checkout/CTA</Link>
       </div>
     </section>
     <section className="panel">
       <h2>Evidências</h2>
       <dl className="review">
+        <dt>Risco contextual</dt><dd>{riskLabel(incident.contextual_assessment)}</dd>
         <dt>Primeiro sinal</dt><dd>{formatDate(incident.first_observed_at)}</dd>
         <dt>Sinal mais recente</dt><dd>{formatDate(incident.last_observed_at)}</dd>
         <dt>Fontes observadas</dt><dd>{[...new Set(incident.observation_sources.map(item => sources[item.source] ?? item.source))].join(', ') || 'Indisponíveis'}</dd>

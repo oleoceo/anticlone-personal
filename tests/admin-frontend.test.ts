@@ -557,11 +557,11 @@ for (const width of [1440, 390]) {
       if (!captureRoot) return;
       const folder = join(captureRoot, width < 760 ? 'mobile' : 'desktop');
       await mkdir(folder, {recursive: true});
-      if (focus && width < 760) await page.getByRole('heading', {name: focus, exact: true}).evaluate(element => {
+      if (focus) await page.getByRole('heading', {name: focus, exact: true}).evaluate(element => {
         window.scrollBy(0, element.getBoundingClientRect().top - 15);
       });
       else await page.evaluate(() => window.scrollTo(0, 0));
-      await page.screenshot({path: join(folder, name + '.png'), animations: 'disabled'});
+      await page.screenshot({path: join(folder, name + '.png'), animations: 'disabled', fullPage: width < 760 && ['02-investigacao', '06-estimativa'].includes(name)});
     }
 
     await page.goto(lab.origin + ui + '/incidentes');
@@ -583,6 +583,8 @@ for (const width of [1440, 390]) {
     await page.getByText('Histórico de recibos da LP', {exact: true}).click();
     await action(page, 'Consultar histórico').click();
     await page.getByText('Nenhum recibo no recorte.').waitFor();
+    await page.getByText('Situação da investigação · Em investigação', {exact:true}).waitFor();
+    await page.getByText('Indeterminado · evidência insuficiente', {exact:true}).waitFor();
     await capture('02-investigacao');
     await page.getByRole('link', {name: 'Redirecionar página', exact: true}).click();
     await page.getByRole('heading', {name: 'Redirecionar página', exact: true}).waitFor();
@@ -642,19 +644,22 @@ for (const width of [1440, 390]) {
     await page.getByText('Autorização registrada. Revisão 1.').waitFor();
     assert.deepEqual((await lab.db.query('SELECT copy_origin,copy_pathname,enabled FROM page_operational_authorizations')).rows,
       [{copy_origin:observedDomain,copy_pathname:'/evidencia',enabled:true}]);
-    await capture('03-redirecionamento', 'Autorizar contexto operacional');
+    const summary = page.getByRole('region', {name:'Estado e escopo da proteção'});
+    await summary.getByText('Autorização corresponde à aprovação consultada.', {exact:false}).waitFor();
+    await summary.getByText(observedDomain + '/evidencia · revisão 1', {exact:true}).waitFor();
+    await capture('03-redirecionamento', 'Estado e escopo da proteção');
 
     await page.getByLabel('Destino da página').fill(original + '/rascunho');
     await action(page, 'Suspender autorização').click();
     await action(page, 'Confirmar').click();
-    await page.getByText('Autorização suspensa.').waitFor();
+    await summary.getByText('Autorização suspensa.', {exact:true}).waitFor();
     await action(page, '← Voltar para investigação').click();
     await action(page, 'Cancelar').click();
     assert.equal(await page.getByLabel('Destino da página').inputValue(), original + '/rascunho');
     await action(page, '← Voltar para investigação').click();
     await action(page, 'Descartar e sair').click();
-    await page.getByRole('link', {name: 'Substituir CTA', exact: true}).click();
-    await page.getByRole('heading', {name: 'Substituir CTA', exact: true}).waitFor();
+    await page.getByRole('link', {name: 'Substituir checkout/CTA', exact: true}).click();
+    await page.getByRole('heading', {name: 'Substituir checkout/CTA', exact: true}).waitFor();
     await page.getByLabel('Superfície de CTA').fill('principal');
     await page.getByLabel('Habilitar nesta versão').check();
     await page.getByLabel('Direto ou desconhecido').selectOption('100');
@@ -690,7 +695,12 @@ for (const width of [1440, 390]) {
     await importCapture(8900);
     await page.getByText('Mudança comercial pendente de revisão.').waitFor();
     await approveTerms();
-    await capture('04-inventario-cta', 'compra01');
+    await action(page, 'Revisar destinos e mapeamentos no inventário').click();
+    assert.equal(await page.getByRole('region', {name:'Pontos de conversão'}).evaluate(element => document.activeElement === element), true);
+    await page.getByText('Âncora mapeada a destino aprovado', {exact:true}).waitFor();
+    await page.getByText('Destino aprovado · ' + original + '/seguro', {exact:true}).waitFor();
+    await capture('04-inventario-cta', 'Pontos de conversão');
+    await capture('09-checkout-destinos', 'CTAs e destinos da LP');
     await page.getByLabel('principal · versão 1', {exact:true}).check();
     await action(page, 'Revisar aprovação').click();
     await page.getByRole('dialog', {name:'Aprovar versões na LP'}).waitFor();
@@ -704,7 +714,8 @@ for (const width of [1440, 390]) {
     await page.getByText('Autorização registrada. Revisão 3.').waitFor();
     assert.equal((await lab.db.query('SELECT count(*)::int AS n FROM page_entry_policy_bindings')).rows[0].n, 1);
     assert.equal((await lab.db.query('SELECT count(*)::int AS n FROM page_cta_policy_bindings')).rows[0].n, 1);
-    await capture('05-substituicao-cta', 'Aprovar políticas na LP');
+    await summary.getByText('Redirecionamento v1, principal v1 · aprovação', {exact:false}).waitFor();
+    await capture('05-substituicao-cta', 'Estado e escopo da proteção');
     await action(page, '← Voltar para investigação').click();
     await action(page, '← Voltar para Incidentes').click();
     assert.equal(page.url(), incidentsUrl);
@@ -719,9 +730,15 @@ for (const width of [1440, 390]) {
     await action(page, 'Revisar premissas').click();
     await action(page, 'Confirmar').click();
     await page.getByText('Estimativa configurada. Versão 1', {exact:false}).waitFor();
+    const estimate = page.getByRole('region', {name:'Resultado da estimativa'});
+    await estimate.getByText('R$ 100,00', {exact:true}).waitFor();
+    await estimate.getByText('5,00%', {exact:true}).waitFor();
+    await estimate.getByText('R$ 5,00', {exact:true}).waitFor();
+    await estimate.getByText('Versão 1', {exact:false}).waitFor();
+    assert.equal(await estimate.getByText('Receita recuperada comprovada').count(), 0);
     await capture('06-estimativa', 'Premissas do projeto');
     await action(page, '← Voltar para Conversões').click();
-    await page.getByText('BRL 5,00', {exact:true}).waitFor();
+    await page.getByText('R$ 5,00', {exact:true}).waitFor();
     assert.equal(await page.getByLabel('Período').inputValue(), '1');
     await page.getByText('Sem vendas reportadas no período para esta LP.').waitFor();
     await page.getByRole('link', {name:'Vínculos comerciais'}).click();
@@ -741,14 +758,14 @@ for (const width of [1440, 390]) {
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     assert.equal((await sale('aurora-vendas','order-current')).bound, true);
     await action(page, '← Voltar para Conversões').click();
-    await page.getByText('1 vendas · BRL 89,00', {exact:true}).waitFor();
-    await page.getByText('BRL 5,00', {exact:true}).waitFor();
+    await page.getByText('1 venda · R$ 89,00', {exact:true}).waitFor();
+    await page.getByText('R$ 5,00', {exact:true}).waitFor();
     await capture('07-conversoes');
 
     const incidentId = (await lab.db.query('SELECT id FROM incidents WHERE project_id=$1',[project.id])).rows[0].id;
     const wrongPage = lab.origin + ui + '/projetos/' + project.id + '/incidentes/' + incidentId + '/substituir-cta?lp=' + other.page;
     assert.equal((await page.goto(wrongPage))?.status(), 200);
-    await page.getByRole('heading', {name:'Substituir CTA',exact:true}).waitFor();
+    await page.getByRole('heading', {name:'Substituir checkout/CTA',exact:true}).waitFor();
     await page.getByLabel('Superfície de CTA').fill('principal');
     await page.getByLabel('Habilitar nesta versão').check();
     await action(page, 'Revisar publicação').click();

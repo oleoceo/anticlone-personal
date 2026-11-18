@@ -44,7 +44,7 @@ function amountInput(minor: string | bigint, precision: number, grouped = false)
 
 function money(minor: string | bigint | null, currency: string, precision = exponent(currency)) {
   if (minor === null) return 'Indisponível';
-  return precision === null ? String(minor) + ' unidades menores · ' + currency : currency + ' ' + amountInput(minor, precision, true);
+  return precision === null ? String(minor) + ' unidades menores · ' + currency : (currency === 'BRL' ? 'R$' : currency) + ' ' + amountInput(minor, precision, true);
 }
 
 function parseAmount(text: string, precision: number, max: number) {
@@ -92,8 +92,15 @@ export function Conversions({api, project, page, subview, setGuard}: {
     </div>}
     {subview === 'vinculos' ? <CommerceBindings api={api} project={project.id} page={page.id} setGuard={setGuard}/> :
       subview === 'estimativa' ? observed.error !== undefined ? <Failure error={observed.error} retry={observed.revalidate}/> :
-        observed.data ? <Estimate api={api} project={project.id} assumptions={observed.data.assumptions}
-          refresh={observed.revalidate} setGuard={setGuard}/> : <Loading/> : <>
+        observed.data ? <div className="operation-grid estimate-grid">
+          <Estimate api={api} project={project.id} assumptions={observed.data.assumptions}
+            refresh={observed.revalidate} setGuard={setGuard}/>
+          <section className="panel" aria-labelledby="estimate-result">
+            <h2 id="estimate-result">Resultado da estimativa</h2>
+            <p className="muted">{page.name} · {days === '1' ? 'Últimas 24 horas' : 'Últimos 7 dias'}</p>
+            {observed.pending ? <Loading>Atualizando estimativa…</Loading> : <Results data={observed.data} showAssumptions/>}
+          </section>
+        </div> : <Loading/> : <>
         <section className="panel">
           <div className="panel-heading"><h2>Resultados da página</h2>
             <button type="button" onClick={() => setUntil(Date.now())}>Atualizar resultados</button></div>
@@ -108,7 +115,7 @@ export function Conversions({api, project, page, subview, setGuard}: {
           {report.error !== undefined && <Failure error={report.error} retry={report.revalidate}/>}
           {report.data ? report.data.currencies?.length ? <ul className="plain evidence-list">
             {report.data.currencies.map(group => <li key={group.currency}>
-              <strong>{group.reported_sales} vendas · {money(group.reported_amount_minor, group.currency, commerceExponents[group.currency] ?? null)}</strong>
+              <strong>{group.reported_sales} {group.reported_sales === 1 ? 'venda' : 'vendas'} · {money(group.reported_amount_minor, group.currency, commerceExponents[group.currency] ?? null)}</strong>
               <small>Líquido reportado · {money(group.net_amount_minor, group.currency, commerceExponents[group.currency] ?? null)}</small>
             </li>)}</ul> : <p>Sem vendas reportadas no período para esta LP.</p> : report.error === undefined && <Loading/>}
           <p className="muted">As vendas reportadas não têm atribuição comprovada à proteção.</p>
@@ -121,16 +128,20 @@ export function Conversions({api, project, page, subview, setGuard}: {
   </>;
 }
 
-function Results({data}: {data: Observations}) {
+function Results({data, showAssumptions = false}: {data: Observations; showAssumptions?: boolean}) {
   const clicks = data.rows.filter(row => row.action === 'CTA_CLICK_OBSERVED').reduce((total, row) => total + row.events, 0);
   const estimate = data.estimate;
   const rounded = estimate ? (BigInt(estimate.amount_minor_numerator) + BigInt(estimate.denominator / 2)) / BigInt(estimate.denominator) : null;
   return <dl className="review">
     <dt>Cliques observados</dt><dd>{clicks}</dd>
-    <dt>Estimativa financeira</dt><dd>{estimate ? money(rounded, estimate.currency) : 'Indisponível'}</dd>
+    {showAssumptions && <>
+      <dt>Ticket médio aplicado</dt><dd>{data.assumptions ? money(data.assumptions.ticket_minor, data.assumptions.currency) : 'Sem configuração'}</dd>
+      <dt>Taxa de conversão aplicada</dt><dd>{data.assumptions ? amountInput(String(data.assumptions.conversion_basis_points), 2) + '%' : 'Sem configuração'}</dd>
+    </>}
+    <dt>Receita potencial estimada</dt><dd>{estimate ? money(rounded, estimate.currency) : 'Indisponível'}</dd>
     <dt>Premissas da estimativa</dt><dd>{data.assumptions ?
       <>Versão {data.assumptions.version} · {formatDate(data.assumptions.configured_at)}</> : 'Sem configuração'}</dd>
-    <dt>Receita recuperada comprovada</dt><dd>Indisponível</dd>
+    {!showAssumptions && <><dt>Receita recuperada comprovada</dt><dd>Indisponível</dd></>}
   </dl>;
 }
 

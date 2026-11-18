@@ -30,7 +30,7 @@ export function ProtectionScreen({api, project, page, incident, action, setGuard
   function refresh() { data.refresh(); authorization.revalidate(); }
 
   return <>
-    <Heading title={pageAction ? 'Redirecionar página' : 'Substituir CTA'} description={project.name + ' · ' + page.name + ' · ' + incident.host}
+    <Heading title={pageAction ? 'Redirecionar página' : 'Substituir checkout/CTA'} description={project.name + ' · ' + page.name + ' · ' + incident.host}
       actions={<button type="button" disabled={controls.busy} onClick={refresh}>Atualizar situação</button>}/>
     <ol className="steps protection-steps" aria-label="Etapas de proteção">
       <li><span>1</span>Publicar política</li><li><span>2</span>Aprovar na LP</li><li><span>3</span>Autorizar contexto</li>
@@ -39,6 +39,9 @@ export function ProtectionScreen({api, project, page, incident, action, setGuard
     {data.pr.error !== undefined && <Failure error={data.pr.error} retry={data.pr.revalidate}/>}
     {data.lp.error !== undefined && <Failure error={data.lp.error} retry={data.lp.revalidate}/>}
     {data.pr.data && data.lp.data ? <>
+      <ProtectionSummary protection={data.pr.data} state={data.lp.data} authorization={authorization.data}
+        fresh={!data.pr.pending && !data.lp.pending && !authorization.pending && data.pr.error === undefined &&
+          data.lp.error === undefined && authorization.error === undefined} pageAction={pageAction} incidentHost={incident.host}/>
       <PolicyEditor api={api} project={project} page={page} protection={data.pr.data} pageState={data.lp.data}
         pageAction={pageAction} operation={controls} refresh={refresh}/>
       {!pageAction && <CtaWorkspace api={api} project={project.id} page={page} protection={scopedProtection(data.pr.data, data.lp.data)}
@@ -52,6 +55,58 @@ export function ProtectionScreen({api, project, page, incident, action, setGuard
 }
 
 type Operation = ReturnType<typeof useOperation>;
+
+function ProtectionSummary({protection, state, authorization, fresh, pageAction, incidentHost}: {
+  protection: Protection; state: PageProtection; authorization?: Operational; fresh: boolean; pageAction: boolean; incidentHost: string;
+}) {
+  const scoped = scopedProtection(protection, state);
+  const surfaces = scoped.ctaSurfaces.filter(policy => state.urls.some(url => url.pathname === policy.pathname));
+  const published = pageAction ? (protection.page ? 'Redirecionamento v' + protection.page.version : '') :
+    surfaces.map(policy => policy.surface + ' v' + policy.version).join(', ');
+  const bindings = [
+    ...state.entryPolicies.filter(policy => policy.bound).map(policy => 'Redirecionamento v' + policy.version),
+    ...state.ctaPolicies.filter(policy => policy.bound).map(policy => policy.surface + ' v' + policy.version),
+  ].join(', ');
+  const recorded = authorization?.state;
+  const matchesApproval = recorded && state.approvalId === recorded.approval_id &&
+    state.page.url_generation === recorded.url_generation && state.page.config_generation === recorded.config_generation;
+  let operational = 'Situação indisponível.';
+  if (fresh && authorization) {
+    if (!recorded) operational = 'Sem autorização registrada.';
+    else if (!recorded.enabled) operational = 'Autorização suspensa.';
+    else if (new URL(recorded.copy_origin).hostname !== incidentHost.toLowerCase()) operational = 'A autorização foi registrada para outro domínio.';
+    else if (!state.page.enabled) operational = 'A LP está desabilitada no cadastro consultado.';
+    else if (!matchesApproval) operational = 'A autorização registrada pertence a uma aprovação anterior.';
+    else operational = 'Autorização corresponde à aprovação consultada. A execução da proteção não é confirmada por esta consulta.';
+  }
+  return <section className="panel operation-section" aria-labelledby="protection-summary">
+    <h2 id="protection-summary">Estado e escopo da proteção</h2>
+    <dl className="review">
+      <dt>Versão publicada no projeto</dt><dd>{published || 'Nenhuma versão publicada para esta seleção'}</dd>
+      <dt>Versões vinculadas à aprovação atual da LP</dt><dd>{state.approvalId ?
+        <>{bindings || 'Nenhum vínculo retornado'} · aprovação {state.approvalId}</> : 'Sem aprovação atual para a configuração da LP'}</dd>
+      <dt>Origem e caminho da autorização registrada</dt><dd>{recorded ?
+        <>{recorded.copy_origin}{recorded.copy_pathname} · revisão {recorded.revision}</> : authorization ? 'Sem registro' : 'Indisponíveis'}</dd>
+      <dt>Situação operacional</dt><dd>{operational}</dd>
+    </dl>
+    <p>Políticas são publicadas no projeto e podem ser compartilhadas por outras LPs conforme seus vínculos. A aprovação e a autorização se aplicam à LP selecionada.</p>
+  </section>;
+}
+
+function CheckoutPoints({protection, state, surfaces}: {protection: Protection; state: PageProtection; surfaces: string[]}) {
+  const points = state.points.filter(point => surfaces.includes(point.surface));
+  return points.length ? <ul className="plain evidence-list">{points.map(point => {
+    const approved = protection.destinations.find(destination => destination.id === point.destination_id);
+    const mapped = approved?.url === point.url ? approved : undefined;
+    const eligibility = point.kind !== 'a' || !point.marker ? 'Sem âncora identificável' :
+      point.review_required || point.suspension ? 'Revisão pendente' :
+        mapped ? 'Âncora mapeada a destino aprovado' : 'Mapeamento pendente';
+    return <li key={point.id}><strong>{point.marker ?? 'Ponto sem marcador'} · {point.surface}</strong>
+      <small>{eligibility}</small>
+      <small>{mapped ? 'Destino aprovado · ' + mapped.url : point.url ? 'Destino mapeado · ' + point.url : 'Sem destino mapeado'}</small>
+    </li>;
+  })}</ul> : <p className="empty">Nenhum CTA cadastrado para esta seleção no inventário retornado.</p>;
+}
 
 function PolicyEditor({api, project, page, protection, pageState, pageAction, operation, refresh}: {
   api: AdminApi; project: Project; page: Page; protection: Protection; pageState: PageProtection; pageAction: boolean;
@@ -67,7 +122,17 @@ function PolicyEditor({api, project, page, protection, pageState, pageAction, op
     <div className="panel-heading"><h2>Publicar política</h2>
       {pageAction && current && <span className="badge">Versão do projeto {current.version}</span>}
     </div>
-    <p>Escolha o destino e a proporção de tráfego por origem. A publicação gera uma versão para a etapa de aprovação.</p>
+    <p>{pageAction ? 'Escolha o destino e a proporção de tráfego por origem.' : 'Selecione a superfície e a proporção de tráfego que pode receber os destinos aprovados da superfície.'} A publicação gera uma versão para a etapa de aprovação.</p>
+    {!pageAction && <>
+      <h3>CTAs e destinos da LP</h3>
+      <CheckoutPoints protection={protection} state={pageState} surfaces={scoped.ctaSurfaces
+        .filter(policy => pageState.urls.some(url => url.pathname === policy.pathname)).map(policy => policy.surface)}/>
+      <button type="button" onClick={() => {
+        const inventory = document.getElementById('inventario-cta');
+        inventory?.focus({preventScroll: true});
+        inventory?.scrollIntoView({block: 'start'});
+      }}>Revisar destinos e mapeamentos no inventário</button>
+    </>}
     {!pageAction && scoped.ctaSurfaces.length > 0 && <ul className="plain evidence-list">
       {scoped.ctaSurfaces.filter(policy => page.urls.some(url => url.pathname === policy.pathname)).map(policy =>
         <li key={policy.surface}><strong>{policy.surface}</strong><small>{policy.pathname} · versão {policy.version} · {policy.enabled ? 'Habilitada na política' : 'Desabilitada'}</small></li>)}
@@ -90,6 +155,7 @@ function PolicyEditor({api, project, page, protection, pageState, pageAction, op
         <p>{pageAction ? value(data, 'destination') : value(data, 'surface') + ' · ' + value(data, 'pathname')}</p>
         <p>{common.enabled ? 'Política habilitada' : 'Política desabilitada'} · Stealth {common.stealth ? 'ligado' : 'desligado'}</p>
         <AllocationList allocation={allocation}/>
+        {!pageAction && <CheckoutPoints protection={protection} state={pageState} surfaces={[surface]}/>}
       </>, async () => {
         if (!pageAction) {
           const [latest, latestPage] = await Promise.all([

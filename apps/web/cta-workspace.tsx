@@ -25,8 +25,8 @@ export function CtaWorkspace({api, project, page, protection, refresh, setGuard}
   const params = sectionParams(location.search);
   const selected = params.get('superficie');
   const surface = surfaces.find(policy => policy.surface === selected) ?? surfaces[0];
-  return <section className="panel">
-    <h2>Pontos de conversão</h2>
+  return <section className="panel" id="inventario-cta" aria-labelledby="cta-inventory-heading" tabIndex={-1}>
+    <h2 id="cta-inventory-heading">Pontos de conversão</h2>
     <p>Confira a captura da superfície, revise as mudanças e vincule os pontos a destinos aprovados.</p>
     {surfaces.length > 1 && <label>Superfície de CTA<select value={surface?.surface ?? ''} onChange={event => {
       params.set('superficie', event.target.value);
