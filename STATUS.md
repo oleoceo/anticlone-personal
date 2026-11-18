@@ -1,5 +1,13 @@
 # STATUS — AntiClone Personal
 
+## Frontend V2.2 — Entrega B, operações a partir de incidentes
+- Refinamento visual no PR #80: resultado financeiro no formulário, resumo de destinos de CTA e estado/escopo da proteção. Consultas existentes, sem mudança no servidor. Nove testes integrados passaram, com Chromium em desktop e mobile emulado. Revisão independente `/root/b_review` favorável ao delta.
+- Base c35180e, branch feat/admin-frontend-protection. Incidentes, triagem, PAGE_REDIRECT, REPLACE_CONVERSION, inventário de CTAs, estimativas e vínculos usam APIs administrativas reais.
+- Publicação, aprovação da LP e autorização são etapas distintas. Autorização React confere a aprovação esperada sob lock; clientes legados seguem compatíveis.
+- E2E desktop/mobile com PostgreSQL e Chromium passou, incluindo aprovação concorrente HTTP 409 sem escrita, superfície de outra LP, premissas e isolamento comercial.
+- Lint, typecheck e build passaram. Revisão independente `/root/b_review` favorável após correção dos achados no delta de proteção.
+- 16 capturas reais na galeria local `docs/design/frontend-entrega-b/`; mobile emulado. Painel antigo disponível. Contrato e limites em [ADMIN-FRONTEND-PROTECTION](docs/ADMIN-FRONTEND-PROTECTION.md).
+
 ## Frontend V2.2 — Entrega A, base operacional — PR #79
 - React/TypeScript/Vite em `/admin/ui/novo/`, sessão privada compartilhada com painel antigo, histórico, projetos e instalação por LP.
 - Cadastro de projeto usa UUID por intenção, chave primária e auditoria transacional. Equivalentes retornam 200 com a mesma identidade. Divergências retornam 409. Clientes sem chave seguem suportados.

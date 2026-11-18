@@ -102,10 +102,13 @@ export async function managePages(db: Pool, body: unknown) {
         FROM cta_points p LEFT JOIN cta_mappings m ON m.project_id=p.project_id AND m.point_id=p.id
         LEFT JOIN cta_destinations d ON d.project_id=m.project_id AND d.offer=m.offer AND d.id=m.destination_id
         LEFT JOIN cta_commercial_references r ON r.project_id=p.project_id AND r.point_id=p.id WHERE p.project_id=$1 ORDER BY p.surface,p.id LIMIT 1000`,[project]);
+      const approval = await client.query(`SELECT id FROM page_policy_approvals
+        WHERE project_id=$1 AND page_id=$2 AND url_generation=$3 AND config_generation=$4
+        ORDER BY id DESC LIMIT 1`, [project, data.page, page.rows[0].url_generation, page.rows[0].config_generation]);
       const installed=await client.query("SELECT to_regclass('page_installation_signals') IS NOT NULL AS installed");
       const signals=installed.rows[0].installed ? await client.query("SELECT source,last_observed_at FROM page_installation_signals WHERE project_id=$1 AND page_id=$2 AND last_observed_at>=now()-interval '7 days' ORDER BY source",[project,data.page]) : {rows:[]};
       await client.query('COMMIT');
-      return {signals:signals.rows,signalConfidence:'UNAUTHENTICATED_CLAIM',page:page.rows[0],urls:urls.rows,entryPolicies:entries.rows,ctaPolicies:ctas.rows,points:points.rows,installationStatus:'NOT_VERIFIED',reviewAvailable:true};
+      return {signals:signals.rows,signalConfidence:'UNAUTHENTICATED_CLAIM',page:page.rows[0],approvalId:approval.rows[0]?.id??null,urls:urls.rows,entryPolicies:entries.rows,ctaPolicies:ctas.rows,points:points.rows,installationStatus:'NOT_VERIFIED',reviewAvailable:true};
     } catch(error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
   }
   if (action==='list' && Object.keys(data).sort().join(',')==='action,project') {

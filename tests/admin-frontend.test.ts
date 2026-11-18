@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import {randomUUID, scryptSync} from 'node:crypto';
+import {createHmac, randomUUID, scryptSync} from 'node:crypto';
 import {once} from 'node:events';
-import {readdir, readFile} from 'node:fs/promises';
+import {mkdir, readdir, readFile} from 'node:fs/promises';
 import {request} from 'node:http';
 import type {AddressInfo} from 'node:net';
 import {test, type TestContext} from 'node:test';
@@ -9,6 +9,11 @@ import {TOTP, Secret} from 'otpauth';
 import {Pool} from 'pg';
 import {chromium, type Page} from 'playwright';
 import {createAdminServer} from '../apps/admin-auth.js';
+import {join} from 'node:path';
+import {commerceAdmin, commerceSigningInput, provisionCommerceSender, receiveCommerce} from '../apps/commerce.js';
+import {observe} from '../apps/detection.js';
+import {managePages} from '../apps/protected-pages.js';
+import {recordObservedFact} from '../apps/observed-metrics.js';
 import {registerProject} from '../apps/project-registration.js';
 
 const ui = '/admin/ui/novo';
@@ -511,3 +516,261 @@ test('new and legacy consoles share the same MFA, session lifetime and private r
   await legacy.getByLabel('Código TOTP').waitFor();
   assert.equal((await context.cookies()).some(cookie => cookie.name === 'admin_session'), false);
 });
+
+for (const width of [1440, 390]) {
+  test('incident to PAGE_REDIRECT, REPLACE_CONVERSION, estimate and scoped commerce at ' + width + ' px',
+    {timeout: 120_000}, async t => {
+    const lab = await fixture(t);
+    const original = 'https://oferta.frontend.test';
+    const observedDomain = 'https://observado.frontend.test';
+    const project = await registerProject(lab.db, {name: 'Aurora Cursos', origin: original});
+    const lp = await managePages(lab.db, {action: 'create', project: project.id, name: 'Página de vendas', url: original + '/oferta'}) as {page: string};
+    const other = await managePages(lab.db, {action: 'create', project: project.id, name: 'Página complementar', url: 'https://complementar.frontend.test/oferta'}) as {page: string};
+    assert.equal(await observe(lab.db, project.id, original, observedDomain), 'observed');
+    await recordObservedFact(lab.db, project.id, {page: lp.page, event: randomUUID(), session: 'ca'.repeat(16),
+      action: 'CTA_CLICK_OBSERVED', traffic: 'DIRECT_UNKNOWN', version: null, evidence: 'BROWSER_UNVERIFIED'});
+    const config = {auth:'HMAC_SHA256_TIMESTAMP', fields:{event:'event',order:'order',amount:'amount',currency:'currency',
+      status:'status',occurred:'occurred',product:'product'}, statuses:{paid:'PAID'}, money:{unit:'DECIMAL',exponent:2}};
+    const model = await commerceAdmin(lab.db, {action:'model', expected_version:0, name:'Custom-teste', reviewed:true, config,
+      sample:{event:'e1',order:'order1',amount:'19.99',currency:'BRL',status:'paid',occurred:new Date().toISOString(),product:'produto1'}}) as {id: string; version: number};
+    const checkoutEnv = {COMMERCE_ENCRYPTION_KEY:'cd'.repeat(32)};
+    const account = await commerceAdmin(lab.db, {action:'connection', model:model.id, model_version:model.version, account:'Checkout-Aurora'},
+      checkoutEnv) as {id: string};
+    const senderKey = await provisionCommerceSender(lab.db, account.id, checkoutEnv);
+    const sale = async (product: string, event: string) => {
+      const raw = Buffer.from(JSON.stringify({event,order:event,product,amount:'89.00',currency:'BRL',status:'paid',occurred:new Date().toISOString()}));
+      const timestamp = String(Math.floor(Date.now() / 1000));
+      const signature = createHmac('sha256', Buffer.from(senderKey, 'hex')).update(commerceSigningInput(timestamp, raw)).digest('hex');
+      return receiveCommerce(lab.db, account.id, raw, timestamp, signature, checkoutEnv);
+    };
+    assert.equal((await sale('outro-produto','test')).recorded, false);
+    await commerceAdmin(lab.db, {action:'connection-state', id:account.id, expected_version:1, state:'ACTIVE'}, checkoutEnv);
+    await commerceAdmin(lab.db, {action:'binding', expected_version:0, project:project.id, page:other.page, connection:account.id,
+      product:'outro-produto', url:original + '/outro-checkout', currency:'BRL', state:'ACTIVE', price_minor:4200});
+    assert.equal((await sale('outro-produto','order-other')).bound, true);
+    const context = await lab.browser.newContext({viewport: {width, height: width < 760 ? 844 : 1000}, hasTouch: width < 760, isMobile: width < 760});
+    const page = await context.newPage();
+    const errors: string[] = [];
+    page.on('pageerror', error => errors.push(error.message));
+    const captureRoot = process.env.TEST_FRONTEND_B_CAPTURES;
+    async function capture(name: string, focus?: string) {
+      if (!captureRoot) return;
+      const folder = join(captureRoot, width < 760 ? 'mobile' : 'desktop');
+      await mkdir(folder, {recursive: true});
+      if (focus) await page.getByRole('heading', {name: focus, exact: true}).evaluate(element => {
+        window.scrollBy(0, element.getBoundingClientRect().top - 15);
+      });
+      else await page.evaluate(() => window.scrollTo(0, 0));
+      await page.screenshot({path: join(folder, name + '.png'), animations: 'disabled', fullPage: width < 760 && ['02-investigacao', '06-estimativa'].includes(name)});
+    }
+
+    await page.goto(lab.origin + ui + '/incidentes');
+    assert.equal(await login(page, lab.code()), 204);
+    await page.getByRole('link', {name: 'Ver incidentes de Aurora Cursos'}).click();
+    await page.getByLabel('Buscar domínio').fill('observado');
+    await page.getByLabel('Período').selectOption('7');
+    const incidentsUrl = page.url();
+    await page.getByRole('link', {name: 'Investigar observado.frontend.test'}).waitFor();
+    await capture('01-incidentes');
+    await page.getByRole('link', {name: 'Investigar observado.frontend.test'}).click();
+    await page.getByRole('heading', {name: 'observado.frontend.test', exact:true}).waitFor();
+    await page.getByLabel('Página protegida').selectOption(lp.page);
+    await page.getByLabel('Nova situação').selectOption('investigating');
+    await page.getByLabel('Justificativa').fill('Revisão administrativa no ambiente de teste');
+    await action(page, 'Revisar mudança').click();
+    await action(page, 'Confirmar').click();
+    await page.getByText('Não verificado → Em investigação').waitFor();
+    await page.getByText('Histórico de recibos da LP', {exact: true}).click();
+    await action(page, 'Consultar histórico').click();
+    await page.getByText('Nenhum recibo no recorte.').waitFor();
+    await page.getByText('Situação da investigação · Em investigação', {exact:true}).waitFor();
+    await page.getByText('Indeterminado · evidência insuficiente', {exact:true}).waitFor();
+    await capture('02-investigacao');
+    await page.getByRole('link', {name: 'Redirecionar página', exact: true}).click();
+    await page.getByRole('heading', {name: 'Redirecionar página', exact: true}).waitFor();
+    await page.getByLabel('Destino da página').fill(original + '/segura');
+    await page.goBack().catch(() => undefined);
+    await page.getByRole('dialog', {name:'Descartar alterações?'}).waitFor();
+    await action(page, 'Cancelar').click();
+    assert.equal(await page.getByLabel('Destino da página').inputValue(), original + '/segura');
+    await page.getByLabel('Tráfego pago atribuído').selectOption('100');
+    await page.getByLabel('Habilitar nesta versão').check();
+    await action(page, 'Revisar publicação').click();
+    await page.getByRole('dialog', {name:'Publicar PAGE_REDIRECT'}).waitFor();
+    await action(page, 'Confirmar').click();
+    await page.getByText('Política publicada. Versão 1.').waitFor();
+    assert.equal((await lab.db.query('SELECT count(*)::int AS total FROM page_entry_policy_bindings')).rows[0].total, 0);
+    assert.equal(await action(page, 'Revisar autorização').count(), 0);
+    await page.getByLabel('Versão de redirecionamento').selectOption('1');
+    await action(page, 'Revisar aprovação').click();
+    await page.getByRole('dialog', {name:'Aprovar versões na LP'}).waitFor();
+    await lab.db.query('UPDATE protected_pages SET config_generation=config_generation+1 WHERE id=$1', [lp.page]);
+    await action(page, 'Confirmar').click();
+    await page.getByRole('alert').filter({hasText:'conflito'}).waitFor();
+    assert.equal((await lab.db.query('SELECT count(*)::int AS total FROM page_entry_policy_bindings')).rows[0].total, 0);
+    const reread = page.waitForResponse(response => response.url().endsWith('/pages') &&
+      response.request().postDataJSON()?.action === 'inspect');
+    await action(page, 'Atualizar situação').click();
+    assert.equal((await reread).status(), 200);
+    await action(page, 'Revisar aprovação').click();
+    await action(page, 'Confirmar').click();
+    await page.getByText('Aprovação registrada.', {exact:false}).waitFor();
+    await page.getByLabel('Origem HTTPS observada').fill(observedDomain);
+    await page.getByLabel('Caminho exato da cópia').fill('/evidencia');
+    await page.getByLabel('Conferi o contexto', {exact: false}).check();
+    await action(page, 'Revisar autorização').click();
+    await page.getByRole('dialog', {name:'Autorizar contexto', exact:true}).waitFor();
+    await page.route('**/admin/ui/operational', async route => {
+      const reviewed = route.request().postDataJSON().expectedApprovalId;
+      assert.equal(typeof reviewed, 'string');
+      const {url_generation, config_generation} = (await lab.db.query(
+        'SELECT url_generation,config_generation FROM protected_pages WHERE id=$1', [lp.page])).rows[0];
+      await managePages(lab.db, {project:project.id, page:lp.page, action:'approve', entryVersion:1, ctaVersions:[],
+        generation:url_generation, configGeneration:config_generation});
+      await route.continue();
+    }, {times:1});
+    const stale = page.waitForResponse(response => response.url().endsWith('/operational') &&
+      response.request().postDataJSON()?.action === 'authorize');
+    await action(page, 'Confirmar').click();
+    assert.equal((await stale).status(), 409);
+    await page.getByRole('alert').filter({hasText:'conflito'}).waitFor();
+    assert.equal((await lab.db.query('SELECT count(*)::int AS total FROM page_operational_authorizations')).rows[0].total, 0);
+    const refreshedApproval = page.waitForResponse(response => response.url().endsWith('/pages') &&
+      response.request().postDataJSON()?.action === 'inspect');
+    await action(page, 'Atualizar situação').click();
+    assert.equal((await refreshedApproval).status(), 200);
+    await action(page, 'Revisar autorização').click();
+    await action(page, 'Confirmar').click();
+    await page.getByText('Autorização registrada. Revisão 1.').waitFor();
+    assert.deepEqual((await lab.db.query('SELECT copy_origin,copy_pathname,enabled FROM page_operational_authorizations')).rows,
+      [{copy_origin:observedDomain,copy_pathname:'/evidencia',enabled:true}]);
+    const summary = page.getByRole('region', {name:'Estado e escopo da proteção'});
+    await summary.getByText('Autorização corresponde à aprovação consultada.', {exact:false}).waitFor();
+    await summary.getByText(observedDomain + '/evidencia · revisão 1', {exact:true}).waitFor();
+    await capture('03-redirecionamento', 'Estado e escopo da proteção');
+
+    await page.getByLabel('Destino da página').fill(original + '/rascunho');
+    await action(page, 'Suspender autorização').click();
+    await action(page, 'Confirmar').click();
+    await summary.getByText('Autorização suspensa.', {exact:true}).waitFor();
+    await action(page, '← Voltar para investigação').click();
+    await action(page, 'Cancelar').click();
+    assert.equal(await page.getByLabel('Destino da página').inputValue(), original + '/rascunho');
+    await action(page, '← Voltar para investigação').click();
+    await action(page, 'Descartar e sair').click();
+    await page.getByRole('link', {name: 'Substituir checkout/CTA', exact: true}).click();
+    await page.getByRole('heading', {name: 'Substituir checkout/CTA', exact: true}).waitFor();
+    await page.getByLabel('Superfície de CTA').fill('principal');
+    await page.getByLabel('Habilitar nesta versão').check();
+    await page.getByLabel('Direto ou desconhecido').selectOption('100');
+    await action(page, 'Revisar publicação').click();
+    await page.getByRole('dialog', {name:'Publicar REPLACE_CONVERSION'}).waitFor();
+    await action(page, 'Confirmar').click();
+    await page.getByText('Cadastrar destino aprovado', {exact:true}).click();
+    await page.getByLabel('Identificador da oferta').fill('aurora');
+    await page.getByLabel('URL do destino do CTA').fill(original + '/seguro');
+    await action(page, 'Revisar destino').click();
+    await action(page, 'Confirmar').click();
+    await page.getByText('Destino cadastrado.').waitFor();
+    await page.getByText('Importar captura existente', {exact:true}).click();
+    const candidates = (amount: number) => [{marker:'compra01',kind:'a',parent:'body',ordinal:1,url:original+'/checkout',
+      commercial:{amount,currency:'BRL'}}];
+    async function importCapture(amount: number) {
+      await page.getByLabel('JSON dos candidatos').fill(JSON.stringify(candidates(amount)));
+      await action(page, 'Revisar captura').click();
+      await action(page, 'Confirmar').click();
+      await page.getByText('Captura importada.', {exact:true}).waitFor();
+    }
+    await importCapture(6700);
+    await page.getByLabel('Destino aprovado para compra01').selectOption({label:'aurora · ' + original + '/seguro'});
+    await action(page, 'Revisar mapeamento').click();
+    await action(page, 'Confirmar').click();
+    await page.getByText('Mapeamento salvo.').waitFor();
+    async function approveTerms() {
+      await action(page, 'Revisar termos comerciais').click();
+      await action(page, 'Confirmar').click();
+      await page.getByText('Termos comerciais revisados.', {exact:true}).waitFor();
+    }
+    await approveTerms();
+    await importCapture(8900);
+    await page.getByText('Mudança comercial pendente de revisão.').waitFor();
+    await approveTerms();
+    await action(page, 'Revisar destinos e mapeamentos no inventário').click();
+    assert.equal(await page.getByRole('region', {name:'Pontos de conversão'}).evaluate(element => document.activeElement === element), true);
+    await page.getByText('Âncora mapeada a destino aprovado', {exact:true}).waitFor();
+    await page.getByText('Destino aprovado · ' + original + '/seguro', {exact:true}).waitFor();
+    await capture('04-inventario-cta', 'Pontos de conversão');
+    await capture('09-checkout-destinos', 'CTAs e destinos da LP');
+    await page.getByLabel('principal · versão 1', {exact:true}).check();
+    await action(page, 'Revisar aprovação').click();
+    await page.getByRole('dialog', {name:'Aprovar versões na LP'}).waitFor();
+    await action(page, 'Confirmar').click();
+    await page.getByText('Aprovação registrada.', {exact:false}).waitFor();
+    await page.getByLabel('Origem HTTPS observada').fill(observedDomain);
+    await page.getByLabel('Caminho exato da cópia').fill('/evidencia');
+    await page.getByLabel('Conferi o contexto', {exact:false}).check();
+    await action(page, 'Revisar autorização').click();
+    await action(page, 'Confirmar').click();
+    await page.getByText('Autorização registrada. Revisão 3.').waitFor();
+    assert.equal((await lab.db.query('SELECT count(*)::int AS n FROM page_entry_policy_bindings')).rows[0].n, 1);
+    assert.equal((await lab.db.query('SELECT count(*)::int AS n FROM page_cta_policy_bindings')).rows[0].n, 1);
+    await summary.getByText('Redirecionamento v1, principal v1 · aprovação', {exact:false}).waitFor();
+    await capture('05-substituicao-cta', 'Estado e escopo da proteção');
+    await action(page, '← Voltar para investigação').click();
+    await action(page, '← Voltar para Incidentes').click();
+    assert.equal(page.url(), incidentsUrl);
+    assert.equal(await page.getByLabel('Buscar domínio').inputValue(), 'observado');
+    assert.equal(await page.getByLabel('Período').inputValue(), '7');
+
+    const base = lab.origin + ui + '/projetos/' + project.id + '/lps/' + lp.page + '/conversoes';
+    assert.equal((await page.goto(base + '?dias=1'))?.status(), 200);
+    await page.getByRole('link', {name:'Configurar estimativa'}).click();
+    await page.getByLabel('Ticket médio', {exact:true}).fill('100,00');
+    await page.getByLabel('Taxa de conversão (%)').fill('5');
+    await action(page, 'Revisar premissas').click();
+    await action(page, 'Confirmar').click();
+    await page.getByText('Estimativa configurada. Versão 1', {exact:false}).waitFor();
+    const estimate = page.getByRole('region', {name:'Resultado da estimativa'});
+    await estimate.getByText('R$ 100,00', {exact:true}).waitFor();
+    await estimate.getByText('5,00%', {exact:true}).waitFor();
+    await estimate.getByText('R$ 5,00', {exact:true}).waitFor();
+    await estimate.getByText('Versão 1', {exact:false}).waitFor();
+    assert.equal(await estimate.getByText('Receita recuperada comprovada').count(), 0);
+    await capture('06-estimativa', 'Premissas do projeto');
+    await action(page, '← Voltar para Conversões').click();
+    await page.getByText('R$ 5,00', {exact:true}).waitFor();
+    assert.equal(await page.getByLabel('Período').inputValue(), '1');
+    await page.getByText('Sem vendas reportadas no período para esta LP.').waitFor();
+    await page.getByRole('link', {name:'Vínculos comerciais'}).click();
+    await page.getByText('Nenhum checkout vinculado a esta LP no catálogo retornado.').waitFor();
+    await page.getByText('Vincular checkout', {exact:true}).click();
+    await page.getByLabel('Conta de checkout').selectOption(account.id);
+    await page.getByLabel('Produto', {exact:true}).fill('aurora-vendas');
+    await page.getByLabel('URL do checkout').fill(original + '/pagamento');
+    await page.getByLabel('Preço de referência').fill('89,00');
+    await page.getByLabel('Moeda do checkout').selectOption('BRL');
+    await action(page, 'Revisar vínculo comercial').click();
+    await action(page, 'Confirmar').click();
+    await page.getByText('Vínculo salvo. Versão 1.').waitFor();
+    await capture('08-vinculos');
+    assert.deepEqual((await lab.db.query('SELECT price_minor,product FROM commerce_bindings WHERE page_id=$1',[lp.page])).rows,
+      [{price_minor:'8900',product:'aurora-vendas'}]);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    assert.equal((await sale('aurora-vendas','order-current')).bound, true);
+    await action(page, '← Voltar para Conversões').click();
+    await page.getByText('1 venda · R$ 89,00', {exact:true}).waitFor();
+    await page.getByText('R$ 5,00', {exact:true}).waitFor();
+    await capture('07-conversoes');
+
+    const incidentId = (await lab.db.query('SELECT id FROM incidents WHERE project_id=$1',[project.id])).rows[0].id;
+    const wrongPage = lab.origin + ui + '/projetos/' + project.id + '/incidentes/' + incidentId + '/substituir-cta?lp=' + other.page;
+    assert.equal((await page.goto(wrongPage))?.status(), 200);
+    await page.getByRole('heading', {name:'Substituir checkout/CTA',exact:true}).waitFor();
+    await page.getByLabel('Superfície de CTA').fill('principal');
+    await page.getByLabel('Habilitar nesta versão').check();
+    await action(page, 'Revisar publicação').click();
+    await page.getByRole('alert').filter({hasText:'A superfície está vinculada a outra LP.'}).waitFor();
+    assert.equal((await lab.db.query('SELECT count(*)::int AS n FROM cta_policy_versions')).rows[0].n, 1);
+    assert.deepEqual(errors, []);
+  });
+}
