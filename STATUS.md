@@ -1,4 +1,12 @@
 # STATUS — AntiClone Personal
+
+## Frontend V2.2 — Entrega A, base operacional — PR #79
+- React/TypeScript/Vite em `/admin/ui/novo/`, sessão privada compartilhada com painel antigo, histórico, projetos e instalação por LP.
+- Cadastro de projeto usa UUID por intenção, chave primária e auditoria transacional. Equivalentes retornam 200 com a mesma identidade. Divergências retornam 409. Clientes sem chave seguem suportados.
+- Queda após commit e antes dos cabeçalhos: Chromium enviou dois POSTs e o servidor manteve um projeto e uma criação auditada. LP: 200 e 409, uma LP/URL e retomada na instalação.
+- 20 testes com PostgreSQL/Chromium, incluindo 7 da nova interface. Lint, typecheck e build passaram.
+- Revisão independente em `/root/review_entrega_a`, CI por SHA no PR em rascunho. Contrato e cobertura restante em [ADMIN-FRONTEND](docs/ADMIN-FRONTEND.md).
+
 ## PR #78 — P1: limites NPM obrigatórios
 - Base revisada 07120c0; mesma branch/PR, somente fragmentos NPM, fixtures/testes e documentação; apps/runtime/SQL/HTTPS direto intactos.
 - Zonas HTTP exclusivas com chave vazia fora do hostname; admissão no server AntiClone (inclui fallback): 2 req/s, burst20 nodelay, 10 ativas/IP,429 e dry-run off.
