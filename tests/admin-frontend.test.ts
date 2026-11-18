@@ -247,6 +247,12 @@ test('recovers the real committed project and LP after lost responses without re
   await page.getByText('Oferta localizada.', {exact: false}).waitFor();
   const recovered = (await lab.db.query('SELECT id FROM projects WHERE id <> $1', [earlier.id])).rows[0].id as string;
   assert.equal(await page.locator('.identifier').innerText(), recovered);
+  await page.route('**/admin/ui/project-history', route => route.abort());
+  await action(page, 'Consultar cadastro').click();
+  await page.getByRole('alert').waitFor();
+  assert.equal(await action(page, 'Usar oferta localizada').count(), 0);
+  await page.unroute('**/admin/ui/project-history');
+  await action(page, 'Consultar cadastro').click();
   await action(page, 'Usar oferta localizada').click();
   await firstPage(page, 'Página retomada', 'https://resume.frontend.test/inscricao');
   await action(page, 'Cadastrar página').click();

@@ -1,6 +1,6 @@
 # STATUS — AntiClone Personal
 
-## Frontend V2.2 — Entrega A, base operacional
+## Frontend V2.2 — Entrega A, base operacional (BLOCKED)
 - Painel React/TypeScript/Vite em `/admin/ui/novo/`, com sessão web e fronteira privada existentes, cadastro e instalação por LP.
 - Chromium/PostgreSQL: 18 testes no recorte de regressão, incluindo 5 do frontend, incluindo dois tamanhos de tela, MFA, histórico, conflitos e perda de resposta após cabeçalhos.
 - Revisão independente em `/root/review_entrega_a`: P1 reproduzido em queda pré-cabeçalhos, quando o Chromium repetiu o POST e o backend gravou dois projetos.

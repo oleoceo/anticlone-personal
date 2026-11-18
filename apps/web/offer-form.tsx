@@ -93,6 +93,8 @@ export function OfferForm({api, project, fields, setFields, setGuard, finish}: {
   async function run(operation: () => Promise<void>) {
     if (inFlight.current) return;
     inFlight.current = true;
+    setExistingPage(undefined);
+    setRecoveredProject(undefined);
     setCanEdit(false);
     setBusy(true);
     setGuard('saving');
