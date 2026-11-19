@@ -15,6 +15,7 @@ import { Pool } from 'pg';
 import { configuredOrigin, hostFromUrl, cleanup, observe, observeCanary } from './detection.js';
 import { deliverOne } from './alerts.js';
 import { smtpProvider } from './smtp-provider.js';
+import {currentSmtpProvider} from './panel-smtp.js';
 import {deliverProviderCta} from './cta-delivery.js';
 import { classifyTraffic } from './traffic.js';
 import { entryDecision, approvedDestination } from './page-redirect.js';
@@ -33,14 +34,14 @@ import { legacyOperationallyEligible } from './operational-eligibility.js';
 const boundary = gatewayBoundary(process.env);
 const connectionString = process.env.DATABASE_URL, project = process.env.PROJECT_ID;
 const smtpPort = Number(process.env.SMTP_PORT), port = Number(process.env.PORT ?? 3000);
-const cloneSmtp = smtpProvider(process.env);
+const configuredSmtp = smtpProvider(process.env);
 let ctaDeliveryAfter=0;
 if (!connectionString || (project !== undefined && !/^[a-zA-Z0-9_-]{1,64}$/.test(project)) || !Number.isInteger(smtpPort) || smtpPort < 1 || smtpPort > 65535 || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('invalid local test configuration');
 const activeProject: string = project ?? '';
 // Multiproject observation is currently a laboratory-only checkpoint.
 if (!project && process.env.GATEWAY_MODE!=='OPERATIONAL' && (process.env.GATEWAY_MODE === 'PILOT_OBSERVE' || process.env.GATEWAY_TRANSPORT || process.env.ALLOWED_ORIGIN || process.env.LAB_CONTROLLED_ORIGIN || process.env.LAB_CONTROLLED_RISK)) throw Error('multiproject pilot configuration unavailable');
 const pool = new Pool({ connectionString, max: 5, connectionTimeoutMillis: 2000, statement_timeout: 3000, query_timeout: 4000 });
-if (cloneSmtp) await pool.query('SELECT outbox_id,attempt,transport,started_at,finished_at,outcome FROM clone_delivery_attempts LIMIT 0');
+if (configuredSmtp || process.env.SMTP_PANEL_KEY) await pool.query('SELECT outbox_id,attempt,transport,started_at,finished_at,outcome FROM clone_delivery_attempts LIMIT 0');
 pool.on('error', () => process.stderr.write('database connection failed\n'));
 if (process.env.GATEWAY_MODE === 'PILOT_OBSERVE' && (process.env.ALLOWED_ORIGIN || process.env.LAB_CONTROLLED_ORIGIN || process.env.LAB_CONTROLLED_RISK)) throw Error('laboratory configuration forbidden in pilot');
 // One-time legacy import is driven solely by the local operator's old configuration.
@@ -317,11 +318,13 @@ async function maintenance() {
   busy = true;
   try {
     const active=await operationallyEligible(pool,activeProject);
+    const cloneSmtp = active ? await currentSmtpProvider(pool, configuredSmtp) : undefined;
+    const delivery = cloneSmtp ?? (process.env.SMTP_PANEL_KEY ? undefined : smtpPort);
     const temporalOrigin = !mode.pilot && optional.canaryDegradation.state !== 'NOT_INSTALLED' ? controlledOrigin ?? await scopedCorrelationOrigin(pool,activeProject,process.env) : undefined;
     await degradationTask('maintenance', () => maintainDegradation(pool, activeProject, temporalOrigin, optional.canaryDegradation.state !== 'NOT_INSTALLED'));
     try {
       await cleanup(pool,activeProject);
-      if (active) await deliverOne(pool, activeProject, cloneSmtp ?? smtpPort);
+      if (active && delivery !== undefined) await deliverOne(pool, activeProject, delivery);
       observeFailure('maintenance',false);
     } catch (error) {
       const code=(error as {code?:unknown} | null)?.code;
@@ -341,7 +344,7 @@ async function maintenance() {
       const version=healthBaselineVersion;
       if (version === healthBaselinePersisted && claimPending.size === 0)
         await evaluateInactivity(pool, activeProject, () => version===healthBaselineVersion && claimPending.size===0);
-      if (version === healthBaselineVersion && version === healthBaselinePersisted) await deliverHealth(pool, activeProject, cloneSmtp??smtpPort, () => version===healthBaselineVersion);
+      if (delivery !== undefined && version === healthBaselineVersion && version === healthBaselinePersisted) await deliverHealth(pool, activeProject, delivery, () => version===healthBaselineVersion);
     });
     }
     await optional.health.run('retention',async()=>{

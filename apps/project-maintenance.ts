@@ -9,6 +9,7 @@ import { OperationalObservations } from './operational-observations.js';
 import { invalidateInactivity, evaluateInactivity, deliverHealth, maintainHealthHistory, reconcileOperationalEpisode, recoverOperationalSource } from './health-alerts.js';
 import { authorizedHosts, realResolver, collectInfrastructure } from './infrastructure-dns.js';
 import { smtpProvider } from './smtp-provider.js';
+import {currentSmtpProvider} from './panel-smtp.js';
 import { scopedCorrelationOrigin } from './runtime-layer-observations.js';
 import {deliverProviderCta} from './cta-delivery.js';
 
@@ -17,7 +18,7 @@ import {deliverProviderCta} from './cta-delivery.js';
 export function projectMaintenance(db: Pool, env: NodeJS.ProcessEnv, exclude?: string) {
   const states=new Map<string,Promise<Awaited<ReturnType<typeof createState>>>>();
   const hosts=authorizedHosts(env), resolver=hosts.length ? realResolver(env.INFRASTRUCTURE_DNS_SERVER!) : undefined;
-  const smtp=smtpProvider(env);
+  const configuredSmtp=smtpProvider(env);
   let busy=false;
   const pageRetention=new Map<string,number>();
   async function createState() {
@@ -36,6 +37,8 @@ export function projectMaintenance(db: Pool, env: NodeJS.ProcessEnv, exclude?: s
     if (busy) return;
     busy=true;
     try {
+      const smtp=await currentSmtpProvider(db, configuredSmtp, env);
+      const delivery=smtp ?? (env.SMTP_PANEL_KEY ? undefined : Number(env.SMTP_PORT));
       let after='';
       for (;;) {
         const projects=await db.query('SELECT id FROM projects WHERE id>$1 ORDER BY id LIMIT 25',[after]);
@@ -61,7 +64,7 @@ export function projectMaintenance(db: Pool, env: NodeJS.ProcessEnv, exclude?: s
             const {optional,failures}=state;
             const active=await operationallyEligible(db,id);
             await optional.degradation.run('maintenance',async()=>maintainDegradation(db,id,await scopedCorrelationOrigin(db,id,env),optional.canaryDegradation.state!=='NOT_INSTALLED'));
-            try { await cleanup(db,id); if (active) await deliverOne(db,id,smtp ?? Number(env.SMTP_PORT)); failures.observe('maintenance',false); }
+            try { await cleanup(db,id); if (active && delivery !== undefined) await deliverOne(db,id,delivery); failures.observe('maintenance',false); }
             catch { failures.observe('maintenance',true,'UNKNOWN'); }
             if(active&&smtp&&Date.now()>=state.ctaAfter){try{await deliverProviderCta(db,id,smtp);failures.observe('cta_delivery',false);}catch{state.ctaAfter=Date.now()+60000;failures.observe('cta_delivery',true,'UNKNOWN');}}
             if (active) {
@@ -74,7 +77,7 @@ export function projectMaintenance(db: Pool, env: NodeJS.ProcessEnv, exclude?: s
               const version=state.version;
               const current=()=>state.persisted===state.version && version===state.version && state.pending===0;
               if (current()) await evaluateInactivity(db,id,current);
-              if (current()) await deliverHealth(db,id,smtp??Number(env.SMTP_PORT),current);
+              if (delivery !== undefined && current()) await deliverHealth(db,id,delivery,current);
             });
             }
             await optional.health.run('retention',async()=>{

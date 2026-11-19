@@ -1,5 +1,11 @@
 # STATUS — AntiClone Personal
 
+## Credenciais SMTP pelo React — Dev
+- Login e chave cifrada no painel; teste de conexão autenticada e envio de teste confirmado separadamente.
+- Gateway e worker usam a revisão salva e respeitam a preferência de alertas. O endpoint é autorizado no ambiente privado.
+- Chromium/PostgreSQL e receptor TLS controlado cobrem cadastro, conexão, envio, worker e retry. Evidências em `test-results/smtp-painel/`.
+- Brevo respondeu via STARTTLS e recusou a chave de teste com SMTP 525. Alertas permanecem desativados.
+
 ## Auditoria V2.2 no Dev — PR #82
 - Visão Geral com gráfico e tabela sobre a mesma série UTC, origem declarada e estimativa detalhada por projeto.
 - Configurações testa TLS e autenticação SMTP; Saúde identifica o perfil retornado pelo gateway.

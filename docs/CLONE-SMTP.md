@@ -61,3 +61,21 @@ Cobre TLS implícito, STARTTLS, rejeição de certificado não confiável, falha
 autenticação, retry/reinício, original preservado, cópia em outro hostname,
 deduplicação, consulta autenticada, isolamento de projetos e prazo total em
 SMTP lento. Não usa contas externas nem comprova entrega externa.
+
+## Credenciais pelo React
+
+Com a migration 065 e `SMTP_PANEL_KEY` (32 bytes aleatórios em hexadecimal)
+instaladas no admin, gateway e worker, **Configurações → Notificações** aceita
+login e chave SMTP. O operador define o endpoint autorizado em
+`SMTP_PANEL_HOST`, `SMTP_PANEL_PORT` e `SMTP_PANEL_TLS`. A interface salva a
+chave com AES-256-GCM e retorna apenas o login e a existência da chave.
+O segredo de cifragem fica no ambiente privado e precisa acompanhar a
+recuperação separadamente do backup PostgreSQL.
+
+**Testar conexão SMTP** autentica sem enviar. **Enviar e-mail de teste**
+pede confirmação do destinatário salvo e reporta a aceitação SMTP.
+Salvar uma alteração desativa a preferência de alertas. O gateway e o
+worker leem a configuração por revisão durante a manutenção, e as
+tentativas continuam condicionadas à preferência ativa. Uma tentativa
+já admitida pode concluir. A configuração por ambiente continua
+disponível para instalações sem credenciais cadastradas pelo painel.

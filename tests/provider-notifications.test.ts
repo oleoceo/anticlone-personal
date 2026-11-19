@@ -48,7 +48,7 @@ test('CTA/health provider TLS + independent worker + audited backlog in Chromium
   const site=createServer((_req,res)=>res.writeHead(200,{'content-type':'text/html'}).end(`<h1>Owned original/copy</h1><a href="/native">Native checkout</a><script async src="http://127.0.0.1:${port}/runtime.js"></script>`)).listen(0,'127.0.0.1');await once(site,'listening');const address=site.address();assert.ok(address&&typeof address!=='string');
   const original='http://127.0.0.1:'+address.port,copy='http://localhost:'+address.port;
   const privateEnv={SMTP_PROVIDER:'smtp',SMTP_HOST:'localhost',SMTP_PORT:String(smtpAddress.port),SMTP_TLS:'implicit',SMTP_SENDER:'sender@example.test',SMTP_RECIPIENT:'owner@example.test',SMTP_USER:'synthetic-user',SMTP_PASSWORD:'synthetic-private-password'};
-  const env={...process.env,...privateEnv,NODE_EXTRA_CA_CERTS:join(dir,'cert'),DATABASE_URL:process.env.TEST_DATABASE_URL,PGOPTIONS:`-c search_path=${schema}`,PROJECT_ID:'one',PORT:String(port),ALLOWED_ORIGIN:original};
+  const env={...process.env,SMTP_PORT:'1',SMTP_PANEL_KEY:'a'.repeat(64),SMTP_PANEL_HOST:privateEnv.SMTP_HOST,SMTP_PANEL_PORT:privateEnv.SMTP_PORT,SMTP_PANEL_TLS:privateEnv.SMTP_TLS,NODE_EXTRA_CA_CERTS:join(dir,'cert'),DATABASE_URL:process.env.TEST_DATABASE_URL,PGOPTIONS:`-c search_path=${schema}`,PROJECT_ID:'one',PORT:String(port),ALLOWED_ORIGIN:original};
   let gateway:ChildProcess|undefined,worker:ChildProcess|undefined,browser:Awaited<ReturnType<typeof chromium.launch>>|undefined,admin:ChildProcess|undefined;
   const launch=(file:string,extra:Record<string,string>={})=>{const child=spawn(process.execPath,['dist/apps/'+file],{env:{...env,...extra},stdio:['ignore','ignore','pipe']});child.stderr!.on('data',chunk=>logs+=String(chunk));return child;};
   const startGateway=async()=>{gateway=launch('server.js');await until(async()=>{try{return(await fetch('http://127.0.0.1:'+port+'/healthz')).ok;}catch{return false;}},'real gateway ready');};
@@ -91,6 +91,14 @@ test('CTA/health provider TLS + independent worker + audited backlog in Chromium
     const logged=page.waitForResponse(r=>r.url().endsWith('/admin/ui/login'));await page.getByRole('button',{name:'Entrar',exact:true}).click();assert.equal((await logged).status(),204);
     assert.equal(await page.evaluate(async()=> (await fetch('/admin/ui/notifications',{method:'POST',headers:{'content-type':'application/json'},body:'{"action":"inspect","project":"one"}'})).status),403);
     mark('MFA CSRF');
+    await page.getByLabel('Login SMTP').fill(privateEnv.SMTP_USER);
+    await page.getByLabel('Chave SMTP').fill(privateEnv.SMTP_PASSWORD);
+    await page.getByRole('button',{name:'Revisar configuração SMTP'}).click();
+    await page.getByRole('button',{name:'Confirmar',exact:true}).click();
+    await page.getByText('Configuração SMTP salva.',{exact:true}).waitFor();
+    await page.waitForFunction(() => document.querySelector<HTMLInputElement>('[name=smtp_password]')?.value === '');
+    const secretRow = (await db.query('SELECT smtp_secret_encrypted FROM notification_settings')).rows[0];
+    assert.ok(secretRow.smtp_secret_encrypted && !secretRow.smtp_secret_encrypted.includes(privateEnv.SMTP_PASSWORD));
     rejectAuth=false;
     await page.getByRole('button',{name:'Testar conexão SMTP',exact:true}).click();
     await page.getByRole('button',{name:'Confirmar',exact:true}).click();
@@ -99,8 +107,13 @@ test('CTA/health provider TLS + independent worker + audited backlog in Chromium
     await page.getByRole('button',{name:'Testar conexão SMTP',exact:true}).click();
     await page.getByRole('button',{name:'Confirmar',exact:true}).click();
     await page.getByText('Aguarde um minuto entre testes de conexão SMTP.',{exact:true}).waitFor();
+    await page.getByRole('button',{name:'Enviar e-mail de teste',exact:true}).click();
+    await page.getByRole('button',{name:'Confirmar',exact:true}).click();
+    await page.getByText('O servidor SMTP aceitou o e-mail de teste.',{exact:false}).waitFor();
+    assert.equal(accepted.length,1,'the saved credential sends a real test message');
+    assert.ok(accepted.pop()?.includes(privateEnv.SMTP_RECIPIENT));
     rejectAuth=true;
-    mark('React verifies SMTP TLS/auth without sending');
+    mark('React verifies SMTP TLS/auth and sends an explicitly requested test message');
     await page.goto(adminBase+'/admin/ui/');
     const form=page.locator('#backlog-form');await form.locator('[name=project]').fill('one');
     const submit=async(action:string)=>{const response=page.waitForResponse(r=>r.url().endsWith('/admin/ui/notifications'));await form.locator('button[value="'+action+'"]').click();return response;};
