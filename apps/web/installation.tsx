@@ -1,7 +1,7 @@
 import {useState, type ReactNode} from 'react';
 import {AdminApi, type Page} from './admin-api';
 import {Link} from 'react-router-dom';
-import {Back, conversionsPath, installPath, pagePath, projectIncidentsPath, protectionPath, useContextNavigation} from './navigation';
+import {Back, conversionsPath, installPath, pagePath, projectIncidentsPath, protectionPath, settingsPath, useContextNavigation} from './navigation';
 import {healthPath, installationMessages, publicationIssueMessages, publicationLabel, roleLabels, type InstallationStatus} from './installation-status';
 import {Confirm, Failure, Heading, labels, Loading, useQuery} from './ui';
 
@@ -84,8 +84,15 @@ export function Installation({api, project, page, context, setGuard}: {
   const data = result ?? query.data;
   const collected = collectionResult ?? collection.data;
   const published = data?.distribution;
-  const selectedTelemetry = telemetry ?? data?.selectedTelemetryOrigin ?? '';
-  const pendingTelemetry = telemetry !== undefined && telemetry !== (data?.selectedTelemetryOrigin ?? '');
+  const currentEndpoint = data?.selectedTelemetryOrigin ?? '';
+  const preserveSelection = 'current';
+  const selectedTelemetry = telemetry ?? (currentEndpoint ? preserveSelection : '');
+  const pendingTelemetry = telemetry !== undefined && telemetry !== preserveSelection &&
+    (telemetry !== currentEndpoint || !!telemetry && !!published &&
+      Object.values(published.bases).some(base => new URL(base).origin !== telemetry));
+  const canPublish = data && (pendingTelemetry ? (telemetry ?
+    data.telemetryOrigins?.includes(telemetry) && !data.publication.issues.some(issue => issue.code === 'DISTRIBUTION_SCHEMA_MISSING') :
+    data.publication.defaultsReady) : data.publication.ready);
   const diagnostic = data?.diagnostic;
   const officialUrl = page.urls.length === 1 ? page.urls[0].origin + page.urls[0].pathname : null;
 
@@ -102,7 +109,7 @@ export function Installation({api, project, page, context, setGuard}: {
         setNotice(status.installation?.enabled ? 'Coleta habilitada.' : 'Coleta desabilitada.');
       } else {
         const status = await api.request<Distribution>('distribution', {action, ...scope,
-          ...(action !== 'verify' && telemetry !== undefined ? {telemetryOrigin:telemetry || null} : {})});
+          ...(action !== 'verify' && telemetry !== undefined && telemetry !== preserveSelection ? {telemetryOrigin:telemetry || null} : {})});
         if (action !== 'verify') setTelemetry(undefined);
         setResult(status);
         setNotice(action === 'verify' && status.verificationAttempt
@@ -153,7 +160,7 @@ export function Installation({api, project, page, context, setGuard}: {
       </dl>
       {query.error !== undefined && !result && <Failure error={query.error} retry={query.retry}/>}
       {!data && query.error === undefined && <Loading/>}
-      {!!data?.publication.issues.length && <div className="notice">
+      {!canPublish && !!data?.publication.issues.length && <div className="notice">
         <strong>{published ? 'Publicação de novas revisões bloqueada' : 'O que falta para publicar'}</strong>
         <ul>{publicationIssueMessages(data.publication.issues).map(message => <li key={message}>{message}</li>)}</ul>
         <Link {...nav.link(healthPath)}>Consultar Saúde e operações</Link>
@@ -162,10 +169,13 @@ export function Installation({api, project, page, context, setGuard}: {
       {data && (!!data.telemetryOrigins?.length || !!data.selectedTelemetryOrigin) &&
         <label className="installation-technology">Endpoint de telemetria<select value={selectedTelemetry} disabled={busy}
           onChange={event => setTelemetry(event.target.value)}>
+          {currentEndpoint && <option value={preserveSelection}>Manter endereços da revisão atual</option>}
           <option value="">Usar origem padrão</option>
           {data.telemetryOrigins?.map(origin => <option key={origin}>{origin}</option>)}
         </select></label>}
-      {data?.publication.ready && (!published || data.publication.changesRequired || pendingTelemetry) && <>
+      {data?.telemetryOrigins?.length === 0 &&
+        <Link {...nav.link(settingsPath + '/integracoes')}>Conferir endpoints de telemetria</Link>}
+      {canPublish && (!published || data.publication.changesRequired || pendingTelemetry) && <>
         <p>{published ? 'Publique uma revisão para gerar trechos com os endereços selecionados.' :
           'Publique os endereços para gerar os trechos HTML e CSS desta página.'}</p>
         {!page.enabled && <p>Reative a LP na oferta para publicar pelo painel.</p>}
@@ -208,7 +218,7 @@ export function Installation({api, project, page, context, setGuard}: {
           <li key={item.alias + ':' + item.source}>Revisão {item.version} · {layerLabels[item.source] ?? item.source} · {date(item.last_received_at)}</li>)}</ul>
           : <p className="muted">Nenhum acesso registrado no período disponível.</p>}
         {!data.publication.rotationAvailable && <p>{installationMessages.ROTATION_SCHEMA_MISSING}</p>}
-        {data.publication.ready && data.publication.rotationAvailable && <button type="button" disabled={busy || !page.enabled}
+        {canPublish && data.publication.rotationAvailable && <button type="button" disabled={busy || !page.enabled}
           onClick={() => setConfirmation('rotate')}>Publicar nova revisão</button>}
       </details>}
     </section>
@@ -267,6 +277,8 @@ export function Installation({api, project, page, context, setGuard}: {
     {confirmation && <Confirm title={actionText[confirmation].name}
       accept={() => void execute(confirmation)} cancel={() => setConfirmation(undefined)}>
       <p>{actionText[confirmation].description}</p>
+      {(confirmation === 'publish' || confirmation === 'rotate') && pendingTelemetry &&
+        <p>{selectedTelemetry || 'Usar origem padrão'}</p>}
     </Confirm>}
   </>;
 }

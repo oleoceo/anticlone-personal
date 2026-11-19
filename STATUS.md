@@ -1,9 +1,10 @@
 # STATUS — AntiClone Personal
 
 ## Pool de telemetria
-- Integrações cadastra origens HTTPS próprias. Seleção por revisão explícita em Instalação.
-- Exige autorização privada e ingresso provisionado. A desativação preserva aliases existentes.
-- Provas em `test-results/pool-telemetria/`.
+- `protect.leoceo.online` é o primeiro endpoint persistido no PostgreSQL Dev, com migração 068 aplicada. DNS e TLS respondem; `/healthz` retorna 502. Status pendente de autorização e ingresso.
+- O cadastro existente verifica DNS/HTTPS/gateway sob autorização privada. Seleção explícita usa o domínio nos três papéis. Desativação preserva revisões e indica LPs atuais e históricas.
+- E2E Chromium/PostgreSQL real com dois domínios sintéticos e um upstream mTLS passou. Lint, typecheck, build e broker focado passaram. Evidências em `test-results/endpoints-demo/`.
+- Revisão independente `/root/gateway_review` sobre `740a0c5`. O build está no checkout de trabalho. Admin ativo e NPM foram preservados.
 
 ## Hierarquia do painel V2.2
 - Ajustes compartilhados de largura, cabeçalhos, formulários e navegação.

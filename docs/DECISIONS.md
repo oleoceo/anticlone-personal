@@ -131,7 +131,10 @@ Resultado integral oficial final continua exigido no PR78.
 
 ## Pool de telemetria administrada por revisão
 
-A pool amplia a decisão de distribuição do runtime por papel de 2026-11-10. O cadastro
-administrativo e a autorização privada são condições independentes para a
-seleção. Apenas a telemetria muda na revisão explicitamente publicada. Nenhuma
-consulta faz conexão externa ou altera endereços de revisões anteriores.
+A pool amplia a decisão de distribuição do runtime por papel de 2026-11-10.
+A migração 068 adiciona o resultado da verificação. A seleção de um endpoint
+exige cadastro ativo, autorização privada e resposta operacional após DNS e
+HTTPS válidos. Uma seleção explícita em nova revisão usa o domínio nos três
+papéis para gerar o trecho HTML. A opção de manter os endereços conserva a
+distribuição por papel. Revisões e aliases permanecem imutáveis. A consulta da
+lista e o cadastro são locais. Somente a ação de verificação consulta a rede.

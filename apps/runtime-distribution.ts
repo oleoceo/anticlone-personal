@@ -14,23 +14,26 @@ export class DistributionBlocked extends TypeError {
   constructor(readonly code: string) { super(code); }
 }
 
+function runtimeOriginIssue(value: string | undefined, env: NodeJS.ProcessEnv) {
+  if (!value) return 'RUNTIME_ORIGIN_MISSING';
+  try {
+    if (value.length>2048 || /[\s\\<>"']/.test(value)) throw new TypeError();
+    const url = new URL(value);
+    if (url.origin!==value || url.username || url.password || url.hostname.endsWith('.') ||
+      (url.protocol!=='https:' && !(url.protocol==='http:' && ['localhost','127.0.0.1'].includes(url.hostname)))) throw new TypeError();
+    if (env.ADMIN_PUBLIC_ORIGIN && new URL(env.ADMIN_PUBLIC_ORIGIN).hostname===url.hostname) return 'RUNTIME_ADMIN_HOST_CONFLICT';
+  } catch { return 'RUNTIME_ORIGIN_INVALID'; }
+}
+
 // Configuration is private and operator-owned; never infer origins from a request.
 function configuredOrigins(env: NodeJS.ProcessEnv) {
   const origins = {} as Record<Role,string>;
   const issues: {code: string; role: Role}[] = [];
   for (const role of distributionRoles) {
     const value = env['RUNTIME_'+role+'_ORIGIN'] ?? env.RUNTIME_PUBLIC_ORIGIN;
-    if (!value) { issues.push({code:'RUNTIME_ORIGIN_MISSING',role}); continue; }
-    try {
-      if (value.length>2048 || /[\s\\<>"']/.test(value)) throw new TypeError();
-      const url = new URL(value);
-      if (url.origin!==value || url.username || url.password || url.hostname.endsWith('.') ||
-        (url.protocol!=='https:' && !(url.protocol==='http:' && ['localhost','127.0.0.1'].includes(url.hostname)))) throw new TypeError();
-      if (env.ADMIN_PUBLIC_ORIGIN && new URL(env.ADMIN_PUBLIC_ORIGIN).hostname===url.hostname) {
-        issues.push({code:'RUNTIME_ADMIN_HOST_CONFLICT',role}); continue;
-      }
-      origins[role] = value;
-    } catch { issues.push({code:'RUNTIME_ORIGIN_INVALID',role}); }
+    const code = runtimeOriginIssue(value,env);
+    if (code) issues.push({code,role});
+    else origins[role] = value!;
   }
   return {origins,issues};
 }
@@ -129,27 +132,44 @@ async function readOrPublish(db: Pool, data: {project:string;page:string;action:
     }
     const page=await distributionPage(client,data.project,data.page);
     if (!page) throw new TypeError('unknown page');
-    const {origins,schema,publicationIssues,verifierIssue}=await installationPrerequisites(client,env);
-    if (!inspecting && publicationIssues.length) throw new DistributionBlocked(publicationIssues[0].code);
-    const publication={ready:!publicationIssues.length, issues:publicationIssues, rotationAvailable:schema.rotation,
-      changesRequired:false};
+    const {origins:defaults,schema,publicationIssues,verifierIssue}=await installationPrerequisites(client,env);
     if (!schema.distribution) {
+      if (!inspecting) throw new DistributionBlocked(publicationIssues[0].code);
       await client.query('COMMIT');
-      return {contractVersion:1,state:'NOT_INSTALLED',distribution:null,publication,
+      return {contractVersion:1,state:'NOT_INSTALLED',distribution:null,
+        publication:{ready:false,defaultsReady:false,issues:publicationIssues,rotationAvailable:schema.rotation,changesRequired:false},
         verification:{ready:false,issue:'INSTALLATION_NOT_PUBLISHED'}};
     }
     let distribution=await readDistribution(client,page.installation_id);
-    const pool = await listTelemetryOrigins(client, env);
-    const eligible = pool.items.filter(item => item.authorized && item.enabled);
+    const {items} = await listTelemetryOrigins(client, env);
+    const registered = new Map(items.map(item => [item.origin,item.state]));
+    const eligible = items.filter(item => item.state === 'OPERATIONAL').map(item => item.origin);
     const previous = distribution ? new URL(distribution.bases.TELEMETRY).origin : undefined;
-    const selected = data.telemetryOrigin === undefined ? eligible.find(item => item.origin === previous)?.origin : data.telemetryOrigin;
+    const explicit = data.telemetryOrigin !== undefined;
+    const selected = explicit ? data.telemetryOrigin : previous && registered.has(previous) ? previous : undefined;
+    const persisted = distribution?.bases;
+    const origins = {...defaults};
     if (selected) {
-      if (!inspecting && (!pool.installed || !await telemetryOriginForPublication(client, selected, env)))
-        throw new DistributionBlocked('TELEMETRY_ORIGIN_UNAVAILABLE');
-      origins.TELEMETRY = selected;
+      // Existing split-role revisions are kept by implicit publication and rotation.
+      for (const role of distributionRoles) origins[role] = explicit ? selected : new URL(persisted![role]).origin;
     }
+    const unavailable = {code:'TELEMETRY_ORIGIN_UNAVAILABLE'};
+    const blockedDefault = Object.values(defaults).some(origin => registered.has(origin) && registered.get(origin) !== 'OPERATIONAL');
+    const defaultsReady = !publicationIssues.length && !blockedDefault;
+    const issues = selected ? distributionRoles.flatMap(role => {
+      const code = runtimeOriginIssue(origins[role],env);
+      return code ? [{code,role}] : [];
+    }) : [...publicationIssues];
+    const pooled = new Set(Object.values(origins).filter(origin => registered.has(origin)));
+    if (selected) pooled.add(selected);
+    if ([...pooled].some(origin => registered.get(origin) !== 'OPERATIONAL')) issues.push(unavailable);
+    const publication = {ready:!issues.length,defaultsReady,issues,rotationAvailable:schema.rotation,changesRequired:false};
     const changesOrigins = (current: Distribution) => distributionRoles.some(role=>new URL(current.bases[role]).origin!==origins[role]);
     if (!inspecting) {
+      if (issues.length) throw new DistributionBlocked(issues[0].code);
+      for (const origin of [...pooled].sort()) {
+        if (!await telemetryOriginForPublication(client,origin,env)) throw new DistributionBlocked(unavailable.code);
+      }
       if (data.action==='rotate' && !schema.rotation) throw new DistributionBlocked('ROTATION_SCHEMA_MISSING');
       // Idempotent explicit publication: a dashboard read never creates aliases.
       if (data.action==='rotate' || !distribution || changesOrigins(distribution)) {
@@ -172,7 +192,7 @@ async function readOrPublish(db: Pool, data: {project:string;page:string;action:
     const controlled=schema.verifier?(await client.query(`SELECT c.result FROM controlled_installation_checks c JOIN protected_pages p ON p.id=c.page_id JOIN projects pr ON pr.id=p.project_id WHERE c.page_id=$1 AND c.project_id=$2 AND c.distribution_version=$3 AND c.url_generation=p.url_generation AND c.config_generation=p.config_generation AND p.enabled AND p.lifecycle_state='ACTIVE' AND p.deleted_at IS NULL AND pr.lifecycle_state='ACTIVE' AND pr.deleted_at IS NULL AND c.checked_at>now()-interval '7 days' ORDER BY c.checked_at DESC LIMIT 1`,[data.page,data.project,distribution?.version??0])).rows[0]?.result as ControlledCheck|undefined:undefined;
     await client.query('COMMIT');
     const measured=controlled && controlled.status!=='NOT_VERIFIED' ? controlled.layers : undefined;
-    return {contractVersion:1,state:distribution?'PUBLISHED':'NOT_PUBLISHED',distribution,publication,telemetryOrigins:eligible.map(item => item.origin),selectedTelemetryOrigin:selected ?? null,
+    return {contractVersion:1,state:distribution?'PUBLISHED':'NOT_PUBLISHED',distribution,publication,telemetryOrigins:eligible,selectedTelemetryOrigin:selected ?? null,
       verification:{ready:!issue,issue},history:history.rows,aliasActivity,snippets:distribution?distributionSnippets(distribution):null,
       diagnostic:{status:controlled?.status??'NOT_VERIFIED',confidence:measured?'CONTROLLED_CURRENT_LOAD_ONLY':'UNAUTHENTICATED_CLAIM',
         controlledVerification:controlled??{status:'NOT_VERIFIED',reason:issue??'NO_CURRENT_VERIFICATION'},

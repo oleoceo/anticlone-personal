@@ -63,7 +63,7 @@ export function handleAdminUi(req: IncomingMessage, res: ServerResponse, db: Poo
     }
     if (req.url === '/admin/ui/telemetry-origins') {
       if (!valid) { res.writeHead(401).end(); return false; }
-      void listTelemetryOrigins(db).then(result => res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify(result))).catch(() => res.writeHead(503).end()); return false;
+      void listTelemetryOrigins(db,process.env,true).then(result => res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify(result))).catch(() => res.writeHead(503).end()); return false;
     }
     if (req.url === '/admin/ui/email-attempts') {
       if (!valid) { res.writeHead(401).end(); return false; }

@@ -80,21 +80,35 @@ Validacao corretiva final local do codigo 4691f4cc620c79b22b9621bbc0548ada5c3626
 Bloqueio externo da CI em 2026-11-10: run 42829199298, SHA 53a42bee7693f47c2df31768550271f229b6079e, job validate-repo encerrou em 2 s sem steps/logs. Anotacao GitHub: The job was not started because recent account payments have failed or your spending limit needs to be increased. Reproduzir com gh run view 42829199298 --json jobs e gh api repos/oleoceo/anticlone-personal/check-runs/129874451747/annotations. Nao e falha de teste do codigo e nao existe CI verde para esta correcao. Intervencao de faturamento/limite depende do proprietario; nao alterar custos nem contornar o gate. Provas locais nao substituem a CI exigida. O PR permanece draft; consultar checks do SHA final apos normalizacao da conta.
 Decisao posterior do proprietario para o fechamento do PR #64: executar integralmente CI local gratuita no WSL/Linux como gate escolhido nesta revisao, mantendo Actions BLOCKED e PR Draft. O HEAD48a9541 passou105/0/0 em Node22 com workflow completo. Teste operacional ampliado une v2, painel MFA/CSRF, rotacao/autorizacao/suspensao, PAGE/CTA reais sem reescrita e falhas; apps/runtime/infra nao mudaram. Runner, resultado integral do novo HEAD e evidencias acessiveis descritos em LOCAL-CI.md. F08 permanece BLOCKED; nenhum status remoto verde e alegado.
 
-## Pool de origens de telemetria (067)
+## Pool de origens de telemetria (067–068)
 
 Em Configurações → Integrações → Endpoints de telemetria, cadastre a origem
-HTTPS completa de cada domínio próprio. A lista privada
-`RUNTIME_TELEMETRY_POOL_ORIGINS` no admin é separada por vírgulas. Ela registra
-as origens que o operador já provisionou no DNS, TLS e proxy para o gateway.
-A origem do admin é recusada. O cadastro não inicia conexões externas.
+HTTPS completa de cada domínio próprio. O cadastro usa `telemetry_origins` e
+começa pendente. Inclua na lista privada `RUNTIME_TELEMETRY_POOL_ORIGINS` do
+admin só origens que já tenham ingresso provisionado, separadas por vírgulas.
+O hostname administrativo e portas públicas alternativas ficam fora da seleção.
 
-A instalação da LP permite escolher uma origem elegível e publicar uma nova
-revisão. Somente TELEMETRY muda. O proxy de cada hostname provisionado deve
-entregar as rotas de distribuição ao gateway sob o contrato privado de
-ingresso já configurado, incluindo o Host canônico esperado pelo gateway. Uma origem autorizada no painel indica autorização
-administrativa, e a recepção real depende do ingresso e da política do site.
+Use **Verificar endpoint** para consultar DNS público, validar TLS para o
+hostname e conferir `GET /healthz` do gateway em modo `OPERATIONAL`. O admin
+reutiliza o transporte HTTPS limitado do verificador. Ele fixa um IP público
+resolvido, valida o certificado para o hostname e recusa redirecionamento.
+O cadastro e a consulta da lista são locais. A data exibida é a da última
+verificação executada. Revalide após mudanças de DNS, TLS ou ingresso.
 
-A escolha é por revisão, sem balanceamento nem troca durante a execução.
-Desativar um endpoint impede novas publicações com ele. Os aliases antigos
-conservam seus endereços. Mantenha o ingresso anterior disponível enquanto
-houver páginas com trechos antigos.
+Na instalação da LP, selecione um endpoint operacional e publique uma revisão.
+A seleção explícita usa o domínio para os scripts, sinais e canários, inclusive
+no HTML para o `index.html`. Manter a revisão atual conserva a distribuição
+por papel, incluindo instalações anteriores à migração 068. Desativar impede
+novas publicações com o endpoint. A lista mostra LPs com revisões atuais ou
+anteriores naquele domínio. Uma revisão antiga pode continuar instalada no
+site, mesmo após publicar outra. Mantenha o ingresso enquanto houver trechos
+em uso.
+
+No Dev, `https://protect.leoceo.online` depende da homologação do Proxy Host 13
+no `NPM_TRAFFIC_GATE`. Para cada domínio adicional, provisione o seu hostname
+e certificado público no NPM e aplique os mesmos limites e rotas de distribuição.
+Cada vhost valida o seu Host externo e usa o mesmo upstream mTLS privado,
+com `proxy_ssl_name` e `Host` upstream fixos no hostname canônico
+`PUBLIC_GATEWAY_HOST` da instância. O certificado interno, os pins, a instância
+e o PostgreSQL Dev são compartilhados pelo fluxo. A conclusão do gate e o
+teste no hostname real continuam necessários para cada ingresso.
