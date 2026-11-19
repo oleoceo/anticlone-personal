@@ -1,5 +1,11 @@
 # STATUS — AntiClone Personal
 
+## Logs de e-mail pelo React — Dev
+- Histórico de testes SMTP e alertas de cópia, CTA e saúde, com filtros por resultado e até 100 tentativas dos últimos 30 dias.
+- SMTP manual reserva uma linha antes do envio e registra o resultado sem chaves, corpos ou respostas brutas.
+- Revisão independente `logs_review` aprovada no delta de código `f1c2c6632790d5eea5f1ab02d1d737b2d140b775ba4bcc01b35427bcd9cf580e`.
+- Provas em `test-results/smtp-logs/`; documentação em [Transporte de alertas](docs/CLONE-SMTP.md).
+
 ## Credenciais SMTP pelo React — Dev
 - Login e chave cifrada no painel; teste de conexão autenticada e envio de teste confirmado separadamente.
 - Gateway e worker usam a revisão salva e respeitam a preferência de alertas. O endpoint é autorizado no ambiente privado.

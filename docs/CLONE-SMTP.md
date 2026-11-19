@@ -79,3 +79,17 @@ worker leem a configuração por revisão durante a manutenção, e as
 tentativas continuam condicionadas à preferência ativa. Uma tentativa
 já admitida pode concluir. A configuração por ambiente continua
 disponível para instalações sem credenciais cadastradas pelo painel.
+
+## Logs de e-mail
+
+**Configurações → Notificações → Logs de e-mail** reúne até 100 tentativas
+dos últimos 30 dias. Inclui envios manuais e registros existentes dos alertas
+de cópia, CTA e saúde. A consulta exige sessão administrativa e permite
+filtrar por aceito pelo SMTP, falha ou resultado desconhecido.
+
+A migration 066 registra a tentativa manual antes de abrir a conexão. Uma
+interrupção sem resultado gravado aparece como desconhecida. Em falhas de teste
+o painel mostra a categoria segura e, se disponível, o código numérico SMTP.
+O histórico descarta credenciais, o texto do e-mail e a resposta bruta do
+provedor. A manutenção do admin remove tentativas manuais após 30 dias.
+Aceitação pelo SMTP indica que o servidor recebeu a mensagem para processamento.

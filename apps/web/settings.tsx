@@ -40,6 +40,7 @@ export function Settings({api, projects, section, setGuard}: {api: AdminApi; pro
 
 function NotificationSettings({api, setGuard}: {api: AdminApi; setGuard: SetGuard}) {
   const query = useQuery('settings', signal => api.request<Smtp>('settings', undefined, signal));
+  const emailLog = useQuery('email-attempts', signal => api.request<EmailAttempt[]>('email-attempts', undefined, signal));
   const operation = useOperation(setGuard);
   const config = query.data;
   const [edited, setEdited] = useState(false);
@@ -48,7 +49,8 @@ function NotificationSettings({api, setGuard}: {api: AdminApi; setGuard: SetGuar
     operation.review(send ? 'Enviar e-mail de teste' : 'Testar conexão SMTP', <p>{send ?
       'Enviar uma mensagem de teste para ' + config.recipient + '.' :
       'Verificar TLS e autenticação da configuração v' + config.version + ' sem enviar mensagens.'}</p>, async () => {
-      const result = await api.request<{state: string; checked_at?: string}>('smtp-test', {version: config.version, ...(send ? {send: true} : {})});
+      const result = await api.request<{state: string; checked_at?: string}>('smtp-test', {version: config.version, ...(send ? {send: true} : {})})
+        .finally(() => { if (send) emailLog.revalidate(); });
       if (result.state === 'VERIFIED') return 'TLS e autenticação SMTP verificados · v' + config.version + ' · ' + formatDate(result.checked_at);
       if (result.state === 'ACCEPTED') return 'O servidor SMTP aceitou o e-mail de teste. Confira a caixa postal.';
       if (result.state === 'AUTH_FAILED') throw new InputError('O servidor SMTP recusou a autenticação. Confira o login e a chave SMTP.');
@@ -66,7 +68,7 @@ function NotificationSettings({api, setGuard}: {api: AdminApi; setGuard: SetGuar
         return enabled ? 'Habilitação solicitada.' : 'Solicitação desativada.';
       });
   }
-  return <section className="panel form-panel">
+  return <><section className="panel form-panel">
     <h2>Notificações e SMTP</h2>
     {operation.notice()}
     {query.error !== undefined ? <Failure error={query.error} retry={query.revalidate}/> : !config ? <Loading/> : <>
@@ -121,6 +123,60 @@ function NotificationSettings({api, setGuard}: {api: AdminApi; setGuard: SetGuar
         <button type="button" disabled={query.pending || operation.busy} onClick={query.revalidate}>Reconsultar configuração</button>
       </div>
     </>}
+  </section>
+    <EmailLog query={emailLog}/>
+  </>;
+}
+
+type EmailAttempt = {
+  kind: 'TEST' | 'CLONE' | 'CTA' | 'HEALTH';
+  item_id: string;
+  attempt: number;
+  transport: string;
+  project: string | null;
+  started_at: string;
+  finished_at: string | null;
+  outcome: 'ACCEPTED' | 'FAILED' | 'UNKNOWN';
+  failure_code: 'AUTH_FAILED' | 'SMTP_FAILED' | null;
+  smtp_status: number | null;
+  recovered_record: boolean;
+};
+
+const emailKinds = {TEST: 'E-mail de teste', CLONE: 'Alerta de cópia', CTA: 'Alerta de CTA', HEALTH: 'Alerta de saúde'};
+const emailOutcomes = {ACCEPTED: 'Aceito pelo SMTP', FAILED: 'Falha no envio', UNKNOWN: 'Resultado desconhecido'};
+const emailTransports: Record<string, string> = {SMTP_LOCAL: 'SMTP local', SMTP_PROVIDER: 'Provedor SMTP', brevo: 'Brevo', smtp: 'SMTP personalizado'};
+
+function EmailLog({query}: {query: ReturnType<typeof useQuery<EmailAttempt[]>>}) {
+  const [status, setStatus] = useState('');
+  const rows = query.data?.filter(attempt => !status || attempt.outcome === status);
+  return <section className="panel" aria-labelledby="email-log-heading">
+    <div className="panel-heading">
+      <h2 id="email-log-heading">Logs de e-mail</h2>
+      <button type="button" onClick={query.revalidate} disabled={query.pending}>Atualizar logs</button>
+    </div>
+    <p className="muted">Até 100 tentativas recentes dos últimos 30 dias. Aceitação indica que o SMTP recebeu a mensagem. Uma falha observada pode ocorrer sem confirmação do resultado final.</p>
+    <label>Status do e-mail<select value={status} onChange={event => setStatus(event.target.value)}>
+      <option value="">Todos</option>
+      {Object.entries(emailOutcomes).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+    </select></label>
+    {query.error !== undefined ? <Failure error={query.error} retry={query.revalidate}/> : !rows ? <Loading/> :
+      !rows.length ? <p className="empty">Nenhuma tentativa de envio neste recorte.</p> :
+        <div className="finance-table-wrap" role="region" aria-label="Histórico de envio de e-mails" tabIndex={0}>
+          <table className="activity-table finance-table">
+            <thead><tr><th scope="col">E-mail</th><th scope="col">Horário</th><th scope="col">Status</th><th scope="col">Detalhes</th></tr></thead>
+            <tbody>{rows.map(row => <tr key={row.kind + ':' + row.item_id + ':' + row.attempt}>
+              <th scope="row">{emailKinds[row.kind]} · #{row.item_id}</th>
+              <td data-heading="Horário"><time dateTime={row.started_at}>{formatDate(row.started_at)}</time></td>
+              <td data-heading="Status">{emailOutcomes[row.outcome]}</td>
+              <td data-heading="Detalhes">{emailTransports[row.transport] ?? row.transport} · tentativa {row.attempt}
+                {row.project && <small>Projeto {row.project}</small>}
+                {row.recovered_record && <small>Resultado recuperado do teste anterior</small>}
+                {row.failure_code && <small>{row.failure_code === 'AUTH_FAILED' ? 'Autenticação recusada' : 'O envio não foi confirmado pelo SMTP'}
+                  {row.smtp_status && ' · SMTP ' + row.smtp_status}</small>}
+              </td>
+            </tr>)}</tbody>
+          </table>
+        </div>}
   </section>;
 }
 

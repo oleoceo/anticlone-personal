@@ -1,3 +1,4 @@
+import {listEmailAttempts} from './notification-email-log.js';
 import { adminHealth } from './admin-health.js';
 import {serveAdminFrontend} from './admin-frontend.js';
 import {ProjectRegistrationConflict,registerProject,registrationHistory} from './project-registration.js';
@@ -58,6 +59,10 @@ export function handleAdminUi(req: IncomingMessage, res: ServerResponse, db: Poo
     if (req.url === '/admin/ui/projects') {
       if (!valid) { res.writeHead(401).end(); return false; }
       void db.query('SELECT id,name FROM projects ORDER BY name,id').then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result.rows))).catch(()=>res.writeHead(503).end()); return false;
+    }
+    if (req.url === '/admin/ui/email-attempts') {
+      if (!valid) { res.writeHead(401).end(); return false; }
+      void listEmailAttempts(db).then(result => res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify(result))).catch(() => res.writeHead(503).end()); return false;
     }
     if (req.url === '/admin/ui/settings') {
       if (!valid) { res.writeHead(401).end(); return false; }

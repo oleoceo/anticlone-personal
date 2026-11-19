@@ -112,6 +112,31 @@ test('CTA/health provider TLS + independent worker + audited backlog in Chromium
     await page.getByText('O servidor SMTP aceitou o e-mail de teste.',{exact:false}).waitFor();
     assert.equal(accepted.length,1,'the saved credential sends a real test message');
     assert.ok(accepted.pop()?.includes(privateEnv.SMTP_RECIPIENT));
+    const emailLog=page.getByRole('region',{name:'Logs de e-mail',exact:true});
+    const testLog=emailLog.getByRole('row').filter({hasText:'E-mail de teste'});
+    await testLog.getByText('Aceito pelo SMTP',{exact:true}).waitFor();
+    await page.reload();
+    await testLog.getByText('Aceito pelo SMTP',{exact:true}).waitFor();
+    assert.ok(!((await emailLog.textContent())?.includes(privateEnv.SMTP_PASSWORD)));
+    assert.equal((await fetch(adminBase+'/admin/ui/email-attempts',{headers:{'sec-fetch-site':'same-origin'}})).status,401);
+    rejectAuth=true;
+    // Exercise a fresh process so the manual endpoint's one-minute cooldown remains intact.
+    const failure=spawn(process.execPath,['--input-type=module','-e',`
+      import {Pool} from 'pg';
+      import {getNotificationSettings,testNotificationSmtp} from './dist/apps/notification-settings.js';
+      const db=new Pool({connectionString:process.env.DATABASE_URL});
+      try {
+        const {version}=await getNotificationSettings(db);
+        const outcome=await testNotificationSmtp(db,{version,send:true});
+        if(outcome.state!=='AUTH_FAILED')process.exitCode=1;
+      } finally {await db.end();}
+    `],{env,stdio:'ignore'});
+    assert.deepEqual(await once(failure,'exit'),[0,null]);
+    await page.getByRole('button',{name:'Atualizar logs',exact:true}).click();
+    await testLog.getByText('Autenticação recusada',{exact:false}).waitFor();
+    assert.equal((await db.query("SELECT count(*)::int n FROM smtp_test_attempts WHERE outcome='FAILED' AND failure_code='AUTH_FAILED'")).rows[0].n,1);
+
+
     rejectAuth=true;
     mark('React verifies SMTP TLS/auth and sends an explicitly requested test message');
     await page.goto(adminBase+'/admin/ui/');
@@ -130,6 +155,12 @@ test('CTA/health provider TLS + independent worker + audited backlog in Chromium
     await until(async()=>(await db.query("SELECT count(*)::int n FROM cta_delivery_attempts WHERE outcome='FAILED'")).rows[0].n===1&&(await db.query("SELECT count(*)::int n FROM health_delivery_attempts WHERE outcome='FAILED'")).rows[0].n===1,'CTA/health failures durable');
     await stop(worker);worker=undefined;assert.equal(accepted.length,0);
     mark('provider failures persisted');
+    await page.goto(adminBase+'/admin/ui/novo/configuracoes/notificacoes');
+    await page.getByLabel('Status do e-mail').selectOption('FAILED');
+    const failedLogs=page.getByRole('region',{name:'Logs de e-mail',exact:true});
+    await failedLogs.getByRole('row').filter({hasText:'Alerta de CTA'}).getByText('Falha no envio',{exact:true}).waitFor();
+    assert.equal(await failedLogs.getByRole('cell',{name:'Aceito pelo SMTP',exact:true}).count(),0);
+
     rejectAuth=false;await db.query('UPDATE cta_alert_deliveries SET next_attempt=clock_timestamp()');await db.query('UPDATE health_delivery SET next_attempt=clock_timestamp()');startWorker();
     await until(async()=>(await db.query("SELECT count(*)::int n FROM cta_alert_deliveries WHERE result_kind='SMTP_PROVIDER_ACCEPTED'")).rows[0].n===1&&(await db.query('SELECT count(*)::int n FROM health_delivery WHERE sent_at IS NOT NULL')).rows[0].n===1,'retry accepted');
     assert.equal(accepted.length,2);assert.ok(accepted.some(m=>m.includes('gateway_local')));assert.ok(accepted.some(m=>/Message-ID: <anticlone-cta-/.test(m)));

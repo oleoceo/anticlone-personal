@@ -69,16 +69,34 @@ export async function testNotificationSmtp(db: Pool, input: unknown) {
   const config = resolveSmtpRow(row);
   if (!config) return {state: 'PRIVATE_ENVIRONMENT_NOT_CONFIGURED'};
   limit.set(db, now + 60_000);
+  if (data.send) return sendSmtpTest(db, config, expected, now);
   try {
-    if (data.send) {
-      await sendProviderNotice(config, String(now), 'AntiClone Dev — teste SMTP', 'Mensagem de teste solicitada no painel AntiClone.');
-      return {state: 'ACCEPTED', checked_at: new Date().toISOString()};
-    }
     await verifyProviderConnection(config);
     return {state: 'VERIFIED', checked_at: new Date().toISOString()};
   } catch (error) {
     return {state: (error as {code?: string})?.code === 'EAUTH' ? 'AUTH_FAILED' : 'FAILED'};
   }
+}
+
+async function sendSmtpTest(db: Pool, config: NonNullable<ReturnType<typeof resolveSmtpRow>>, version: number, now: number) {
+  const reserved = await db.query(`INSERT INTO smtp_test_attempts(settings_version,provider)
+    SELECT version,$2 FROM notification_settings WHERE singleton=true AND version=$1 RETURNING id`, [version, config.provider]);
+  if (!reserved.rowCount) throw new Conflict();
+  const id = reserved.rows[0].id;
+  let failure: 'AUTH_FAILED' | 'SMTP_FAILED' | null = null;
+  let smtpStatus: number | null = null;
+  try {
+    await sendProviderNotice(config, String(now), 'AntiClone Dev — teste SMTP', 'Mensagem de teste solicitada no painel AntiClone.');
+  } catch (error) {
+    const details = error as {code?: string; responseCode?: number} | null;
+    failure = details?.code === 'EAUTH' ? 'AUTH_FAILED' : 'SMTP_FAILED';
+    const code = details?.responseCode;
+    if (typeof code === 'number' && Number.isInteger(code) && code >= 400 && code <= 599) smtpStatus = code;
+  }
+  const outcome = failure ? 'FAILED' : 'ACCEPTED';
+  const result = await db.query(`UPDATE smtp_test_attempts SET outcome=$2, failure_code=$3, smtp_status=$4,
+    finished_at=clock_timestamp() WHERE id=$1 RETURNING finished_at`, [id, outcome, failure, smtpStatus]);
+  return {state: failure === 'AUTH_FAILED' ? failure : outcome, checked_at: result.rows[0].finished_at};
 }
 export async function saveNotificationSettings(db:Pool, input:unknown) {
   const data=validate(input);
