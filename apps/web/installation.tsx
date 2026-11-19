@@ -1,7 +1,7 @@
 import {useState} from 'react';
 import {AdminApi, type Page} from './admin-api';
 import {Link} from 'react-router-dom';
-import {Back, pagePath, useContextNavigation} from './navigation';
+import {Back, conversionsPath, installPath, pagePath, projectIncidentsPath, protectionPath, useContextNavigation} from './navigation';
 import {healthPath, installationMessages, publicationIssueMessages, publicationLabel, roleLabels, type InstallationStatus} from './installation-status';
 import {Confirm, Failure, Heading, labels, Loading, useQuery} from './ui';
 
@@ -117,6 +117,12 @@ export function Installation({api, project, page, setGuard}: {
     <Back to={pagePath(project, page.id)}>Voltar para {page.name}</Back>
     <Heading title="Instalar a proteção" description={page.name}
       actions={<button type="button" disabled={busy} onClick={() => {setError(undefined); setNotice(''); reconsult();}}>Atualizar situação</button>}/>
+    <nav className="tabs" aria-label="Áreas da LP">
+      <Link aria-current="page" {...nav.link(installPath(project, page.id))}>Instalação</Link>
+      <Link {...nav.link(protectionPath(project, page.id))}>Políticas de proteção</Link>
+      <Link {...nav.link(conversionsPath(project, page.id))}>Conversões e CTAs</Link>
+      <Link {...nav.link(projectIncidentsPath(project), '?lp=' + page.id)}>Incidentes da LP</Link>
+    </nav>
     {error !== undefined && <Failure error={error}/>}
     {notice && <p className="notice" role="status">{notice}</p>}
     <section className="panel">

@@ -14,6 +14,7 @@ export const projectIncidentsPath = (project: string) => projectPath(project) + 
 export const incidentPath = (project: string, incident: string) => projectIncidentsPath(project) + '/' + incident;
 export const conversionsPath = (project: string, page: string) => pagePath(project, page) + '/conversoes';
 export const installPath = (project: string, page: string) => pagePath(project, page) + '/instalacao';
+export const protectionPath = (project: string, page: string) => pagePath(project, page) + '/protecao';
 
 type Trail = {path: string};
 type HistoryContext = {incidentText?: string; query?: string; filter?: string; pages?: Record<string, string>; from?: Trail};
@@ -23,10 +24,12 @@ export function sectionParams(search: string) {
   const params = new URLSearchParams(search);
   const result = new URLSearchParams();
   const lp = params.get('lp');
+  const project = params.get('projeto');
   const days = params.get('dias');
   const status = params.get('situacao');
   const surface = params.get('superficie');
   if (lp && pageId.test(lp)) result.set('lp', lp);
+  if (project && /^[A-Za-z0-9_-]{1,64}$/.test(project)) result.set('projeto', project);
   if (days && ['1', '7', '30'].includes(days)) result.set('dias', days);
   if (status && ['unverified', 'investigating', 'confirmed_copy', 'false_positive'].includes(status)) result.set('situacao', status);
   if (surface && /^[A-Za-z0-9_-]{1,64}$/.test(surface)) result.set('superficie', surface);
@@ -46,6 +49,7 @@ export function readRoute(path: string) {
   if (path === offerPath || path === offerPath + '/') return {kind: 'offer' as const};
   if (path.replace(/\/$/, '') === incidentsPath) return {kind: 'incidents-home' as const};
   if (!project) return {kind: 'projects' as const};
+  if (area === 'checkouts') return {kind: 'project-checkouts' as const, project};
   if (area === 'nova-lp') return {kind: 'new-page' as const, project};
   if (area === 'incidentes') {
     if (!page) return {kind: 'incidents' as const, project};
@@ -54,6 +58,7 @@ export function readRoute(path: string) {
   }
   if (area === 'lps' && page && pageId.test(page)) {
     if (view === 'conversoes') return {kind: 'conversions' as const, project, page, subview};
+    if (view === 'protecao') return {kind: 'protection' as const, project, page, action: subview === 'substituir-cta' ? 'substituir-cta' as const : 'redirecionar' as const};
     return {kind: view === 'instalacao' ? 'installation' as const : 'page' as const, project, page};
   }
   return {kind: 'project' as const, project};

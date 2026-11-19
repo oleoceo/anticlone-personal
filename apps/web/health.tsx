@@ -74,9 +74,18 @@ export function HealthOperations({api, projects, setGuard}: {api: AdminApi; proj
       <div className="action-links"><Link {...nav.link('/visao-geral')}>Abrir diagnósticos na Visão Geral</Link>
         <Link {...nav.link('/configuracoes/notificacoes')}>Abrir revisão de alertas</Link></div>
     </section>
-    <details className="panel"><summary>Recuperação, retenção e operações avançadas</summary>
-      <p>Backup, restauração e retenção usam as ferramentas privadas. O <a href="/admin/ui/">painel anterior</a> mantém os fluxos avançados legados.</p>
-    </details>
+    <section className="panel">
+      <h2>Recuperação e retenção</h2>
+      <p>Use o terminal privado com as ferramentas PostgreSQL da mesma versão do servidor. O estado do último backup não está disponível nesta consulta.</p>
+      <details><summary>Procedimento de backup e restauração</summary>
+        <ol className="installation-guide">
+          <li>Configure <code>RECOVERY_DATABASE_URL</code> no ambiente privado e execute <code>npm run recovery -- backup PASTA_PRIVADA</code>.</li>
+          <li>Confira o manifesto, aponte <code>RECOVERY_DATABASE_URL</code> para o banco vazio separado <code>anticlone_restore_ensaio</code> e execute <code>npm run recovery -- restore PASTA_PRIVADA anticlone_restore_ensaio</code>.</li>
+          <li>Confronte as contagens, a integridade e a inicialização dos serviços conforme <code>docs/POSTGRES-RECOVERY.md</code>.</li>
+        </ol>
+        <p>Para expiração de arquivos, use a prévia de <code>npm run retention</code> conforme <code>docs/OPERATIONAL-CORE-CLOSURE.md</code>.</p>
+      </details>
+    </section>
   </>;
 }
 

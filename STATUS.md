@@ -1,5 +1,12 @@
 # STATUS — AntiClone Personal
 
+## Recuperação integrada Dev — PR #82
+- React V2.2 no admin privado com proteção por LP, captura de CTA local, evidência autorizada, atividade diária, migração de checkout e vínculos por projeto.
+- Jornadas em PostgreSQL 16/Chromium, gateway privado com LP original e cópia, worker SMTP TLS sintético e backup/restore isolado. Evidências em test-results/recuperacao-integrada/.
+- O estado das 45 capacidades e o contrato de Stealth seguem a matriz. Homologação externa e recuperação privada em [Recuperação integrada](docs/RECUPERACAO-INTEGRADA-DEV.md).
+- Revisão independente `revisao_integrada` favorável ao delta final identificado no relatório.
+- CI remota verde na base 58383ae do PR #82. A publicação do delta local depende de autenticação no GitHub.
+
 ## Recuperação operacional Dev — publicação e diagnóstico da primeira LP
 - F07/F08 e GS01. Prontidão e bloqueadores por LP, revisão persistida, snippets e diagnóstico com prova por camada e sinais separados.
 - React V2.2 preserva navegação e integra a configuração e o histórico de saúde à sessão privada. Gateway local usa sonda HTTP opt-in.

@@ -1,5 +1,5 @@
 import {useState} from 'react';
-import {Link} from 'react-router-dom';
+import {Link, useSearchParams} from 'react-router-dom';
 import {AdminApi, type Project} from './admin-api';
 import {CommerceSettings} from './commerce-settings';
 import {DetailsData, formData, InputError, useOperation, value, type SetGuard} from './operations';
@@ -26,8 +26,8 @@ export function Settings({api, projects, section, setGuard}: {api: AdminApi; pro
     <Breadcrumbs items={[{label: 'Configurações', path: section ? settingsPath : undefined},
       ...(section ? [{label: names[section as keyof typeof names]}] : [])]}/>
     <Heading title="Configurações" description="Preferências e integrações do painel administrativo."/>
-    <nav className="action-links" aria-label="Seções de configurações">
-      {Object.entries(names).map(([part, label]) => <Link key={part} className="button"
+    <nav className="tabs" aria-label="Seções de configurações">
+      {Object.entries(names).map(([part, label]) => <Link key={part}
         aria-current={part === (section ?? 'notificacoes') ? 'page' : undefined} {...nav.link(settingsPath + '/' + part)}>{label}</Link>)}
     </nav>
     {section === 'integracoes' ? <CommerceSettings api={api} setGuard={setGuard}/> : section === 'operacoes' ?
@@ -103,13 +103,15 @@ function NotificationSettings({api, setGuard}: {api: AdminApi; setGuard: SetGuar
 type QueueItem = {queue: string; item_id: string; revision: string; hold_state: string; state: string; attempts: number};
 type Queue = {state: string; items: QueueItem[]; history: unknown[]; attempts: unknown[]};
 function NotificationQueue({api, projects, setGuard}: {api: AdminApi; projects: Project[]; setGuard: SetGuard}) {
-  const [project, setProject] = useState('');
+  const [filters, setFilters] = useSearchParams();
+  const project = projects.find(item => item.id === filters.get('projeto'))?.id ?? '';
   const query = useQuery(project, signal => api.request<Queue>('notifications', {action: 'inspect', project}, signal));
   const operation = useOperation(setGuard);
   return <section className="panel">
     <h2>Alertas em revisão</h2>
     <p>O histórico registra tentativas de transporte. A entrega na caixa postal permanece sem verificação.</p>
-    <label>Projeto dos alertas<select value={project} disabled={operation.busy} onChange={event => setProject(event.target.value)}>
+    <label>Projeto dos alertas<select value={project} disabled={operation.busy} onChange={event =>
+      setFilters(event.target.value ? {projeto: event.target.value} : {}, {replace: true})}>
       <option value="">Selecione</option>{projects.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
     </select></label>
     {operation.notice()}

@@ -1,3 +1,4 @@
+import {useEffect, useRef, useState} from 'react';
 import {useLocation, useNavigate} from 'react-router-dom';
 import {searchOf, sectionParams} from './navigation';
 import {AdminApi, type Page} from './admin-api';
@@ -32,7 +33,7 @@ export function CtaWorkspace({api, project, page, protection, refresh, setGuard}
       params.set('superficie', event.target.value);
       void navigate({pathname: location.pathname, search: searchOf(params)}, {replace: true, state: location.state});
     }}>{surfaces.map(policy => <option key={policy.surface} value={policy.surface}>{policy.surface}</option>)}</select></label>}
-    {surface ? <InventoryView key={surface.surface} api={api} project={project} surface={surface}
+    {surface ? <InventoryView key={surface.surface + ':' + surface.pathname} api={api} project={project} surface={surface}
       refresh={refresh} setGuard={setGuard}/> :
       <p className="empty">Nenhuma política de CTA publicada para os caminhos desta LP.</p>}
   </section>;
@@ -42,6 +43,7 @@ function InventoryView({api, project, surface, refresh, setGuard}: {
   api: AdminApi; project: string; surface: CtaPolicy; refresh: () => void; setGuard: SetGuard;
 }) {
   const operation = useOperation(setGuard);
+  const [capture, setCapture] = useState('');
   const query = useQuery(surface.surface, signal => api.request<Inventory>('cta-inventory', {project, surface: surface.surface}, signal));
   const protection = (action: string, data: object) => api.request('protection', {action, project, data});
   const update = () => { query.revalidate(); refresh(); };
@@ -78,7 +80,8 @@ function InventoryView({api, project, surface, refresh, setGuard}: {
     </details>
     <details>
       <summary>Importar captura existente</summary>
-      <p>Use o JSON de candidatos exportado para esta superfície. A importação atualiza a captura usada na revisão.</p>
+      <p>Cole um inventário autorizado ou capture uma página local. Revise antes de substituir a captura vigente da superfície.</p>
+      <LocalCapture surface={surface} onCapture={setCapture}/>
       <form onSubmit={event => {
         const data = formData(event);
         let candidates: unknown;
@@ -92,11 +95,79 @@ function InventoryView({api, project, surface, refresh, setGuard}: {
           return 'Captura importada.';
         }, data);
       }}>
-        <label>JSON dos candidatos<textarea name="candidates" rows={6} required maxLength={60_000}/></label>
+        <label>JSON dos candidatos<textarea name="candidates" rows={6} required maxLength={60_000}
+          value={capture} onChange={event => setCapture(event.target.value)}/></label>
         <button type="submit" disabled={operation.busy}>Revisar captura</button>
       </form>
     </details>
   </>;
+}
+
+function LocalCapture({surface, onCapture}: {surface: CtaPolicy; onCapture: (json: string) => void}) {
+  const frame = useRef<HTMLIFrameElement>(null);
+  const [address, setAddress] = useState('');
+  const [url, setUrl] = useState<URL>();
+  const [ready, setReady] = useState(false);
+  const [feedback, setFeedback] = useState('');
+  const pending = useRef<{nonce: string; timeout: number} | null>(null);
+  useEffect(() => {
+    function receive(event: MessageEvent) {
+      const request = pending.current;
+      const data = event.data;
+      if (!request || event.source !== frame.current?.contentWindow || event.origin !== url?.origin ||
+        data?.type !== 'anticlone-inventory-result' || data.nonce !== request.nonce || data.surface !== surface.surface ||
+        data.pathname !== surface.pathname) return;
+      window.clearTimeout(request.timeout);
+      pending.current = null;
+      try {
+        if (!Array.isArray(data.candidates) || data.candidates.length > 100) throw new TypeError();
+        const json = JSON.stringify(data.candidates, null, 2);
+        if (new TextEncoder().encode(json).length > 60_000) throw new TypeError();
+        onCapture(json);
+        setFeedback(data.candidates.length + ' candidato(s) carregado(s). Confira o JSON e revise a importação.');
+      } catch { setFeedback('O inventário recebido excede os limites ou tem formato inválido.'); }
+    }
+    window.addEventListener('message', receive);
+    return () => {
+      window.removeEventListener('message', receive);
+      window.clearTimeout(pending.current?.timeout);
+      pending.current = null;
+    };
+  }, [url, surface.surface, surface.pathname, onCapture]);
+
+  return <details><summary>Capturar página local de teste</summary>
+    <p>Abra a página de laboratório com o runtime instalado. Use somente localhost ou 127.0.0.1 com o caminho {surface.pathname}.</p>
+    <label>URL da página local<input type="url" maxLength={2048} value={address} onChange={event => setAddress(event.target.value)}/></label>
+    <div className="action-links">
+      <button type="button" onClick={() => {
+        try {
+          const next = new URL(address);
+          if (!['http:', 'https:'].includes(next.protocol) || !['localhost', '127.0.0.1'].includes(next.hostname) ||
+            next.origin === location.origin || next.username || next.password || next.pathname !== surface.pathname) throw new TypeError();
+          setReady(next.href === url?.href && ready);
+          setUrl(next);
+          setFeedback('Abra a superfície na página e solicite a captura.');
+        } catch {
+          setUrl(undefined);
+          setReady(false);
+          setFeedback('Informe uma URL de laboratório válida no caminho indicado.');
+        }
+      }}>Abrir página local</button>
+      {url && <button type="button" disabled={!ready} onClick={() => {
+        window.clearTimeout(pending.current?.timeout);
+        const nonce = crypto.randomUUID().replaceAll('-', '');
+        pending.current = {nonce, timeout: window.setTimeout(() => {
+          pending.current = null;
+          setFeedback('Nenhuma resposta. Confira o runtime, a superfície e a permissão na página local.');
+        }, 8_000)};
+        frame.current?.contentWindow?.postMessage({type: 'anticlone-inventory-request', nonce, surface: surface.surface}, url.origin);
+        setFeedback('Aguardando permissão e captura da página local.');
+      }}>Capturar superfície</button>}
+    </div>
+    {url && <iframe className="capture-frame" ref={frame} src={url.href} onLoad={() => setReady(true)} referrerPolicy="no-referrer"
+      title="Página local para captura de CTA" sandbox="allow-scripts allow-same-origin allow-modals"/>}
+    {feedback && <p role="status">{feedback}</p>}
+  </details>;
 }
 
 function PointCard({point, inventory, surface, api, project, operation, update}: {

@@ -121,6 +121,21 @@ export function LifecycleControls({api, project, page, afterChange, setGuard}: {
           <button type="submit" disabled={disabled}>Revisar exclusão</button>
         </form>}
       </details>}
+      {!page && status === 'ARCHIVED' && <PurgePreview api={api} project={project.id}/>}
     </>}
   </section>;
+}
+
+function PurgePreview({api, project}: {api: AdminApi; project: string}) {
+  const [open, setOpen] = useState(false);
+  const query = useQuery(open ? project : '', signal => api.request<{blockers: {table: string; reason: string; rows?: number}[]}>(
+    'pages', {project, action: 'preview-purge-project'}, signal));
+  return <details onToggle={event => setOpen(event.currentTarget.open)}>
+    <summary>Consultar bloqueios da purga física</summary>
+    <p>A remoção definitiva está bloqueada. A consulta lista dependências e registros preservados.</p>
+    {query.error !== undefined ? <Failure error={query.error} retry={query.retry}/> : query.pending ? <Loading/> :
+      query.data && <ul className="plain evidence-list">{query.data.blockers.map((item, index) => <li key={index}>
+        <strong>{item.table}{item.rows !== undefined ? ' · ' + item.rows + ' registro(s)' : ''}</strong><small>{item.reason}</small>
+      </li>)}</ul>}
+  </details>;
 }
