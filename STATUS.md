@@ -1,5 +1,10 @@
 # STATUS — AntiClone Personal
 
+## UX V2.2 — instalação da LP
+- URL oficial e contexto ficam no início da instalação. Os trechos publicados têm orientação para HTML, React/Vite e WordPress.
+- O atalho por teclado leva ao diagnóstico. A revisão e a rotação continuam no painel técnico.
+- Revisão independente `ux_review` aprovada. Prova no Chromium com PostgreSQL em `test-results/ux-installation-v22/`.
+
 ## Logs de e-mail pelo React — Dev
 - Histórico de testes SMTP e alertas de cópia, CTA e saúde, com filtros por resultado e até 100 tentativas dos últimos 30 dias.
 - SMTP manual reserva uma linha antes do envio e registra o resultado sem chaves, corpos ou respostas brutas.

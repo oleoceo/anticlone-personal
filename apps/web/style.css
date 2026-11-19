@@ -278,3 +278,18 @@ button[aria-pressed="true"] { background: #233049; color: var(--text); }
 @media (max-width: 760px) {
   .health-grid { grid-template-columns: minmax(0, 1fr); }
 }
+
+.installation-context { display: grid; gap: .8rem; }
+.installation-target { display: grid; gap: .25rem; padding: .75rem 1rem; border-inline-start: 2px solid var(--blue); background: var(--raised); }
+.installation-target dt { color: var(--muted); font-size: .875rem; }
+.installation-target dd { margin: 0; overflow-wrap: anywhere; }
+.installation-copy { display: grid; gap: .8rem; padding-block: .5rem; }
+.installation-copy > p, .installation-next > p { margin: 0; max-inline-size: 70ch; }
+.installation-technology { max-inline-size: 20rem; }
+.installation-next { padding-block-start: 1rem; border-block-start: 1px solid var(--border); }
+.installation-next .action-links { margin-block-start: .65rem; }
+.installation-technical { border-block-start: 1px solid var(--border); padding-block-start: .75rem; }
+#install-check { scroll-margin-block-start: 5rem; }
+@media (max-width: 760px) {
+  .installation-context .selectors { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

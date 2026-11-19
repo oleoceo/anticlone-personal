@@ -148,16 +148,7 @@ function Workspace({api, projects, project, pageId, installation, setGuard}: {
     void navigate(link.to, {state: link.state});
   }
 
-  return <>
-    <Breadcrumbs items={crumbs}/>
-    {!installation && <Back to={pageId ? projectHref : projectsPath}>
-      {pageId ? 'Voltar para ' + project.name : 'Voltar para Meus Projetos'}</Back>}
-    {!installation && <Heading title={page?.name ?? project.name} description={page ? project.name : 'Oferta, páginas e instalação.'}
-      actions={<div className="action-links">
-        <Link className="button" {...nav.link(projectIncidentsPath(project.id), pageId ? '?lp=' + pageId : '')}>Incidentes da oferta</Link>
-        {!pageId && <Link className="button" {...nav.link(projectHref + '/checkouts')}>Checkouts do projeto</Link>}
-        <Link className="button" {...nav.link(newPagePath(project.id))}>Adicionar página / variação</Link></div>}/>}
-    <div className="filters selectors">
+  const selectors = <div className="filters selectors">
       <label>Oferta / projeto<select value={project.id} onChange={event => {
         const next = event.target.value;
         const remembered = nav.rememberedPage(next);
@@ -170,13 +161,24 @@ function Workspace({api, projects, project, pageId, installation, setGuard}: {
         <option value="">Selecione a página</option>
         {pages?.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
       </select></label>
-    </div>
+    </div>;
+
+  return <>
+    <Breadcrumbs items={crumbs}/>
+    {!installation && <Back to={pageId ? projectHref : projectsPath}>
+      {pageId ? 'Voltar para ' + project.name : 'Voltar para Meus Projetos'}</Back>}
+    {!installation && <Heading title={page?.name ?? project.name} description={page ? project.name : 'Oferta, páginas e instalação.'}
+      actions={<div className="action-links">
+        <Link className="button" {...nav.link(projectIncidentsPath(project.id), pageId ? '?lp=' + pageId : '')}>Incidentes da oferta</Link>
+        {!pageId && <Link className="button" {...nav.link(projectHref + '/checkouts')}>Checkouts do projeto</Link>}
+        <Link className="button" {...nav.link(newPagePath(project.id))}>Adicionar página / variação</Link></div>}/>}
+    {(!installation || !page) && selectors}
     {list.error !== undefined ? <Failure error={list.error} retry={list.retry}/> : !pages ? <Loading/> :
       pageId && !page ? <section className="panel"><h2>Página indisponível</h2>
         <p>Selecione outra página deste projeto ou volte para a oferta.</p>
         <Back to={projectHref}>Voltar para {project.name}</Back>
       </section> :
-      page && installation ? <Installation key={page.id} api={api} project={project.id} page={page} setGuard={setGuard}/> :
+      page && installation ? <Installation key={page.id} api={api} project={project.id} page={page} context={selectors} setGuard={setGuard}/> :
       page ? <section className="panel">
         <div className="panel-heading"><h2>Oferta e instalação</h2>
           <PageState page={page}/></div>

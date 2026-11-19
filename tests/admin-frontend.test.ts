@@ -159,6 +159,22 @@ for (const width of [1440, 390]) {
     await action(page, 'Confirmar').click();
     await page.getByText('Revisão 1', {exact: true}).waitFor();
     assert.match(await page.getByRole('region', {name: 'Trecho HTML'}).locator('code').innerText(), /runtime\.frontend\.test\/r\/v2\//);
+    const technology = page.getByLabel('Tecnologia');
+    await technology.selectOption('React / Vite');
+    await page.getByText(/Adicione o CSS aos estilos globais/).waitFor();
+    await technology.selectOption('WordPress');
+    await page.getByText(/Aplique a classe anticlone-canary a um bloco/).waitFor();
+    await technology.selectOption('HTML');
+    assert.equal(await page.getByRole('link', {name:'Abrir página oficial em nova aba'}).getAttribute('href'),
+      'https://offer.frontend.test/inicio');
+    const diagnose = page.getByRole('link', {name:'Ir para o diagnóstico'});
+    await diagnose.focus();
+    await diagnose.press('Enter');
+    assert.equal(new URL(page.url()).hash, '#install-check');
+    assert.equal(await page.evaluate(() => document.activeElement?.id), 'install-check');
+    await page.goBack();
+    assert.equal(page.url(), installation);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     await page.getByText('Recursos, revisões e rotação', {exact: true}).click();
     assert.equal(await page.locator('.resources li').count(), 12);
     await action(page, 'Publicar nova revisão').click();

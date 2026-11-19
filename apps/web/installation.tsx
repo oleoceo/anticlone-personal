@@ -1,4 +1,4 @@
-import {useState} from 'react';
+import {useState, type ReactNode} from 'react';
 import {AdminApi, type Page} from './admin-api';
 import {Link} from 'react-router-dom';
 import {Back, conversionsPath, installPath, pagePath, projectIncidentsPath, protectionPath, useContextNavigation} from './navigation';
@@ -34,6 +34,11 @@ const layerLabels: Record<string, string> = {
   bootstrap: 'Bootstrap', core: 'Core', fallback: 'Fallback',
   html_canary: 'Canário HTML', css_canary: 'Canário CSS',
 };
+const installGuides = {
+  HTML: 'Cole o trecho HTML na página oficial. Adicione o CSS aos estilos e aplique a classe anticlone-canary a um elemento existente.',
+  'React / Vite': 'Inclua o trecho HTML no arquivo HTML de entrada. Adicione o CSS aos estilos globais e aplique a classe anticlone-canary via className. Confira o resultado no build publicado.',
+  WordPress: 'Use um recurso autorizado do site para inserir o HTML e o CSS. Aplique a classe anticlone-canary a um bloco existente e, se houver cache, confira a versão publicada.',
+} as const;
 const utcDate = new Intl.DateTimeFormat('pt-BR', {dateStyle: 'short', timeStyle: 'short'});
 
 function date(value: string) {
@@ -59,8 +64,8 @@ function Snippet({code, language}: {code: string; language: string}) {
   </section>;
 }
 
-export function Installation({api, project, page, setGuard}: {
-  api: AdminApi; project: string; page: Page; setGuard: (guard: 'clean' | 'saving') => void;
+export function Installation({api, project, page, context, setGuard}: {
+  api: AdminApi; project: string; page: Page; context: ReactNode; setGuard: (guard: 'clean' | 'saving') => void;
 }) {
   const nav = useContextNavigation();
   const scope = {project, page: page.id};
@@ -72,10 +77,12 @@ export function Installation({api, project, page, setGuard}: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>();
   const [notice, setNotice] = useState('');
+  const [technology, setTechnology] = useState<keyof typeof installGuides>('HTML');
   const data = result ?? query.data;
   const collected = collectionResult ?? collection.data;
   const published = data?.distribution;
   const diagnostic = data?.diagnostic;
+  const officialUrl = page.urls.length === 1 ? page.urls[0].origin + page.urls[0].pathname : null;
 
   async function execute(action: Action) {
     setConfirmation(undefined);
@@ -114,9 +121,11 @@ export function Installation({api, project, page, setGuard}: {
   }
 
   return <>
-    <Back to={pagePath(project, page.id)}>Voltar para {page.name}</Back>
-    <Heading title="Instalar a proteção" description={page.name}
-      actions={<button type="button" disabled={busy} onClick={() => {setError(undefined); setNotice(''); reconsult();}}>Atualizar situação</button>}/>
+    <div className="installation-context">
+      <Back to={pagePath(project, page.id)}>Voltar para {page.name}</Back>
+      <Heading title="Instalar a proteção"/>
+      {context}
+    </div>
     <nav className="tabs" aria-label="Áreas da LP">
       <Link aria-current="page" {...nav.link(installPath(project, page.id))}>Instalação</Link>
       <Link {...nav.link(protectionPath(project, page.id))}>Políticas de proteção</Link>
@@ -125,12 +134,16 @@ export function Installation({api, project, page, setGuard}: {
     </nav>
     {error !== undefined && <Failure error={error}/>}
     {notice && <p className="notice" role="status">{notice}</p>}
-    <section className="panel">
-      <div className="panel-heading"><h2>Endereços de instalação</h2>
+    <section className="panel" aria-labelledby="install-distribution">
+      <div className="panel-heading"><h2 id="install-distribution">Endereços de instalação</h2>
         {data && <span className={'badge ' + (published || data.publication.ready ? 'success' : 'warning')}>
           {published ? 'Revisão ' + published.version : publicationLabel(data)}</span>}
       </div>
-      {page.urls.map(url => <p className="muted" key={url.origin + url.pathname}>{url.origin + url.pathname}</p>)}
+      <dl className="installation-target">
+        <dt>{page.urls.length === 1 ? 'URL oficial' : 'URLs cadastradas'}</dt>
+        {page.urls.length ? page.urls.map(url => <dd key={url.origin + url.pathname}>{url.origin + url.pathname}</dd>) :
+          <dd>Nenhuma URL cadastrada.</dd>}
+      </dl>
       {query.error !== undefined && !result && <Failure error={query.error} retry={query.retry}/>}
       {!data && query.error === undefined && <Loading/>}
       {!!data?.publication.issues.length && <div className="notice">
@@ -140,21 +153,31 @@ export function Installation({api, project, page, setGuard}: {
       </div>}
       {data?.publication.ready && (!published || data.publication.changesRequired) && <>
         <p>{published ? 'As origens configuradas mudaram. Publique para obter trechos com os novos endereços.' :
-          'A configuração permite gerar os trechos HTML e CSS. A entrega dos recursos é conferida na instalação.'}</p>
+          'Publique os endereços para gerar os trechos HTML e CSS desta página.'}</p>
         {!page.enabled && <p>Reative a LP na oferta para publicar pelo painel.</p>}
         <button className="primary" type="button" disabled={busy || !page.enabled}
           onClick={() => setConfirmation('publish')}>Publicar endereços de instalação</button>
       </>}
-      {data?.snippets && <>
+      {data?.snippets && <div className="installation-copy">
+        <h3>Copie os códigos da página</h3>
+        <label className="installation-technology">Tecnologia<select value={technology} aria-describedby="install-technology-guide"
+          onChange={event => setTechnology(event.target.value as keyof typeof installGuides)}>
+          {Object.keys(installGuides).map(item => <option key={item}>{item}</option>)}
+        </select></label>
+        <p id="install-technology-guide" className="muted" aria-live="polite">{installGuides[technology]}</p>
         <div className="snippets">
           <Snippet key={'html:' + published?.version} code={data.snippets.html} language="HTML"/>
           <Snippet key={'css:' + published?.version} code={data.snippets.css} language="CSS"/>
         </div>
-        <ol className="installation-guide"><li>Insira o HTML na página oficial. O Core é carregado pelo Bootstrap.</li>
-          <li>Inclua o CSS nos estilos da página e aplique <code>anticlone-canary</code> a um elemento existente.</li>
-          <li>Publique no seu site, abra a URL oficial e atualize o diagnóstico abaixo.</li></ol>
-      </>}
-      {published && <details>
+        <div className="installation-next">
+          <p>Depois de publicar no site, abra a página oficial e confira o diagnóstico.</p>
+          <div className="action-links">
+            {officialUrl && <a className="button" href={officialUrl} target="_blank" rel="noreferrer">Abrir página oficial em nova aba</a>}
+            <a className="button" href="#install-check">Ir para o diagnóstico</a>
+          </div>
+        </div>
+      </div>}
+      {published && <details className="installation-technical">
         <summary>Recursos, revisões e rotação</summary>
         <dl className="review resources">
           {(Object.keys(resources) as Role[]).map(role => <div key={role}>
@@ -175,9 +198,13 @@ export function Installation({api, project, page, setGuard}: {
           onClick={() => setConfirmation('rotate')}>Publicar nova revisão</button>}
       </details>}
     </section>
-    <section className="panel">
-      <div className="panel-heading"><h2>Conferir situação</h2>
-        {diagnostic && <span className="badge">{labels[diagnostic.status] ?? diagnostic.status}</span>}
+    <section className="panel" aria-labelledby="install-check">
+      <div className="panel-heading"><h2 id="install-check" tabIndex={-1}>Conferir situação</h2>
+        <div className="action-links">
+          {diagnostic && <span className="badge">{labels[diagnostic.status] ?? diagnostic.status}</span>}
+          <button type="button" disabled={busy || query.pending}
+            onClick={() => {setError(undefined); setNotice(''); reconsult();}}>Atualizar situação</button>
+        </div>
       </div>
       {diagnostic && <>
         {data.verification.ready && <button className="primary" type="button" disabled={busy}
@@ -203,7 +230,7 @@ export function Installation({api, project, page, setGuard}: {
             {layerLabels[signal.source] ?? signal.source} · {date(signal.last_observed_at)}</li>)}</ul>}
         </details>
       </>}
-      {!diagnostic && data && <p className="muted">Instale a distribuição no ambiente para consultar as camadas.</p>}
+      {!published && data && <p className="muted">Publique os endereços e instale os códigos na página oficial para conferir os sinais.</p>}
       {busy && <Loading>Operação em andamento…</Loading>}
       <details>
         <summary>Configurar coleta da origem principal</summary>
