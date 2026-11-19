@@ -4,7 +4,7 @@ import {DraftGuard, uuid} from './operations';
 import {Conversions} from './conversions';
 import {IncidentProjects, Incidents} from './incidents';
 import {createBrowserRouter, Link, RouterProvider, useBlocker, useLocation, useNavigate} from 'react-router-dom';
-import {AdminApi, type Project, type ProjectState, pageList} from './admin-api';
+import {AdminApi, type Page, type Project, type ProjectState, pageList} from './admin-api';
 import {base, Back, Breadcrumbs, type Crumb, installPath, newPagePath, offerPath, pagePath,
   projectPath, projectsPath, readRoute, useContextNavigation, useRestoreScroll, conversionsPath, incidentsPath, projectIncidentsPath, overviewPath, settingsPath} from './navigation';
 import {emptyFields, OfferForm} from './offer-form';
@@ -12,6 +12,7 @@ import {Overview} from './overview';
 import {Settings} from './settings';
 import {LifecycleControls} from './lifecycle';
 import {Installation} from './installation';
+import {publicationLabel, type InstallationStatus} from './installation-status';
 import {Brand, Confirm, Failure, Heading, labels, Loading, useQuery} from './ui';
 import './style.css';
 
@@ -106,7 +107,7 @@ function ProjectList({api, projects}: {api: AdminApi; projects: Project[]}) {
               <strong role="cell">{project.name}</strong>
               <span role="cell">{project.pages === undefined ? '—' : project.pages + (project.pages === 1 ? ' página' : ' páginas')}</span>
               <span role="cell"><span className={'badge ' + (project.state === 'ACTIVE' ? 'success' : project.state === 'PAUSED' ? 'warning' : '')}>
-                {project.state ? labels[project.state] ?? project.state : 'Indisponível'}
+                {project.state ? labels[project.state] ?? project.state : metadata.pending ? 'Consultando' : 'Indisponível'}
               </span></span>
               <span role="cell"><Link className="button" aria-label={'Abrir oferta ' + project.name}
                 {...nav.link(remembered ? pagePath(project.id, remembered) : projectPath(project.id))}>Abrir oferta</Link></span>
@@ -117,6 +118,13 @@ function ProjectList({api, projects}: {api: AdminApi; projects: Project[]}) {
   </>;
 }
 
+function PageState({page}: {page: Page}) {
+  const state=page.enabled ? page.lifecycle_state ?? 'ACTIVE' : 'DISABLED';
+  return <span className={'badge ' + (state==='ACTIVE' ? 'success' : 'warning')}>
+    {state==='ACTIVE' ? 'Habilitada' : state==='PAUSED' ? 'Pausada' : state==='ARCHIVED' ? 'Arquivada' : 'Inativa'}
+  </span>;
+}
+
 function Workspace({api, projects, project, pageId, installation, setGuard}: {
   api: AdminApi; projects: Project[]; project: Project; pageId?: string; installation: boolean; setGuard: (guard: Guard) => void;
 }) {
@@ -125,6 +133,8 @@ function Workspace({api, projects, project, pageId, installation, setGuard}: {
   const list = useQuery(project.id, signal => pageList(api, project.id, signal));
   const pages = list.data?.pages;
   const page = pages?.find(item => item.id === pageId);
+  const status = useQuery(!installation && page ? project.id + ':' + page.id : '', signal =>
+    api.request<InstallationStatus>('distribution', {action:'inspect',project:project.id,page:page!.id},signal));
   const projectHref = projectPath(project.id);
   const crumbs: Crumb[] = [{label: 'Meus Projetos', path: projectsPath},
     {label: project.name, path: pageId ? projectHref : undefined}];
@@ -140,7 +150,7 @@ function Workspace({api, projects, project, pageId, installation, setGuard}: {
     <Breadcrumbs items={crumbs}/>
     {!installation && <Back to={pageId ? projectHref : projectsPath}>
       {pageId ? 'Voltar para ' + project.name : 'Voltar para Meus Projetos'}</Back>}
-    {!installation && <Heading title={project.name} description="Oferta, páginas e instalação."
+    {!installation && <Heading title={page?.name ?? project.name} description={page ? project.name : 'Oferta, páginas e instalação.'}
       actions={<div className="action-links">
         <Link className="button" {...nav.link(projectIncidentsPath(project.id), pageId ? '?lp=' + pageId : '')}>Incidentes da oferta</Link>
         <Link className="button" {...nav.link(newPagePath(project.id))}>Adicionar página / variação</Link></div>}/>}
@@ -165,24 +175,30 @@ function Workspace({api, projects, project, pageId, installation, setGuard}: {
       </section> :
       page && installation ? <Installation key={page.id} api={api} project={project.id} page={page} setGuard={setGuard}/> :
       page ? <section className="panel">
-        <div className="panel-heading"><h2>{page.name}</h2>
-          {!page.enabled && <span className="badge">Inativa</span>}</div>
+        <div className="panel-heading"><h2>Oferta e instalação</h2>
+          <PageState page={page}/></div>
         <h3>URLs autorizadas</h3>
         <ul className="plain">{page.urls.map(url => <li key={url.origin + url.pathname}>{url.origin + url.pathname}</li>)}</ul>
         {!page.urls.length && <p className="muted">Nenhuma URL está vinculada à página.</p>}
+        {status.error !== undefined ? <Failure error={status.error} retry={status.retry}/> :
+          status.pending ? <Loading>Consultando distribuição…</Loading> : status.data && <p role="status">
+            <strong>{publicationLabel(status.data)}</strong>
+            {status.data.diagnostic && ' · ' + (labels[status.data.diagnostic.status] ?? status.data.diagnostic.status)}
+          </p>}
         <div className="action-links"><Link className="button primary" {...nav.link(installPath(project.id, page.id))}>Instalar e conferir</Link>
           <Link className="button" {...nav.link(conversionsPath(project.id, page.id))}>Conversões</Link></div>
       </section> : <section className="panel">
         <h2>Páginas da oferta</h2>
-        {!pages.length ? <p className="empty">Cadastre a primeira página para publicar os endereços de instalação.</p> :
+        {!pages.length ? <div><p className="empty">Cadastre a primeira página para publicar os endereços de instalação.</p>
+          <Link className="button primary" {...nav.link(newPagePath(project.id))}>Cadastrar primeira LP</Link></div> :
           <ul className="plain page-list">{pages.map(item => <li key={item.id}>
-            <div><strong>{item.name}</strong>{item.urls.map(url =>
+            <div><strong>{item.name}</strong> <PageState page={item}/>{item.urls.map(url =>
               <small key={url.origin + url.pathname}>{url.origin + url.pathname}</small>)}</div>
             <Link className="button" {...nav.link(pagePath(project.id, item.id))}>Abrir página</Link>
           </li>)}</ul>}
       </section>}
     {!installation && (!pageId || page) && <DraftGuard key={page?.id ?? project.id} setGuard={setGuard}>
-      <LifecycleControls api={api} project={project} page={page} afterChange={list.revalidate} setGuard={setGuard}/>
+      <LifecycleControls api={api} project={project} page={page} afterChange={()=>{list.revalidate(); status.revalidate();}} setGuard={setGuard}/>
     </DraftGuard>}
   </>;
 }
@@ -243,6 +259,11 @@ function Authenticated({api, logout, guard, fields, setFields, setGuard}: {
     <main className="content" id="main" tabIndex={-1}>
       {route.kind === 'offer' ? <OfferForm key="new-offer" api={api} fields={fields}
         setFields={setFields} setGuard={setGuard} finish={finish}/> :
+        route.kind === 'settings' && route.section === 'operacoes' ?
+          <DraftGuard key={location.pathname + location.search} setGuard={setGuard}>
+            {projects.error !== undefined && <Failure error={projects.error} retry={projects.retry}/>}
+            <Settings api={api} projects={projects.data ?? []} section={route.section} setGuard={setGuard}/>
+          </DraftGuard> :
         projects.error !== undefined ? <Failure error={projects.error} retry={projects.retry}/> :
         !projects.data ? <Loading/> :
         route.kind === 'overview' ? <Overview api={api} projects={projects.data}/> :

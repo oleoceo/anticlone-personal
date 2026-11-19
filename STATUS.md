@@ -1,5 +1,12 @@
 # STATUS — AntiClone Personal
 
+## Recuperação operacional Dev — publicação e diagnóstico da primeira LP
+- F07/F08 e GS01. Prontidão e bloqueadores por LP, revisão persistida, snippets e diagnóstico com prova por camada e sinais separados.
+- React V2.2 preserva navegação e integra a configuração e o histórico de saúde à sessão privada. Gateway local usa sonda HTTP opt-in.
+- Os cenários usam PostgreSQL e Chromium reais. A prova controlada usa Docker sem rede, mediação TLS, origens controladas e o mesmo contrato de diagnóstico.
+- DNS, TLS público, SMTP e worker externo dependem de configuração e autorização próprias. F07/F08 e a matriz mantêm os estados de homologação externa.
+- Revisão independente em sessão separada. Commit e CI registrados na branch e no PR de trabalho.
+
 ## Frontend V2.2 — Entrega C
 - Fechamento A+B+C no PR #81. Confirmações de URL e contagens corrigidas no frontend, com regressões integradas. Sequência de integração e checklist de homologação documentados.
 - Base 64ad977, branch feat/admin-frontend-completion. Visão Geral usa relatórios existentes, com cliques, estimativas e vendas por moeda, projetos, incidentes e diagnóstico por LP.

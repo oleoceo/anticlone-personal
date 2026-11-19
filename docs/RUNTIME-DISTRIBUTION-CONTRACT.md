@@ -36,6 +36,12 @@ Diagnóstico lista Core/Fallback/HTML/CSS recebidos nos últimos sete dias; Boot
 
 Evolução explícita: `RUNTIME_SCRIPT_ORIGIN`, `RUNTIME_TELEMETRY_ORIGIN`, `RUNTIME_STATIC_ASSETS_ORIGIN` no ambiente privado sobrescrevem cada papel. Publicar novamente cria outra revisão; consultar não muda revisão. Revisões e aliases são imutáveis. Manter hostnames/proxies antigos enquanto houver instalação anterior; desligá-los exige migração explícita. O HTTPS fornecido atende um hostname inicial: múltiplos hosts não estão publicados ou homologados e exigirão fronteiras TLS/proxy autorizadas. Consumidores v1 já usam três bases e não precisam mudar.
 
+## Inspeção no painel React
+
+`inspect` retorna os pré-requisitos de publicação, mudança de origens e rotação e o primeiro bloqueador da verificação. Falhas esperadas dos comandos usam códigos seguros em HTTP 400. A inspeção mantém o histórico e os snippets existentes mesmo quando a configuração privada impede novas publicações. Aptidão para gerar endereços é uma verificação de configuração e schema. A entrega dos recursos depende do gateway e da rota usada pela LP.
+
+O diagnóstico distingue ausência de prova recente, verificador sem configuração e tentativa inconclusiva. As cinco camadas exibem a medição controlada da revisão atual quando disponível e, separadamente, acessos por alias ou sinais declarados. Os acessos por alias se referem à revisão exibida. Os sinais declarados pertencem à LP. Os resultados da carga controlada obedecem ao [contrato F08](F08-CONTROLLED-VERIFIER.md).
+
 ## Provas reproduzíveis
 
 `tests/runtime-distribution.test.ts`: PostgreSQL/Chromium, painel autenticado, consultas sem rotação, publicação concorrente idempotente, isolamento, F45, HTML/CSS/Fallback independentes, versões antigas e F44 com amostras reais envelhecidas transacionalmente. Trigger sintético no registro principal produz HTTP 503 e invalida a linha de base sem inventar observação Core.

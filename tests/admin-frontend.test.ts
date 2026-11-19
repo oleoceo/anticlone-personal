@@ -167,13 +167,17 @@ for (const width of [1440, 390]) {
     await page.getByText('Coleta do projeto habilitada.').waitFor();
     assert.equal((await lab.db.query('SELECT enabled FROM installations WHERE project_id=$1', [project])).rows[0].enabled, true);
 
-    const rejection = page.waitForResponse(response =>
-      response.url().endsWith('/distribution') && response.request().postDataJSON()?.action === 'verify');
-    await action(page, 'Verificar instalação').click();
-    await action(page, 'Confirmar').click();
-    assert.equal((await rejection).status(), 400, 'environment without isolated verifier reports the real server error');
-    await page.getByRole('alert').filter({hasText: 'servidor recusou'}).waitFor();
-    await page.getByText('Revisão 2', {exact: true}).waitFor();
+    await page.getByText('Verificador isolado sem configuração.', {exact:false}).waitFor();
+    assert.equal(await action(page, 'Verificar instalação').count(), 0);
+    const pageId=new URL(installation).pathname.split('/').at(-2);
+    const rejection=await page.evaluate(async ({project,pageId})=>{
+      const {csrf}=await fetch('/admin/ui/bootstrap').then(response=>response.json());
+      const response=await fetch('/admin/ui/distribution',{method:'POST',
+        headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},
+        body:JSON.stringify({action:'verify',project,page:pageId})});
+      return {status:response.status,body:await response.json()};
+    },{project,pageId});
+    assert.deepEqual(rejection,{status:400,body:{code:'ISOLATED_VERIFIER_UNAVAILABLE'}});
 
     await page.reload();
     await page.getByText('Revisão 2', {exact: true}).waitFor();
@@ -819,7 +823,7 @@ for (const width of [1440, 390]) {
     await page.getByLabel('Período dos resultados').selectOption('1');
     await page.getByRole('combobox', {name:/^Projeto/}).selectOption(project.id);
     await page.getByLabel('LP para diagnóstico').selectOption(lp.page);
-    await page.getByText('Endereços ainda não publicados', {exact:false}).waitFor();
+    await page.getByText('Pronta para publicar', {exact:true}).waitFor();
     await page.getByText('0 alertas no recorte de revisão', {exact:true}).waitFor();
     await capture('01-visao-geral');
     await capture('02-instalacoes-alertas', 'Instalações e alertas');
@@ -941,8 +945,15 @@ for (const width of [1440, 390]) {
     await action(page, 'Confirmar').click();
     await page.getByText('Checkout-Horizonte · Inativa', {exact:true}).waitFor();
     await page.getByRole('link', {name:'Saúde e operações', exact:true}).click();
-    await page.getByRole('heading', {name:'Diagnósticos e operações privadas'}).waitFor();
-    assert.equal(await page.getByRole('link', {name:'Abrir painel anterior'}).getAttribute('href'), '/admin/ui/');
+    await page.getByRole('heading', {name:'Saúde do ambiente'}).waitFor();
+    await page.getByText('Gateway local sem sonda',{exact:true}).waitFor();
+    await page.getByText('Respondendo',{exact:true}).waitFor();
+    await page.getByRole('combobox',{name:'Projeto',exact:true}).selectOption(project.id);
+    await page.getByText('Habilite a coleta da origem principal',{exact:false}).waitFor();
+    await page.getByText('Histórico de saúde',{exact:true}).click();
+    await page.getByText('Sem ocorrências registradas para este projeto.',{exact:true}).waitFor();
+    await page.getByText('Recuperação, retenção e operações avançadas',{exact:true}).click();
+    assert.equal(await page.getByRole('link', {name:'painel anterior',exact:true}).getAttribute('href'), '/admin/ui/');
     await capture('09-operacoes');
     assert.deepEqual(errors, []);
     assert.deepEqual(foreign, []);
