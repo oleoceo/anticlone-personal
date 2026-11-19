@@ -15,6 +15,7 @@ export const roleLabels = {SCRIPT: 'Scripts', TELEMETRY: 'Telemetria', STATIC_AS
 export const healthPath = '/configuracoes/operacoes';
 
 export const installationMessages: Record<string, string> = {
+  TELEMETRY_ORIGIN_UNAVAILABLE: 'O endpoint de telemetria está desativado ou sem autorização. Atualize a situação e escolha outro endpoint.',
   RUNTIME_ORIGIN_MISSING: 'Falta uma origem de runtime na configuração privada. Configure RUNTIME_PUBLIC_ORIGIN ou a origem específica do papel.',
   RUNTIME_ORIGIN_INVALID: 'A origem de runtime é inválida. Revise a configuração privada e informe apenas a origem, sem caminho nem barra final.',
   RUNTIME_ADMIN_HOST_CONFLICT: 'A origem de runtime usa o mesmo host do painel administrativo. Configure um host distinto.',

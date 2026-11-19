@@ -79,3 +79,22 @@ O fluxo administrativo aceita importacao manual de candidatos revisados em orige
 Validacao corretiva final local do codigo 4691f4cc620c79b22b9621bbc0548ada5c3626e0: HTTPS_GATE_TEST=1 npm test, PostgreSQL/Chromium/Nginx reais, 105 PASS / 0 FAIL / 0 SKIP, 300496.943959 ms; lint/typecheck/build PASS e nove testes Python PASS. Log WSL /tmp/anticlone-pr64-corrective-suite-final.log; imagem local reconstruida em /tmp/anticlone-pr64-corrective-image-final.log. Revisao independente consolidada /root/pr64_corrective_review favoravel, sem P0/P1/P2 remanescentes; fingerprint SHA-256 dos 24 arquivos de codigo/runtime/infra/testes: bc3f656710ac908a1f82dd2843d78f6d4e1387b635b7cd0977f59296a05bc7ed (caminhos ordenados, caminho UTF8 + NUL + conteudo CRLF normalizado LF + NUL). O commit seguinte altera somente evidencias documentais; CI no SHA final permanece gate do mesmo PR #64. F08 BLOCKED impede declarar consolidacao integral.
 Bloqueio externo da CI em 2026-11-10: run 42829199298, SHA 53a42bee7693f47c2df31768550271f229b6079e, job validate-repo encerrou em 2 s sem steps/logs. Anotacao GitHub: The job was not started because recent account payments have failed or your spending limit needs to be increased. Reproduzir com gh run view 42829199298 --json jobs e gh api repos/oleoceo/anticlone-personal/check-runs/129874451747/annotations. Nao e falha de teste do codigo e nao existe CI verde para esta correcao. Intervencao de faturamento/limite depende do proprietario; nao alterar custos nem contornar o gate. Provas locais nao substituem a CI exigida. O PR permanece draft; consultar checks do SHA final apos normalizacao da conta.
 Decisao posterior do proprietario para o fechamento do PR #64: executar integralmente CI local gratuita no WSL/Linux como gate escolhido nesta revisao, mantendo Actions BLOCKED e PR Draft. O HEAD48a9541 passou105/0/0 em Node22 com workflow completo. Teste operacional ampliado une v2, painel MFA/CSRF, rotacao/autorizacao/suspensao, PAGE/CTA reais sem reescrita e falhas; apps/runtime/infra nao mudaram. Runner, resultado integral do novo HEAD e evidencias acessiveis descritos em LOCAL-CI.md. F08 permanece BLOCKED; nenhum status remoto verde e alegado.
+
+## Pool de origens de telemetria (067)
+
+Em Configurações → Integrações → Endpoints de telemetria, cadastre a origem
+HTTPS completa de cada domínio próprio. A lista privada
+`RUNTIME_TELEMETRY_POOL_ORIGINS` no admin é separada por vírgulas. Ela registra
+as origens que o operador já provisionou no DNS, TLS e proxy para o gateway.
+A origem do admin é recusada. O cadastro não inicia conexões externas.
+
+A instalação da LP permite escolher uma origem elegível e publicar uma nova
+revisão. Somente TELEMETRY muda. O proxy de cada hostname provisionado deve
+entregar as rotas de distribuição ao gateway sob o contrato privado de
+ingresso já configurado, incluindo o Host canônico esperado pelo gateway. Uma origem autorizada no painel indica autorização
+administrativa, e a recepção real depende do ingresso e da política do site.
+
+A escolha é por revisão, sem balanceamento nem troca durante a execução.
+Desativar um endpoint impede novas publicações com ele. Os aliases antigos
+conservam seus endereços. Mantenha o ingresso anterior disponível enquanto
+houver páginas com trechos antigos.

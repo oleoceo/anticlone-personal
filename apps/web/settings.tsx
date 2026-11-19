@@ -1,3 +1,4 @@
+import {TelemetryOrigins} from './telemetry-origins';
 import {useState} from 'react';
 import {Link, useSearchParams} from 'react-router-dom';
 import {AdminApi, type Project} from './admin-api';
@@ -30,7 +31,7 @@ export function Settings({api, projects, section, setGuard}: {api: AdminApi; pro
       {Object.entries(names).map(([part, label]) => <Link key={part}
         aria-current={part === (section ?? 'notificacoes') ? 'page' : undefined} {...nav.link(settingsPath + '/' + part)}>{label}</Link>)}
     </nav>
-    {section === 'integracoes' ? <CommerceSettings api={api} setGuard={setGuard}/> : section === 'operacoes' ?
+    {section === 'integracoes' ? <><TelemetryOrigins api={api} setGuard={setGuard}/><CommerceSettings api={api} setGuard={setGuard}/></> : section === 'operacoes' ?
       <HealthOperations api={api} projects={projects} setGuard={setGuard}/> : <>
         <NotificationSettings api={api} setGuard={setGuard}/>
         <NotificationQueue api={api} projects={projects} setGuard={setGuard}/>

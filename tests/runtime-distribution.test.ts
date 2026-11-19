@@ -1,3 +1,4 @@
+import {listTelemetryOrigins, telemetryOriginAdmin} from '../apps/telemetry-origins.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID,scryptSync} from 'node:crypto';
@@ -192,6 +193,33 @@ test('distribution v1: persistent revisions, admin HTML/CSS, real browser layers
     assert.equal(routed.aliasActivity?.length,2,'sources remain distinct even sharing a routing alias');
     for(const layer of ['html_canary','css_canary'])assert.equal(routed.diagnostic?.layers.find(l=>l.layer===layer)?.status,'ROUTE_OBSERVED');
     assert.equal(routed.diagnostic?.status,'NOT_VERIFIED');
+    await db.query(await readFile('infra/067_telemetry_origins.sql','utf8'));
+    const pooledOrigin = 'https://signals-pool.owner.test';
+    await panel.goto(adminBase+'/admin/ui/novo/configuracoes/integracoes');
+    await panel.getByLabel('Origem HTTPS').fill(pooledOrigin);
+    await panel.getByRole('button',{name:'Cadastrar endpoint',exact:true}).click();
+    await panel.getByRole('button',{name:'Confirmar',exact:true}).click();
+    await panel.getByText('Aguardando autorização no ambiente privado',{exact:true}).waitFor();
+    const pooledEnv = {...env,RUNTIME_TELEMETRY_POOL_ORIGINS:pooledOrigin};
+    assert.equal((await listTelemetryOrigins(db,env)).items[0].authorized,false);
+    await assert.rejects(distributionAdmin(db,{...request,action:'publish',telemetryOrigin:pooledOrigin},env),
+      {code:'TELEMETRY_ORIGIN_UNAVAILABLE'});
+    assert.equal((await listTelemetryOrigins(db,{...pooledEnv,ADMIN_PUBLIC_ORIGIN:pooledOrigin})).items[0].authorized,false);
+    const pooled = await distributionAdmin(db,{...request,action:'publish',telemetryOrigin:pooledOrigin},pooledEnv);
+    assert.ok(pooled.distribution?.paths);
+    assert.equal(new URL(pooled.distribution.bases.TELEMETRY).origin,pooledOrigin);
+    assert.equal(new URL(pooled.distribution.bases.SCRIPT).origin,base);
+    const pooledBundle = await (await fetch(pooled.distribution.bases.SCRIPT+'a.js')).text();
+    assert.ok(pooledBundle.includes(pooled.distribution.bases.TELEMETRY));
+    const publicPath = new URL(pooled.distribution.bases.TELEMETRY).pathname;
+    assert.equal((await fetch(base+publicPath+'e',{method:'POST',headers:{origin, 'content-type':'text/plain'},
+      body:JSON.stringify({origin,pathname:'/',signals:{}})})).status,204);
+    assert.equal((await distributionAdmin(db,request,pooledEnv)).publication.changesRequired,false);
+    await telemetryOriginAdmin(db,{action:'set-enabled',origin:pooledOrigin,enabled:false});
+    await assert.rejects(distributionAdmin(db,{...request,action:'publish',telemetryOrigin:pooledOrigin},pooledEnv),
+      {code:'TELEMETRY_ORIGIN_UNAVAILABLE'});
+    assert.deepEqual(await readDistribution(db,installation,pooled.distribution.version),pooled.distribution);
+    assert.equal((await distributionAdmin(db,request,pooledEnv)).publication.changesRequired,true);
     for(const target of ['http://127.0.0.1/','http://169.254.169.254/','https://unapproved.test/'])await assert.rejects(distributionAdmin(db,{...request,action:'verify',url:target},env),TypeError);
     await assert.rejects(db.query('UPDATE runtime_aliases SET origin=$1 WHERE installation_id=$2',[base,installation]));
     await db.query("UPDATE projects SET lifecycle_state='PAUSED' WHERE id='one'");

@@ -12,6 +12,8 @@ const resources = {
 };
 type Role = keyof typeof resources;
 type Distribution = InstallationStatus & {
+  telemetryOrigins?: string[];
+  selectedTelemetryOrigin?: string | null;
   distribution: null | {version: number; bases: Record<Role, string>; paths?: Record<string, string>};
   snippets?: {html: string; css: string} | null;
   history?: {version: number; created_at: string; reason: string | null}[];
@@ -77,10 +79,13 @@ export function Installation({api, project, page, context, setGuard}: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>();
   const [notice, setNotice] = useState('');
+  const [telemetry, setTelemetry] = useState<string>();
   const [technology, setTechnology] = useState<keyof typeof installGuides>('HTML');
   const data = result ?? query.data;
   const collected = collectionResult ?? collection.data;
   const published = data?.distribution;
+  const selectedTelemetry = telemetry ?? data?.selectedTelemetryOrigin ?? '';
+  const pendingTelemetry = telemetry !== undefined && telemetry !== (data?.selectedTelemetryOrigin ?? '');
   const diagnostic = data?.diagnostic;
   const officialUrl = page.urls.length === 1 ? page.urls[0].origin + page.urls[0].pathname : null;
 
@@ -96,7 +101,9 @@ export function Installation({api, project, page, context, setGuard}: {
         setCollectionResult(status);
         setNotice(status.installation?.enabled ? 'Coleta habilitada.' : 'Coleta desabilitada.');
       } else {
-        const status = await api.request<Distribution>('distribution', {action, ...scope});
+        const status = await api.request<Distribution>('distribution', {action, ...scope,
+          ...(action !== 'verify' && telemetry !== undefined ? {telemetryOrigin:telemetry || null} : {})});
+        if (action !== 'verify') setTelemetry(undefined);
         setResult(status);
         setNotice(action === 'verify' && status.verificationAttempt
           ? (labels[status.verificationAttempt.status] ?? status.verificationAttempt.status) + ' · ' +
@@ -151,8 +158,15 @@ export function Installation({api, project, page, context, setGuard}: {
         <ul>{publicationIssueMessages(data.publication.issues).map(message => <li key={message}>{message}</li>)}</ul>
         <Link {...nav.link(healthPath)}>Consultar Saúde e operações</Link>
       </div>}
-      {data?.publication.ready && (!published || data.publication.changesRequired) && <>
-        <p>{published ? 'As origens configuradas mudaram. Publique para obter trechos com os novos endereços.' :
+      {published && <p className="muted">Endpoint na revisão publicada: <code>{new URL(published.bases.TELEMETRY).origin}</code></p>}
+      {data && (!!data.telemetryOrigins?.length || !!data.selectedTelemetryOrigin) &&
+        <label className="installation-technology">Endpoint de telemetria<select value={selectedTelemetry} disabled={busy}
+          onChange={event => setTelemetry(event.target.value)}>
+          <option value="">Usar origem padrão</option>
+          {data.telemetryOrigins?.map(origin => <option key={origin}>{origin}</option>)}
+        </select></label>}
+      {data?.publication.ready && (!published || data.publication.changesRequired || pendingTelemetry) && <>
+        <p>{published ? 'Publique uma revisão para gerar trechos com os endereços selecionados.' :
           'Publique os endereços para gerar os trechos HTML e CSS desta página.'}</p>
         {!page.enabled && <p>Reative a LP na oferta para publicar pelo painel.</p>}
         <button className="primary" type="button" disabled={busy || !page.enabled}

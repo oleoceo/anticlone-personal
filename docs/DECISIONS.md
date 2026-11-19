@@ -128,3 +128,10 @@ somente400 vazio ou502 HTML sem JS, idêntico à página de outage real do mesmo
 direto404 vazio preservado. Não alterar SSL reuse, app, limites ou timeouts.
 Foco corrigido6/6 PASS,0 skips em75,9s; integração SHA25620686122.
 Resultado integral oficial final continua exigido no PR78.
+
+## Pool de telemetria administrada por revisão
+
+A pool amplia a decisão de distribuição do runtime por papel de 2026-11-10. O cadastro
+administrativo e a autorização privada são condições independentes para a
+seleção. Apenas a telemetria muda na revisão explicitamente publicada. Nenhuma
+consulta faz conexão externa ou altera endereços de revisões anteriores.

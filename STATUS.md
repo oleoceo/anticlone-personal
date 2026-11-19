@@ -1,5 +1,10 @@
 # STATUS — AntiClone Personal
 
+## Pool de telemetria
+- Integrações cadastra origens HTTPS próprias. Seleção por revisão explícita em Instalação.
+- Exige autorização privada e ingresso provisionado. A desativação preserva aliases existentes.
+- Provas em `test-results/pool-telemetria/`.
+
 ## Hierarquia do painel V2.2
 - Ajustes compartilhados de largura, cabeçalhos, formulários e navegação.
 - Visão Geral com atividade e instalações lado a lado. Oferta com páginas e gestão separadas. Notificações com SMTP e logs lado a lado.
