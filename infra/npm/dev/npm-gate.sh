@@ -3,28 +3,52 @@ set -Eeuo pipefail
 umask 077
 
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
-dev_release=/opt/apps/apps/personal/anticlone-dev/dev-gateway-release
+snapshot=$(cd -- "$here/../../.." && pwd -P)
+tools_dir=/var/lib/anticlone-dev-npm-tools
+active_receipt=$tools_dir/active-receipt
 private=/opt/apps/apps/personal/anticlone-dev/private/dev-public-gateway
 docker_host=(docker --host unix:///var/run/docker.sock)
 npm=nginx-proxy-manager-app-1
+gateway_unit=anticlone-dev-public-gateway.service
+gateway_unit_path=/home/anticlone-dev/.config/systemd/user/$gateway_unit
 port=13003
 site=nginx/proxy_host/13.conf
 hook=nginx/custom/http_top.conf
 exclusive=nginx/custom/anticlone-dev
-[[ $EUID == 0 && ${SUDO_USER:-} == leoceo ]] || { echo 'Execute via sudo como leoceo.' >&2; exit 1; }
-[[ $here =~ ^/var/lib/anticlone-dev-npm-tools/([0-9a-f]{40})/infra/npm/dev$ &&
-   $(stat -c %u:%a /var/lib/anticlone-dev-npm-tools) == 0:700 ]] ||
-  { echo 'Execute somente a cópia revisada no diretório privado de root.' >&2; exit 1; }
-release_sha=${BASH_REMATCH[1]}
-exec 9>/var/lib/anticlone-dev-npm-tools/gate.lock
-flock -n 9 || { echo 'Já existe um procedimento AntiClone Dev em execução.' >&2; exit 1; }
 
 fail() { printf 'BLOCKED NPM_TRAFFIC_GATE — %s\n' "$*" >&2; exit 1; }
 live() { "${docker_host[@]}" exec -i --user 0 "$npm" "$@"; }
 as_dev() {
   sudo -u anticlone-dev env XDG_RUNTIME_DIR="/run/user/$(id -u anticlone-dev)" "$@"
 }
-as_gateway() { as_dev bash "$dev_release/infra/npm/dev/gateway.sh" "$@"; }
+as_gateway() {
+  # Root opens the reviewed helper. Bash runs it with the Dev identity.
+  as_dev /bin/bash -p -s -- "$@" < "$here/gateway.sh"
+}
+
+verify_package() (
+  cd -- "$snapshot" || return "$?"
+  local -a files=(infra/npm/{http-limits,proxy-host,proxy-location}.conf
+    infra/npm/dev/{npm-gate.sh,render.py,clone-probe.cjs,gateway.sh,anticlone-dev-public-gateway.service})
+  local file
+  for file in package.sha256 "${files[@]}"; do
+    [[ -f $file && ! -L $file && $(stat -c %u:%a "$file") == 0:400 ]] || return 1
+  done
+  sha256sum -- "${files[@]}" | cmp -s package.sha256 -
+)
+
+check_gateway_unit() {
+  local properties
+  if properties=$(as_dev systemctl --user show "$gateway_unit" -p FragmentPath -p DropInPaths -p NeedDaemonReload) &&
+     grep -Fxq "FragmentPath=$gateway_unit_path" <<< "$properties" &&
+     grep -Fxq 'DropInPaths=' <<< "$properties" &&
+     grep -Fxq 'NeedDaemonReload=no' <<< "$properties" &&
+     cmp -s "$here/$gateway_unit" <(as_dev cat -- "$gateway_unit_path"); then
+    return 0
+  fi
+  printf '%s\n' 'A unidade Dev instalada ou carregada diverge da unidade revisada.' >&2
+  return 1
+}
 copy_dev_tls() {
   local source=$1 target=$2
   as_dev cat "$private/$source" > "$target"
@@ -33,19 +57,19 @@ copy_dev_tls() {
 
 preflight() {
   local network driver proxy_id network_id
-  image=$("${docker_host[@]}" inspect --format '{{.Image}}' "$npm")
-  npm_id=$("${docker_host[@]}" inspect --format '{{.Id}}' "$npm")
-  driver=$("${docker_host[@]}" network inspect --format '{{.Driver}}' proxy)
+  image=$("${docker_host[@]}" inspect --format '{{.Image}}' "$npm") || return "$?"
+  npm_id=$("${docker_host[@]}" inspect --format '{{.Id}}' "$npm") || return "$?"
+  driver=$("${docker_host[@]}" network inspect --format '{{.Driver}}' proxy) || return "$?"
   [[ $driver == bridge ]] || fail 'A rede proxy não é uma bridge.'
-  proxy_id=$("${docker_host[@]}" network inspect --format '{{.Id}}' proxy)
-  network=$("${docker_host[@]}" inspect --format '{{with index .NetworkSettings.Networks "proxy"}}{{.NetworkID}} {{.Gateway}} {{.IPAddress}}{{end}}' "$npm")
-  read -r network_id bridge peer <<< "$network"
+  proxy_id=$("${docker_host[@]}" network inspect --format '{{.Id}}' proxy) || return "$?"
+  network=$("${docker_host[@]}" inspect --format '{{with index .NetworkSettings.Networks "proxy"}}{{.NetworkID}} {{.Gateway}} {{.IPAddress}}{{end}}' "$npm") || return "$?"
+  read -r network_id bridge peer <<< "$network" || return "$?"
   [[ $network_id == "$proxy_id" && -n $bridge && -n $peer ]] || fail 'NPM sem IPv4/gateway em proxy.'
   ip -o -4 addr show scope global | awk '{print $4}' | cut -d/ -f1 | grep -Fxq "$bridge" ||
     fail 'O endereço gateway de proxy não pertence ao host.'
   [[ $(ip -4 route get "$peer" from "$bridge" | head -1) == *" dev br-"* ]] ||
     fail 'Rota do gateway ao peer NPM não usa uma bridge Docker.'
-  data=$("${docker_host[@]}" inspect --format '{{range .Mounts}}{{if and (eq .Destination "/data") .RW}}{{.Source}}{{end}}{{end}}' "$npm")
+  data=$("${docker_host[@]}" inspect --format '{{range .Mounts}}{{if and (eq .Destination "/data") .RW}}{{.Source}}{{end}}{{end}}' "$npm") || return "$?"
   [[ -n $data && -d $data && $(realpath -e -- "$data") == "$data" ]] ||
     fail 'Mount persistente /data gravável não comprovado.'
   [[ $("${docker_host[@]}" inspect --format '{{range .Mounts}}{{if eq .Destination "/etc/letsencrypt"}}yes{{end}}{{end}}' "$npm") == yes ]] ||
@@ -55,7 +79,7 @@ preflight() {
   [[ -d $data/nginx/custom && $(realpath -e -- "$data/nginx/custom") == "$data/nginx/custom" &&
      ! -L $data/$hook && ( ! -e $data/$hook || -f $data/$hook ) && ! -L $data/$exclusive ]] ||
     fail 'Caminhos custom do NPM incompatíveis.'
-  master_uid=$(live sh -c 'ps -eo uid,args | awk '"'"'$2=="nginx:" && $3=="master" {print $1}'"'"'')
+  master_uid=$(live sh -c 'ps -eo uid,args | awk '"'"'$2=="nginx:" && $3=="master" {print $1}'"'"'') || return "$?"
   [[ $master_uid =~ ^[0-9]+$ ]] || fail 'UID do master Nginx não comprovado.'
 }
 
@@ -74,6 +98,7 @@ clone_gate() (
   printf 'Recibo privado %s\n' "$receipt" >&2
   metadata > "$receipt/installation"
   printf '%s\n' "$release_sha" > "$receipt/release-sha"
+  cp -- "$snapshot/package.sha256" "$receipt/package.sha256"
   certificates > "$receipt/certificates"
   as_gateway authorizations > "$receipt/dev-authorizations"
   local clone_name="anticlone-dev-npm-gate-${receipt##*.}"
@@ -139,36 +164,37 @@ NGINX
   "${clone[@]}" node /gate/clone-probe.cjs "$pin" > "$receipt/clone-probe.log" 2>&1 ||
     fail "Teste de tráfego recusado. Consulte $receipt/clone-probe.log."
   diff -u "$receipt/clone-before.conf" "$receipt/clone-candidate.conf" > "$receipt/clone.diff" || [[ $? == 1 ]]
-  (cd "$receipt" && sha256sum installation release-sha certificates dev-authorizations original/* candidate/* \
+  (cd "$receipt" && sha256sum installation release-sha package.sha256 certificates dev-authorizations original/* candidate/* \
     live-before.conf clone-candidate.conf clone.diff clone-probe.log > approved.sha256)
   printf '%s\n' "$receipt"
 )
 
-atomic_config() {
+atomic_config() (
   local src=$1 dst=$2 temp
-  temp=$(mktemp "${dst%/*}/.anticlone-dev.XXXXXX")
-  cat -- "$src" > "$temp"
+  temp=$(mktemp "${dst%/*}/.anticlone-dev.XXXXXX") || return "$?"
+  trap 'if [[ -e $temp ]]; then unlink "$temp"; fi' EXIT
+  cat -- "$src" > "$temp" || return "$?"
   if [[ -f $dst ]]; then
-    chmod --reference="$dst" "$temp"
-    chown --reference="$dst" "$temp"
+    chmod --reference="$dst" "$temp" || return "$?"
+    chown --reference="$dst" "$temp" || return "$?"
   else
-    chown "$master_uid" "$temp"
-    chmod 600 "$temp"
+    chown "$master_uid" "$temp" || return "$?"
+    chmod 600 "$temp" || return "$?"
   fi
   mv -fT -- "$temp" "$dst"
-}
+)
 
 remove_installation() {
   local item
   for item in {http-limits,proxy-host,proxy-location}.conf tls/{npm.crt,npm.key,server-ca.crt}; do
-    if [[ -f $data/$exclusive/$item ]]; then unlink "$data/$exclusive/$item"; fi
+    if [[ -f $data/$exclusive/$item ]]; then unlink "$data/$exclusive/$item" || return "$?"; fi
   done
-  if [[ -d $data/$exclusive/tls ]]; then rmdir -- "$data/$exclusive/tls"; fi
+  if [[ -d $data/$exclusive/tls ]]; then rmdir -- "$data/$exclusive/tls" || return "$?"; fi
   if [[ -d $data/$exclusive ]]; then rmdir -- "$data/$exclusive"; fi
 }
 
-detach_hook() {
-  if [[ ! -f $data/$hook ]]; then return; fi
+detach_hook() (
+  if [[ ! -f $data/$hook ]]; then return 0; fi
   if cmp -s "$data/$hook" "$receipt/candidate/http_top.conf"; then
     if [[ -f $receipt/original/http_top.conf ]]; then
       atomic_config "$receipt/original/http_top.conf" "$data/$hook"
@@ -177,22 +203,27 @@ detach_hook() {
     fi
   else
     local clean
-    clean=$(mktemp "$receipt/.hook.XXXXXX")
-    python3 "$here/render.py" detach "$data/$hook" > "$clean"
-    chmod --reference="$data/$hook" "$clean"
-    chown --reference="$data/$hook" "$clean"
+    clean=$(mktemp "$receipt/.hook.XXXXXX") || return "$?"
+    trap 'unlink "$clean"' EXIT
+    python3 "$here/render.py" detach "$data/$hook" > "$clean" || return "$?"
     if ! cmp -s "$clean" "$data/$hook"; then atomic_config "$clean" "$data/$hook"; fi
-    unlink "$clean"
   fi
-}
+)
 
 restore_original() {
+  local status
+  [[ -f $data/$site && ! -L $data/$site ]] || return 1
   if cmp -s "$data/$site" "$receipt/candidate/13.conf"; then
-    atomic_config "$receipt/original/13.conf" "$data/$site"
-  elif grep -Fq '/data/nginx/custom/anticlone-dev/' "$data/$site"; then
-    fail 'O host 13 mudou durante o stage e ainda usa os includes. Restaure o host na UI.'
+    atomic_config "$receipt/original/13.conf" "$data/$site" || return "$?"
+  else
+    status=0
+    grep -Fq '/data/nginx/custom/anticlone-dev/' "$data/$site" || status=$?
+    if [[ $status != 1 ]]; then
+      printf '%s\n' 'O host 13 ainda usa os includes ou está ilegível. Confira os valores na UI.' >&2
+      return 1
+    fi
   fi
-  detach_hook
+  detach_hook || return "$?"
   remove_installation
 }
 
@@ -220,6 +251,8 @@ JS
 }
 
 stage() (
+  local claim
+  [[ ! -e $active_receipt ]] || fail 'Recupere o recibo ativo antes de executar outro stage.'
   [[ ! -e $data/$exclusive ]] || fail 'Diretório AntiClone Dev já existe no NPM.'
   grep -q " commit=$release_sha$" "$receipt/operator-approval" ||
     fail 'O recibo ainda precisa do aceite do administrador para este SHA.'
@@ -229,11 +262,14 @@ stage() (
   live nginx -T > "$receipt/live-pre-stage.conf" 2> "$receipt/live-pre-stage.log"
   python3 "$here/render.py" baseline "$receipt/live-before.conf" "$receipt/live-pre-stage.conf"
   as_gateway smoke > "$receipt/dev-smoke.log"
-  local rebound=no success=no
-  trap 'if [[ $success == no ]]; then
-    restore_original
-    if [[ $rebound == yes ]]; then as_gateway bind 127.0.0.1 127.0.0.1; fi
-  fi' EXIT
+  claim=$(mktemp "$active_receipt.XXXXXX")
+  if ! printf '%s\n' "$receipt" > "$claim" || ! mv -fT -- "$claim" "$active_receipt"; then
+    unlink "$claim"
+    fail 'Não foi possível registrar o recibo ativo.'
+  fi
+  trap 'finish_stage "$?"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
   install -d -m 755 "$data/$exclusive"
   install -d -m 700 -o "$master_uid" "$data/$exclusive/tls"
   for fragment in http-limits proxy-host proxy-location; do
@@ -246,7 +282,6 @@ stage() (
   "${docker_host[@]}" exec --user "$master_uid" "$npm" sh -c \
     'test -r /data/nginx/custom/anticlone-dev/tls/npm.key'
   as_gateway bind "$bridge" "$peer"
-  rebound=yes
   test_live_backend
   atomic_config "$receipt/candidate/http_top.conf" "$data/$hook"
   atomic_config "$receipt/candidate/13.conf" "$data/$site"
@@ -259,7 +294,6 @@ stage() (
   live nginx -T > "$receipt/live-stage.conf" 2> "$receipt/live-stage.log"
   python3 "$here/render.py" compare "$receipt/live-before.conf" "$receipt/live-stage.conf" "$receipt/candidate"
   touch "$receipt/staged"
-  success=yes
   printf 'Candidata conferida em disco e upstream mTLS privado validado. Destino HTTPS: %s:%s\n' "$bridge" "$port"
   cat "$receipt/candidate/advanced.conf"
 )
@@ -290,44 +324,133 @@ const host = 'protect.leoceo.online';
   }
 })().catch(error => { console.error(error.message); process.exitCode = 1; });
 JS
-  as_dev systemctl --user enable anticlone-dev-public-gateway.service
+  as_dev systemctl --user enable "$gateway_unit"
   touch "$receipt/verified"
   printf 'Proxy Host 13 validado no NPM. Recibo: %s\n' "$receipt"
 }
 
-rollback() {
-  [[ -f $receipt/staged ]] || fail 'Recibo sem configuração staged.'
-  # Restore the original UI values before removing files still referenced by this host.
-  if grep -Fq '/data/nginx/custom/anticlone-dev/' "$data/$site"; then
-    fail 'Restaure primeiro os campos anteriores do host 13 na UI.'
+recover_npm() (
+  local origin=$1 status
+  local -a docker_host=(timeout -k 2s 20s "${docker_host[@]}")
+  if [[ $origin == operator ]]; then
+    preflight || return "$?"
+    check_npm_receipt rollback || return "$?"
+    if [[ -f $receipt/staged ]]; then
+      # The UI owns the persistent settings after a completed stage.
+      status=0
+      grep -Fq '/data/nginx/custom/anticlone-dev/' "$data/$site" || status=$?
+      [[ $status == 1 ]] || fail 'Restaure os campos anteriores do host 13 na UI e repita o rollback.'
+    fi
   fi
-  detach_hook
-  remove_installation
-  live nginx -t > "$receipt/rollback-test.log" 2>&1
-  live nginx -T > "$receipt/rollback.conf" 2> "$receipt/rollback.log"
-  as_dev systemctl --user disable anticlone-dev-public-gateway.service
-  as_gateway bind 127.0.0.1 127.0.0.1
-  unlink "$receipt/staged"
-  if [[ -f $receipt/verified ]]; then unlink "$receipt/verified"; fi
-  touch "$receipt/rolled-back"
+  restore_original || return "$?"
+  live nginx -t > "$receipt/rollback-test.log" 2>&1 || return "$?"
+  live nginx -T > "$receipt/rollback.conf" 2> "$receipt/rollback-nginx.log"
+)
+
+recover_gateway() {
+  check_gateway_unit || return "$?"
+  as_gateway bind 127.0.0.1 127.0.0.1 || return "$?"
+  if [[ $1 == operator && -f $receipt/staged ]]; then
+    as_dev systemctl --user disable "$gateway_unit"
+  fi
 }
 
-preflight
-case ${1:-} in
-  clone) clone_gate ;;
-  stage|verify|rollback)
-    receipt=${2:-}
-    [[ $receipt =~ ^/var/backups/anticlone-dev-npm\.[A-Za-z0-9]{6}$ && -d $receipt &&
-       $(stat -c %u:%a "$receipt") == 0:700 && ! -L $receipt ]] || fail 'Recibo privado inválido.'
-    if [[ $1 == rollback ]]; then
-      cmp -s <(metadata | sed -n '1,3p') <(sed -n '1,3p' "$receipt/installation") ||
-        fail 'NPM, imagem ou mount mudaram desde o clone.'
-    else
-      cmp -s <(metadata) "$receipt/installation" || fail 'NPM, imagem, mount ou rede mudaram desde o clone.'
-    fi
-    (cd "$receipt" && sha256sum --status -c approved.sha256) || fail 'O recibo ou a candidata foram alterados.'
-    [[ $(cat "$receipt/release-sha") == "$release_sha" ]] || fail 'O recibo pertence a outro checkout.'
-    "$1"
-    ;;
-  *) fail 'Uso: npm-gate.sh clone | {stage,verify,rollback} <recibo>.' ;;
-esac
+recover_step() {
+  local step=$1 action=$2 origin=$3 status=0
+  "$action" "$origin" || status=$?
+  printf '%s rollback=%s etapa=%s rc=%s\n' "$(date -u +%FT%TZ)" "$origin" "$step" "$status" |
+    tee -a "$receipt/recovery.log" >&2 || :
+  return "$status"
+}
+
+recover() {
+  local origin=$1 trigger=$2 npm_status=0 gateway_status=0 gateway_pid npm_pid
+  # Start both sides before waiting. Docker or systemd can block independently.
+  recover_step loopback recover_gateway "$origin" &
+  gateway_pid=$!
+  recover_step npm recover_npm "$origin" &
+  npm_pid=$!
+  wait "$gateway_pid" || gateway_status=$?
+  wait "$npm_pid" || npm_status=$?
+  printf '%s rollback=%s erro_inicial=%s npm_rc=%s loopback_rc=%s\n' \
+    "$(date -u +%FT%TZ)" "$origin" "$trigger" "$npm_status" "$gateway_status" |
+    tee -a "$receipt/recovery.log" >&2 || :
+  if ((npm_status || gateway_status)); then
+    printf 'Rollback parcial. Repita rollback com o mesmo recibo: %s\n' "$receipt" >&2
+    return 1
+  fi
+  touch "$receipt/rolled-back" || return "$?"
+  rm -f -- "$receipt/staged" "$receipt/verified" || return "$?"
+  unlink "$active_receipt"
+}
+
+finish_stage() {
+  local status=$1
+  trap - EXIT
+  if ((status)); then recover stage "$status" || :; fi
+  exit "$status"
+}
+
+check_npm_receipt() {
+  if [[ $1 == rollback ]]; then
+    cmp -s <(metadata | sed -n '1,3p') <(sed -n '1,3p' "$receipt/installation") ||
+      fail 'NPM, imagem ou mount mudaram desde o clone.'
+  else
+    cmp -s <(metadata) "$receipt/installation" || fail 'NPM, imagem, mount ou rede mudaram desde o clone.'
+  fi
+}
+
+check_receipt() {
+  receipt=$1
+  [[ $receipt =~ ^/var/backups/anticlone-dev-npm\.[A-Za-z0-9]{6}$ && -d $receipt &&
+     $(stat -c %u:%a "$receipt") == 0:700 && ! -L $receipt ]] || fail 'Recibo privado inválido.'
+  (cd "$receipt" && sha256sum --status -c approved.sha256) || fail 'O recibo ou a candidata foram alterados.'
+  [[ $(cat "$receipt/release-sha") == "$release_sha" ]] &&
+    cmp -s "$snapshot/package.sha256" "$receipt/package.sha256" ||
+    fail 'O recibo pertence a outro pacote revisado.'
+}
+
+rollback() {
+  if [[ $(cat -- "$active_receipt" 2>/dev/null) == "$receipt" ]]; then
+    recover operator 0
+  elif [[ -f $receipt/rolled-back ]]; then
+    printf 'Rollback já concluído para %s\n' "$receipt"
+  else
+    fail 'O recibo informado não corresponde ao stage ativo.'
+  fi
+}
+
+main() {
+  [[ $EUID == 0 && ${SUDO_USER:-} == leoceo ]] || fail 'Execute via sudo como leoceo.'
+  [[ $here =~ ^/var/lib/anticlone-dev-npm-tools/([0-9a-f]{40})/infra/npm/dev$ &&
+     $(stat -c %u:%a "$tools_dir") == 0:700 && $(stat -c %u:%a "$snapshot") == 0:700 ]] ||
+    fail 'Execute somente a cópia revisada no diretório privado de root.'
+  release_sha=${BASH_REMATCH[1]}
+  exec 9>"$tools_dir/gate.lock"
+  flock -n 9 || fail 'Já existe um procedimento AntiClone Dev em execução.'
+  verify_package || fail 'Arquivos do pacote revisado divergentes.'
+  case ${1:-} in
+    clone)
+      check_gateway_unit || exit 1
+      preflight
+      clone_gate
+      ;;
+    stage|verify)
+      check_receipt "${2:-}"
+      check_gateway_unit || exit 1
+      preflight
+      check_npm_receipt "$1"
+      if [[ $1 == verify && $(cat -- "$active_receipt" 2>/dev/null) != "$receipt" ]]; then
+        fail 'O recibo informado não corresponde ao stage ativo.'
+      fi
+      "$1"
+      ;;
+    rollback)
+      check_receipt "${2:-}"
+      rollback
+      ;;
+    *) fail 'Uso: npm-gate.sh clone | {stage,verify,rollback} <recibo>.' ;;
+  esac
+}
+
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then main "$@"; fi

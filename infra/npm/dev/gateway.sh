@@ -2,16 +2,16 @@
 set -Eeuo pipefail
 umask 077
 
-release=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd -P)
 base=/opt/apps/apps/personal/anticlone-dev
+release=$base/dev-gateway-release
 private=$base/private/dev-public-gateway
 node=$base/bin/node
 unit=anticlone-dev-public-gateway.service
 unit_dir=/home/anticlone-dev/.config/systemd/user
 host=protect.leoceo.online
 port=13003
-[[ $(id -un) == anticlone-dev && $release == "$base/dev-gateway-release" ]] ||
-  { printf '%s\n' 'Execute como anticlone-dev no checkout dev-gateway-release.' >&2; exit 1; }
+[[ $(id -un) == anticlone-dev ]] ||
+  { printf '%s\n' 'Execute como anticlone-dev.' >&2; exit 1; }
 fail() { printf '%s\n' "$*" >&2; exit 1; }
 
 fingerprint() {
@@ -53,13 +53,17 @@ try {
 JS
 }
 
-write_listener() {
-  local address=$1 peer=$2
-  "$node" --input-type=module - "$address" "$peer" <<'JS'
+validate_listener() {
+  "$node" --input-type=module - "$1" "$2" <<'JS'
 import {npmListenAddress} from './dist/apps/npm-transport.js';
 const [address, peer] = process.argv.slice(2);
 npmListenAddress({NPM_LISTEN_ADDRESS: address, NPM_PROXY_PEER_ADDRESS: peer});
 JS
+}
+
+write_listener() {
+  local address=$1 peer=$2
+  validate_listener "$address" "$peer"
   local staged
   staged=$(mktemp "$private/.env.XXXXXX")
   if ! {
@@ -134,6 +138,32 @@ ready() {
   fail 'Gateway Dev não respondeu ao monitor mTLS.'
 }
 
+bind_listener() {
+  local address=$1 peer=$2 staged
+  validate_listener "$address" "$peer"
+  [[ $address == 127.0.0.1 ]] ||
+    ip -o -4 addr show scope global | awk '{print $4}' | cut -d/ -f1 | grep -Fxq -- "$address"
+  [[ $(grep -c '^NPM_LISTEN_ADDRESS=' "$private/gateway.env") == 1 &&
+     $(grep -c '^NPM_PROXY_PEER_ADDRESS=' "$private/gateway.env") == 1 ]] ||
+    fail 'Configuração do listener Dev ausente ou duplicada.'
+  if grep -Fxq "NPM_LISTEN_ADDRESS=$address" "$private/gateway.env" &&
+     grep -Fxq "NPM_PROXY_PEER_ADDRESS=$peer" "$private/gateway.env" &&
+     [[ $(ss -H -ltn "sport = :$port" | awk '{print $4}') == "$address:$port" ]] &&
+     [[ $(probe "$address" monitor /healthz) == 200 ]]; then
+    return
+  fi
+
+  # Change only the listener, preserving credentials and certificate pins.
+  staged=$(mktemp "$private/.env.XXXXXX")
+  sed -e "s/^NPM_LISTEN_ADDRESS=.*/NPM_LISTEN_ADDRESS=$address/" \
+    -e "s/^NPM_PROXY_PEER_ADDRESS=.*/NPM_PROXY_PEER_ADDRESS=$peer/" "$private/gateway.env" > "$staged"
+  mv -fT "$staged" "$private/gateway.env"
+  systemctl --user restart "$unit"
+  ready "$address"
+  [[ $(ss -H -ltn "sport = :$port" | awk '{print $4}') == "$address:$port" ]] ||
+    fail 'O listener Dev não está limitado ao endereço solicitado.'
+}
+
 smoke() {
   local private_health result label path
   ready 127.0.0.1
@@ -182,17 +212,7 @@ case ${1:-} in
   authorizations) admin_env count ;;
   bind)
     [[ $# == 3 ]] || fail 'Uso: gateway.sh bind <endereço> <peer NPM>.'
-    local_address=$2
-    [[ $local_address == 127.0.0.1 ]] || ip -o -4 addr show scope global | awk '{print $4}' | cut -d/ -f1 | grep -Fxq -- "$local_address"
-    cp -p "$private/gateway.env" "$private/.previous-env"
-    write_listener "$local_address" "$3"
-    if ! (systemctl --user restart "$unit" && ready "$local_address" &&
-          [[ $(ss -H -ltn "sport = :$port" | awk '{print $4}') == "$local_address:$port" ]]); then
-      mv -fT "$private/.previous-env" "$private/gateway.env"
-      systemctl --user restart "$unit"
-      fail 'Bind do gateway Dev falhou, configuração anterior restaurada.'
-    fi
-    rm -- "$private/.previous-env"
+    bind_listener "$2" "$3"
     ;;
   *) fail 'Uso: gateway.sh prepare | smoke | authorizations | bind <endereço> <peer NPM>.' ;;
 esac

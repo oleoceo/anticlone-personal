@@ -63,8 +63,16 @@ e Advanced da versão instalada. [Hooks oficiais do NPM](https://nginxproxymanag
 Se o clone falhar por módulo, hook, mount ou resolução estática preexistente,
 consulte o log apontado no recibo. Use somente no clone a montagem ou o fixture
 que faltar para reproduzir a configuração efetiva. O gate exige o diff completo e
-a prova de tráfego. Diante de um erro após o stage, use a opção de rollback,
-restaure primeiro somente o host 13 pela UI e confira o resultado do script.
+a prova de tráfego. Se o stage falhar, o recibo registra a restauração do NPM e
+o retorno a loopback em `recovery.log`. Em caso de falha parcial, corrija o
+impedimento indicado e use a opção `rollback` com o mesmo recibo. A operação
+pode ser repetida e um stage novo aguarda a conclusão do rollback ativo.
+
+O pacote privado é montado com os oito arquivos do commit revisado. O gate
+reconfere o manifesto SHA-256 e compara a unidade systemd instalada e carregada
+antes de `clone`, `stage` e `verify`. O helper do gateway roda com a identidade
+Dev e recebe o script da cópia revisada. Se a unidade divergir, confira o
+arquivo indicado e os drop-ins antes de prosseguir.
 
 ```bash
 (
@@ -72,6 +80,15 @@ restaure primeiro somente o host 13 pela UI e confira o resultado do script.
   set +x
   release=/opt/apps/apps/personal/anticlone-dev/dev-gateway-release
   tools_dir=/var/lib/anticlone-dev-npm-tools
+  run_gate() {
+    sudo /bin/bash -p -c '
+      cd -- "$1" || exit
+      shift
+      sha256sum --check --strict --status package.sha256 ||
+        { printf "%s\n" "Manifesto do pacote revisado divergente." >&2; exit 1; }
+      exec /bin/bash -p ./infra/npm/dev/npm-gate.sh "$@"
+    ' bash "$snapshot" "$@"
+  }
 
   sudo -v
   read -r -p 'Operação (integrar ou rollback): ' action
@@ -80,12 +97,15 @@ restaure primeiro somente o host 13 pela UI e confira o resultado do script.
     [[ $receipt =~ ^/var/backups/anticlone-dev-npm\.[A-Za-z0-9]{6}$ ]]
     approved_sha=$(sudo cat "$receipt/release-sha")
     [[ $approved_sha =~ ^[0-9a-f]{40}$ ]]
-    gate=$tools_dir/$approved_sha/infra/npm/dev/npm-gate.sh
-    printf '%s\n' 'No NPM, restaure somente os valores originais do host 13 e salve.'
-    read -r -p 'Digite RESTAURADO após salvar: ' confirmation
-    [[ $confirmation == RESTAURADO ]]
-    sudo bash "$gate" rollback "$receipt"
-    printf '%s\n' 'Salve novamente o host 13 pela UI para efetivar a remoção das zonas na configuração carregada.'
+    snapshot=$tools_dir/$approved_sha
+    if sudo test -f "$receipt/staged"; then
+      printf '%s\n' 'No NPM, restaure somente os valores originais do host 13 e salve.'
+      read -r -p 'Pressione Enter após a tentativa na UI para executar o rollback: ' confirmation
+      run_gate rollback "$receipt"
+      printf '%s\n' 'Salve novamente o host 13 pela UI para retirar as zonas da configuração carregada.'
+    else
+      run_gate rollback "$receipt"
+    fi
     exit 0
   fi
   [[ $action == integrar ]]
@@ -98,17 +118,22 @@ restaure primeiro somente o host 13 pela UI e confira o resultado do script.
   snapshot=$tools_dir/$approved_sha
   if ! sudo test -d "$snapshot"; then
     extracted=$(sudo mktemp -d "$tools_dir/.extract.XXXXXX")
-    files=(infra/npm/{http-limits,proxy-host,proxy-location}.conf infra/npm/dev/{npm-gate.sh,render.py,clone-probe.cjs})
-    sudo -u anticlone-dev git --no-replace-objects -C "$release" archive "$approved_sha" -- "${files[@]}" |
-      sudo tar --extract --file=- --directory="$extracted" --no-same-owner --no-same-permissions
+    files=(infra/npm/{http-limits,proxy-host,proxy-location}.conf
+      infra/npm/dev/{npm-gate.sh,render.py,clone-probe.cjs,gateway.sh,anticlone-dev-public-gateway.service})
+    sudo install -d -m 0700 "$extracted/infra/npm/dev"
     for file in "${files[@]}"; do
-      sudo test -f "$extracted/$file"
-      sudo test ! -L "$extracted/$file"
+      sudo -u anticlone-dev git --no-replace-objects -C "$release" cat-file blob "$approved_sha:$file" |
+        sudo /bin/bash -p -c 'umask 077; cat > "$1" && chmod 400 "$1"' bash "$extracted/$file"
     done
+    sudo /bin/bash -p -c '
+      cd -- "$1" || exit
+      shift
+      umask 077
+      sha256sum -- "$@" > package.sha256 && chmod 400 package.sha256
+    ' bash "$extracted" "${files[@]}"
     sudo mv -T --no-clobber "$extracted" "$snapshot"
   fi
-  gate=$snapshot/infra/npm/dev/npm-gate.sh
-  receipt=$(sudo bash "$gate" clone)
+  receipt=$(run_gate clone)
   printf 'Recibo privado %s\n' "$receipt"
   sudo cat "$receipt/clone-probe.log"
   printf 'Autorizações Dev habilitadas: '
@@ -119,7 +144,7 @@ restaure primeiro somente o host 13 pela UI e confira o resultado do script.
   printf 'leoceo %s commit=%s\n' "$(date -u +%FT%TZ)" "$approved_sha" |
     sudo tee "$receipt/operator-approval" >/dev/null
 
-  sudo bash "$gate" stage "$receipt"
+  run_gate stage "$receipt"
   printf '%s\n' \
     'Abra somente o Proxy Host 13 na UI.' \
     'Configure Scheme=https, Forward Host=IPv4 privado indicado acima e Forward Port=13003.' \
@@ -127,11 +152,12 @@ restaure primeiro somente o host 13 pela UI e confira o resultado do script.
     'Preserve o certificado e o Force SSL. Salve o host somente após o stage bem-sucedido.'
   read -r -p 'Digite SALVO após salvar o host 13: ' confirmation
   [[ $confirmation == SALVO ]]
-  sudo bash "$gate" verify "$receipt"
+  run_gate verify "$receipt"
   health=$(curl --noproxy '*' --fail --show-error --silent --max-time 10 https://protect.leoceo.online/healthz)
   [[ $health == '{"status":"ready","mode":"OPERATIONAL","action":"SCOPED_AUTHORIZATION_REQUIRED"}' ]]
   printf '%s\n' "$health" | sudo tee "$receipt/public-health.json"
   printf 'Recibo final: %s\n' "$receipt"
+  printf '%s\n' 'Homologação pendente até o E2E HTTPS direto passar após a integração.'
 )
 ```
 
@@ -143,3 +169,12 @@ O `curl` final valida o certificado público pela cadeia do sistema e a saúde
 pelo hostname. Guarde o recibo em `/var/backups`, pois contém configuração
 privada do NPM. O rollback preserva outras linhas do hook HTTP, remove os
 arquivos Dev e devolve a instância à porta 13003 em loopback.
+
+Depois da integração, repita o cenário `operational v2` do E2E
+`dist/tests/operational-authorization.test.js` no perfil HTTPS direto
+(`HTTPS_GATE_TEST=0`), com Chromium, `gateway.test` resolvido apenas para
+loopback no laboratório e `TEST_DATABASE_URL` de um PostgreSQL descartável.
+No checkout compilado do mesmo SHA, execute `HTTPS_GATE_TEST=0 node --test
+--test-name-pattern='^operational v2' dist/tests/operational-authorization.test.js`.
+O recibo de saúde pública cobre a integração da rota. A homologação exige
+também o resultado aprovado do E2E.
