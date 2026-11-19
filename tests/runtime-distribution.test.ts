@@ -11,6 +11,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Pool} from 'pg';
 import {chromium} from 'playwright';
+import {SMTPServer} from 'smtp-server';
 import {TOTP,Secret} from 'otpauth';
 import {distributionAdmin,distributionOrigins,readDistribution} from '../apps/runtime-distribution.js';
 import {distributionGateway} from '../apps/distribution-gateway.js';
@@ -25,6 +26,7 @@ import {PublicDnsFailure,type VerificationRequest,type VerificationResponse} fro
 import {gatewayBoundary} from '../apps/gateway-boundary.js';
 import {npmServer} from '../apps/npm-transport.js';
 import {syntheticTls} from './npm-fixture.js';
+import {deliverOne} from '../apps/alerts.js';
 
 test('endpoint readiness requires DNS, HTTPS and the operational health reply',async()=>{
   const origin='https://signals.owner.test';
@@ -70,7 +72,9 @@ async function sharedMtlsIngress(origins: readonly string[], dispatch: RequestLi
           const chunks:Buffer[]=[];
           res.on('data',chunk=>chunks.push(chunk));
           res.on('error',reject);
-          res.on('end',()=>resolve({status:res.statusCode!,headers:{'content-type':String(res.headers['content-type']??'')},body:Buffer.concat(chunks)}));
+          res.on('end',()=>resolve({status:res.statusCode!,headers:Object.fromEntries(
+            ['content-type','access-control-allow-origin'].flatMap(name=>typeof res.headers[name]==='string'?[[name,res.headers[name]]]:[])),
+          body:Buffer.concat(chunks)}));
         });
         req.on('error',reject);req.end(body);
       });
@@ -273,6 +277,12 @@ test('distribution v1: persistent revisions, admin HTML/CSS, real browser layers
     await panel.getByRole('button',{name:'Cadastrar endpoint',exact:true}).click();
     await panel.getByRole('button',{name:'Confirmar',exact:true}).click();
     await panel.getByText('Aguardando autorização no ambiente privado',{exact:true}).waitFor();
+    await panel.goto(installationPath);
+    const pendingOption=panel.getByLabel('Endpoint de telemetria').locator('option').filter({hasText:pooledOrigin});
+    await pendingOption.waitFor({state:'attached'});
+    assert.notEqual(await pendingOption.getAttribute('disabled'),null);
+    assert.match(await pendingOption.textContent() ?? '',/Aguardando autorização/);
+    await panel.goto(settings);
     const pooledEnv = {...env,RUNTIME_TELEMETRY_POOL_ORIGINS:[pooledOrigin,secondary].join(',')};
     assert.equal((await listTelemetryOrigins(db,env)).items[0].authorized,false);
     for (const origin of ['http://signals.test','https://user@signals.test','https://127.0.0.1','https://signals.test/path','https://invalid..test','https://signals.test:8443']) {
@@ -341,6 +351,61 @@ test('distribution v1: persistent revisions, admin HTML/CSS, real browser layers
     assert.ok(pooledBundle.body.includes(pooled.distribution.bases.TELEMETRY));
     const input=JSON.stringify({origin,pathname:'/',signals:{}});
     assert.equal((await upstream.request({url:pooled.distribution.bases.TELEMETRY+'e',method:'POST',body:input},origin)).status,204);
+    // Put the exact HTML from the panel into a controlled original and copy.
+    const mailPage=await browser.newPage();
+    const mailCopy='https://mail-copy.owner.test/';
+    const copyHost=new URL(mailCopy).hostname;
+    const previousHtml=html;
+    html=(await snippet.textContent())!;
+    const messages:string[]=[];
+    const smtp=new SMTPServer({authOptional:true,disabledCommands:['STARTTLS','AUTH'],
+      onData(stream,_session,done){
+        let message='';
+        stream.on('data',chunk=>{message+=String(chunk);});
+        stream.on('end',()=>{messages.push(message);done();});
+      }});
+    smtp.listen(0,'127.0.0.1');
+    await once(smtp.server,'listening');
+    try {
+      await mailPage.route(mailCopy,route=>route.fulfill({contentType:'text/html',body:'<a href="/checkout">Checkout</a>'+html}));
+      await mailPage.route(pooledOrigin+'/**',async route=>{
+        const req=route.request();
+        const method=req.method();
+        assert.ok(method==='GET'||method==='POST');
+        const answer=await upstream.request({url:req.url(),method,body:req.postData()??''},req.headers().origin);
+        await route.fulfill({status:answer.status,headers:answer.headers,body:answer.body});
+      });
+      const visit=async(url:string)=>{
+        const signal=mailPage.waitForResponse(response=>response.url()===pooled.distribution!.bases.TELEMETRY+'e' &&
+          response.request().method()==='POST' && response.status()===204);
+        await mailPage.goto(url);
+        await signal;
+        assert.equal(await mailPage.getByRole('link',{name:'Checkout'}).getAttribute('href'),'/checkout');
+      };
+      const incidentCount=async()=> (await db.query('SELECT count(*)::int AS count FROM incidents WHERE project_id=$1',['one'])).rows[0].count;
+      const before=await incidentCount();
+      await visit(origin);
+      assert.equal(await incidentCount(),before,'no new incident on the authorized origin');
+      await visit(mailCopy);
+      await visit(mailCopy);
+      assert.equal(await incidentCount(),before+1,'repeated visits deduplicate the new copy incident');
+      await db.query(`UPDATE alert_outbox a SET expired_at=clock_timestamp() FROM incidents i
+        WHERE a.incident_id=i.id AND i.project_id='one' AND i.host<>$1 AND a.sent_at IS NULL AND a.expired_at IS NULL`,[copyHost]);
+      await deliverOne(db,'one',(smtp.server.address() as AddressInfo).port);
+      await deliverOne(db,'one',(smtp.server.address() as AddressInfo).port);
+      const delivery=(await db.query(`SELECT d.outcome,d.transport FROM clone_delivery_attempts d
+        JOIN alert_outbox a ON a.id=d.outbox_id JOIN incidents i ON i.id=a.incident_id
+        WHERE i.project_id='one' AND i.host=$1`,[copyHost])).rows;
+      assert.deepEqual(delivery,[{outcome:'ACCEPTED',transport:'SMTP_LOCAL'}]);
+      assert.equal(messages.length,1);
+      assert.match(messages[0],/mail-copy\.owner\.test/);
+      if(demo)await writeFile(join(demo,'e2e-email.json'),JSON.stringify({endpoint:pooledOrigin,
+        originalNewIncidents:0,copyVisits:2,copyIncidents:1,acceptedEmails:1,delivery:delivery[0]},null,2)+'\n');
+    }finally{
+      html=previousHtml;
+      await mailPage.close();
+      await new Promise<void>(resolve=>smtp.close(()=>resolve()));
+    }
     assert.deepEqual(await readDistribution(db,installation,previous.version),previous);
     assert.equal((await distributionAdmin(db,request,pooledEnv)).publication.changesRequired,false);
     await select.selectOption(secondary);

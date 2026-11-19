@@ -2,7 +2,7 @@ import {useState, type ReactNode} from 'react';
 import {AdminApi, type Page} from './admin-api';
 import {Link} from 'react-router-dom';
 import {Back, conversionsPath, installPath, pagePath, projectIncidentsPath, protectionPath, settingsPath, useContextNavigation} from './navigation';
-import {healthPath, installationMessages, publicationIssueMessages, publicationLabel, roleLabels, type InstallationStatus} from './installation-status';
+import {healthPath, installationMessages, publicationIssueMessages, publicationLabel, roleLabels, telemetryEndpointLabels, type InstallationStatus} from './installation-status';
 import {Confirm, Failure, Heading, labels, Loading, useQuery} from './ui';
 
 const resources = {
@@ -13,6 +13,7 @@ const resources = {
 type Role = keyof typeof resources;
 type Distribution = InstallationStatus & {
   telemetryOrigins?: string[];
+  telemetryEndpoints?: {origin:string;state:keyof typeof telemetryEndpointLabels}[];
   selectedTelemetryOrigin?: string | null;
   distribution: null | {version: number; bases: Record<Role, string>; paths?: Record<string, string>};
   snippets?: {html: string; css: string} | null;
@@ -85,6 +86,7 @@ export function Installation({api, project, page, context, setGuard}: {
   const collected = collectionResult ?? collection.data;
   const published = data?.distribution;
   const currentEndpoint = data?.selectedTelemetryOrigin ?? '';
+  const unavailableEndpoints = data?.telemetryEndpoints?.filter(endpoint => endpoint.state !== 'OPERATIONAL') ?? [];
   const preserveSelection = 'current';
   const selectedTelemetry = telemetry ?? (currentEndpoint ? preserveSelection : '');
   const pendingTelemetry = telemetry !== undefined && telemetry !== preserveSelection &&
@@ -166,12 +168,14 @@ export function Installation({api, project, page, context, setGuard}: {
         <Link {...nav.link(healthPath)}>Consultar Saúde e operações</Link>
       </div>}
       {published && <p className="muted">Endpoint na revisão publicada: <code>{new URL(published.bases.TELEMETRY).origin}</code></p>}
-      {data && (!!data.telemetryOrigins?.length || !!data.selectedTelemetryOrigin) &&
+      {data && (!!data.telemetryEndpoints?.length || !!data.telemetryOrigins?.length || !!currentEndpoint) &&
         <label className="installation-technology">Endpoint de telemetria<select value={selectedTelemetry} disabled={busy}
           onChange={event => setTelemetry(event.target.value)}>
           {currentEndpoint && <option value={preserveSelection}>Manter endereços da revisão atual</option>}
           <option value="">Usar origem padrão</option>
           {data.telemetryOrigins?.map(origin => <option key={origin}>{origin}</option>)}
+          {unavailableEndpoints.map(({origin,state})=>
+            <option key={origin} value={origin} disabled>{origin} · {telemetryEndpointLabels[state]}</option>)}
         </select></label>}
       {data?.telemetryOrigins?.length === 0 &&
         <Link {...nav.link(settingsPath + '/integracoes')}>Conferir endpoints de telemetria</Link>}

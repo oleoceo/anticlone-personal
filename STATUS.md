@@ -5,6 +5,8 @@
 - O cadastro existente verifica DNS/HTTPS/gateway sob autorização privada. Seleção explícita usa o domínio nos três papéis. Desativação preserva revisões e indica LPs atuais e históricas.
 - E2E Chromium/PostgreSQL real com dois domínios sintéticos e um upstream mTLS passou. Lint, typecheck, build e broker focado passaram. Evidências em `test-results/endpoints-demo/`.
 - Revisão independente `/root/gateway_review` sobre `740a0c5`. O build está no checkout de trabalho. Admin ativo e NPM foram preservados.
+- Ajuste Dev sobre `4c36b00`. Seletor na instalação exibe endpoints pendentes desabilitados. Chromium com trecho da UI, uma cópia deduplicada e um alerta SMTP local aceito. Provas em `test-results/instalacao-email/`.
+- SMTP configurado no Dev aceitou um e-mail de teste separado. Preferência de alertas permaneceu desativada. Publicação NPM continua pendente. Revisão independente `/root/gateway_review`.
 
 ## Hierarquia do painel V2.2
 - Ajustes compartilhados de largura, cabeçalhos, formulários e navegação.

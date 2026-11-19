@@ -1,19 +1,11 @@
 import {useState} from 'react';
 import {AdminApi} from './admin-api';
+import {telemetryEndpointLabels} from './installation-status';
 import {formData, formatDate, useOperation, value, type SetGuard} from './operations';
 import {Failure, Loading, useQuery} from './ui';
 
-const endpointState = {
-  DISABLED: 'Desativado para novas revisões',
-  NOT_AUTHORIZED: 'Aguardando autorização no ambiente privado',
-  UNVERIFIED: 'Aguardando verificação do endpoint',
-  DNS_FAILED: 'DNS não validado',
-  HTTPS_FAILED: 'HTTPS não validado',
-  GATEWAY_NOT_READY: 'Gateway indisponível no endpoint',
-  OPERATIONAL: 'Operacional',
-};
 type AffectedPage = {project: string; projectName: string; page: string; pageName: string; lastRevision: number; historical: boolean};
-type Entry = {origin: string; enabled: boolean; authorized: boolean; state: keyof typeof endpointState;
+type Entry = {origin: string; enabled: boolean; authorized: boolean; state: keyof typeof telemetryEndpointLabels;
   checkedAt: string | null; affectedPages: AffectedPage[]};
 type Pool = {installed: boolean; verificationAvailable: boolean; items: Entry[]};
 
@@ -44,7 +36,7 @@ export function TelemetryOrigins({api, setGuard}: {api: AdminApi; setGuard: SetG
         </form>
         {query.data.items.length === 0 ? <p className="empty">Nenhum endpoint cadastrado.</p> :
           <ul className="plain page-list">{query.data.items.map(item => <li key={item.origin}>
-            <div><strong>{item.origin}</strong><small>{endpointState[item.state]}</small>
+            <div><strong>{item.origin}</strong><small>{telemetryEndpointLabels[item.state]}</small>
               {item.checkedAt && <small>Última verificação · {formatDate(item.checkedAt)}</small>}
               {item.affectedPages.length > 0 && <details>
                 <summary>LPs afetadas ({item.affectedPages.length})</summary>
@@ -60,7 +52,7 @@ export function TelemetryOrigins({api, setGuard}: {api: AdminApi; setGuard: SetG
                     const result = await api.request<Pool>('telemetry-origins',{action:'verify',origin:item.origin});
                     query.revalidate();
                     const state = result.items.find(entry => entry.origin === item.origin)?.state;
-                    return state ? endpointState[state] : 'Atualize a lista de endpoints.';
+                    return state ? telemetryEndpointLabels[state] : 'Atualize a lista de endpoints.';
                   });
                 }}>Verificar endpoint</button>}
               <button type="button" disabled={operation.busy} onClick={() => {

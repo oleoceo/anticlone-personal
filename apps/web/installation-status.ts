@@ -14,6 +14,16 @@ export type InstallationStatus = {
 export const roleLabels = {SCRIPT: 'Scripts', TELEMETRY: 'Telemetria', STATIC_ASSETS: 'Recursos estáticos'};
 export const healthPath = '/configuracoes/operacoes';
 
+export const telemetryEndpointLabels = {
+  DISABLED: 'Desativado para novas revisões',
+  NOT_AUTHORIZED: 'Aguardando autorização no ambiente privado',
+  UNVERIFIED: 'Aguardando verificação do endpoint',
+  DNS_FAILED: 'DNS não validado',
+  HTTPS_FAILED: 'HTTPS não validado',
+  GATEWAY_NOT_READY: 'Gateway indisponível no endpoint',
+  OPERATIONAL: 'Operacional',
+};
+
 export const installationMessages: Record<string, string> = {
   TELEMETRY_ORIGIN_UNAVAILABLE: 'O endpoint de telemetria está desativado, sem autorização ou sem verificação operacional. Atualize a situação ou escolha outro endpoint.',
   RUNTIME_ORIGIN_MISSING: 'Falta uma origem de runtime na configuração privada. Configure RUNTIME_PUBLIC_ORIGIN ou a origem específica do papel.',

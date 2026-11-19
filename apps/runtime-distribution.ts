@@ -192,7 +192,8 @@ async function readOrPublish(db: Pool, data: {project:string;page:string;action:
     const controlled=schema.verifier?(await client.query(`SELECT c.result FROM controlled_installation_checks c JOIN protected_pages p ON p.id=c.page_id JOIN projects pr ON pr.id=p.project_id WHERE c.page_id=$1 AND c.project_id=$2 AND c.distribution_version=$3 AND c.url_generation=p.url_generation AND c.config_generation=p.config_generation AND p.enabled AND p.lifecycle_state='ACTIVE' AND p.deleted_at IS NULL AND pr.lifecycle_state='ACTIVE' AND pr.deleted_at IS NULL AND c.checked_at>now()-interval '7 days' ORDER BY c.checked_at DESC LIMIT 1`,[data.page,data.project,distribution?.version??0])).rows[0]?.result as ControlledCheck|undefined:undefined;
     await client.query('COMMIT');
     const measured=controlled && controlled.status!=='NOT_VERIFIED' ? controlled.layers : undefined;
-    return {contractVersion:1,state:distribution?'PUBLISHED':'NOT_PUBLISHED',distribution,publication,telemetryOrigins:eligible,selectedTelemetryOrigin:selected ?? null,
+    return {contractVersion:1,state:distribution?'PUBLISHED':'NOT_PUBLISHED',distribution,publication,telemetryOrigins:eligible,
+      telemetryEndpoints:items.map(({origin,state})=>({origin,state})),selectedTelemetryOrigin:selected ?? null,
       verification:{ready:!issue,issue},history:history.rows,aliasActivity,snippets:distribution?distributionSnippets(distribution):null,
       diagnostic:{status:controlled?.status??'NOT_VERIFIED',confidence:measured?'CONTROLLED_CURRENT_LOAD_ONLY':'UNAUTHENTICATED_CLAIM',
         controlledVerification:controlled??{status:'NOT_VERIFIED',reason:issue??'NO_CURRENT_VERIFICATION'},
