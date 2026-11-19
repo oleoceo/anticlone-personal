@@ -1253,8 +1253,9 @@ test('React provisions an original LP and copy, then real gateway applies scoped
     await authorize(1);
     // This is an effect assertion. GS06 separately measures the real deadline.
     const redirected = await context.newPage();
-    await redirected.clock.install();
-    await redirected.clock.pauseAt(new Date());
+    const browserTime = Date.now();
+    await redirected.clock.install({time: browserTime - 60_000});
+    await redirected.clock.pauseAt(browserTime);
     await redirected.goto(copy + '/lp');
     await redirected.waitForURL(original + '/segura');
     await redirected.close();

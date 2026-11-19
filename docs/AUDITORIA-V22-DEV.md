@@ -11,6 +11,7 @@ Base da auditoria `63a958f`. As telas React do admin privado na porta 3002 foram
 | Compatibilidade financeira | A primeira implementação poderia quebrar uma aba já aberta com o JavaScript anterior ao retornar estimativas com numerador nulo. | O relatório mantém `estimate_projects` com a forma anterior e acrescenta `estimate_assumptions` em campo próprio. A revisão independente conferiu o delta. |
 | SMTP | O painel mostrava configuração e preferência, sem um teste explícito de conexão. A primeira implementação também poderia confundir TLS com autenticação em um servidor sem `AUTH`. | **Configurações → Notificações → Testar conexão SMTP** verifica TLS e credenciais com o transporte privado correspondente à versão salva. A API exige sessão e CSRF, limita a frequência e verifica somente o destino definido pelo operador. O teste termina antes do envio. No ensaio, o React confirmou a conexão autenticada, o receptor TLS sem `AUTH` foi recusado e o worker demonstrou falha, nova tentativa e aceite de mensagens no receptor de teste. |
 | Saúde e modo do gateway | A sonda podia indicar que o gateway respondia enquanto o perfil era apenas de observação. Isso dificultava entender por que ele não aplicava uma política. | A página Saúde e operações exibe o perfil confirmado em `/healthz`. O ensaio usa o modo operacional com aprovação e autorização específicas por LP e comprova suspensão. |
+| Estabilidade do ensaio original/cópia | A execução agrupada podia tentar pausar o relógio do Chromium em um instante já ultrapassado pelo relógio simulado. | O teste instala o relógio com uma referência anterior e pausa no instante capturado. A mudança está restrita ao ensaio. |
 
 ## Fluxo desde o cadastro
 
@@ -24,7 +25,7 @@ Base da auditoria `63a958f`. As telas React do admin privado na porta 3002 foram
 
 Os logs e as capturas ficam em `test-results/auditoria-v22/`. As pastas `validado-painel` e `validado-jornada` contêm capturas do Chromium da execução com banco descartável. O build da porta 3002 é identificável pelo SHA exibido no painel.
 
-A sessão independente `revisao` verificou o delta de `apps` e `tests` com SHA-256 `859d5ea80bf3535137a65b4842861051a492699d5339463101cee189463ae58d`. O achado sobre falso positivo na prova SMTP foi corrigido exigindo o erro de autenticação `EAUTH`.
+A sessão independente `revisao` verificou o delta de `apps` e `tests` com SHA-256 `5a83bbdae50c3babe7f16dc64358305d58ff37c32bc98db4a6c109d562155a9e`. O achado sobre falso positivo na prova SMTP foi corrigido exigindo o erro de autenticação `EAUTH`.
 
 Os ensaios de topologia HTTPS/NPM em Docker tiveram falhas na resolução de `gateway.test`, e o ensaio do verificador isolado retornou `CHECK_FAILED` na base. Esses resultados ficam nos logs `docker-namespace.log` e `fixtures-docker.log`. A CI do PR #82 para o delta depende de acesso de escrita no GitHub.
 
