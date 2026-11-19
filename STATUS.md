@@ -1,5 +1,10 @@
 # STATUS — AntiClone Personal
 
+## Sessão do admin privado Dev
+- O painel da porta 3002 usa sessão de navegador sem prazo fixo. Senha e TOTP continuam exigidos na entrada.
+- Logout, novo login e reinício revogam a sessão. O prazo padrão e o token bearer mantêm 15 minutos.
+- Quatro testes de autenticação passaram, incluindo Chromium com oito horas simuladas. Revisão independente `revisao_sessao_dev` favorável ao delta funcional.
+
 ## Recuperação integrada Dev — PR #82
 - React V2.2 no admin privado com proteção por LP, captura de CTA local, evidência autorizada, atividade diária, migração de checkout e vínculos por projeto.
 - Jornadas em PostgreSQL 16/Chromium, gateway privado com LP original e cópia, worker SMTP TLS sintético e backup/restore isolado. Evidências em test-results/recuperacao-integrada/.

@@ -25,7 +25,7 @@ const password = 'frontend lab only';
 const endpoint = 'https://runtime.frontend.test';
 const action = (page: Page, name: string) => page.getByRole('button', {name, exact: true});
 
-async function fixture(test: TestContext, browserArgs?: string[]) {
+async function fixture(test: TestContext, browserArgs?: string[], webSessionWithoutTimeout = false) {
   assert.ok(process.env.TEST_DATABASE_URL);
   const root = new Pool({connectionString: process.env.TEST_DATABASE_URL});
   const schema = 'frontend_' + randomUUID().replaceAll('-', '');
@@ -59,7 +59,7 @@ async function fixture(test: TestContext, browserArgs?: string[]) {
   const totp = new TOTP({secret: Secret.fromBase32(secret)});
   const salt = Buffer.alloc(16, 43);
   const record = 'scrypt$' + salt.toString('hex') + '$' + scryptSync(password, salt, 64).toString('hex');
-  const server = createAdminServer(record, secret, db, () => clock).listen(0, '127.0.0.1');
+  const server = createAdminServer(record, secret, db, () => clock, {webSessionWithoutTimeout}).listen(0, '127.0.0.1');
   await once(server, 'listening');
   test.after(() => new Promise<void>((resolve, reject) => {
     server.close(error => error ? reject(error) : resolve());
@@ -523,6 +523,38 @@ test('new and legacy consoles share the same MFA, session lifetime and private r
   await legacy.reload();
   await legacy.getByLabel('Código TOTP').waitFor();
   assert.equal((await context.cookies()).some(cookie => cookie.name === 'admin_session'), false);
+});
+
+test('private Dev web session remains active after 15 minutes and still supports revocation', {timeout: 60_000}, async t => {
+  const lab = await fixture(t, undefined, true);
+  const context = await lab.browser.newContext();
+  const page = await context.newPage();
+  await page.goto(lab.origin + ui + '/visao-geral');
+  assert.equal(await login(page, lab.code()), 204);
+  const overview = page.getByRole('heading', {name: 'Visão Geral', exact: true});
+  await overview.waitFor();
+  const session = (await context.cookies()).find(cookie => cookie.name === 'admin_session');
+  assert.ok(session?.httpOnly);
+  assert.equal(session.sameSite, 'Strict');
+  assert.equal(session.expires, -1, 'browser-session cookie without a fixed Max-Age');
+
+  lab.advance(8 * 60 * 60_000);
+  await page.reload();
+  await overview.waitFor();
+  await action(page, 'Sair da sessão').click();
+  await action(page, 'Sair').click();
+  await page.getByRole('heading', {name: 'Entre no seu espaço'}).waitFor();
+  assert.equal((await fetch(lab.origin + '/admin/ui/projects', {headers: {
+    'sec-fetch-site': 'same-origin', cookie: 'admin_session=' + session.value,
+  }})).status, 401);
+
+  const bearer = await fetch(lab.origin + '/admin/login', {method: 'POST',
+    headers: {'content-type': 'application/json'}, body: JSON.stringify({password, code: lab.code()})});
+  assert.equal(bearer.status, 200);
+  const {token, expiresIn} = await bearer.json();
+  assert.equal(expiresIn, 900);
+  lab.advance(900_000);
+  assert.equal((await fetch(lab.origin + '/admin/session', {headers: {authorization: 'Bearer ' + token}})).status, 401);
 });
 
 for (const width of [1440, 390]) {
