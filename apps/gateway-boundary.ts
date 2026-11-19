@@ -18,13 +18,16 @@ export function gatewayBoundary(env: NodeJS.ProcessEnv) {
     if (!published) return true;
     const peer = req.socket.remoteAddress;
     const forwarded = req.headers['x-forwarded-for'];
-    const role=npm?npmPeer(req.socket as TLSSocket,env):undefined;
+    const tls=req.socket as TLSSocket;
+    const role=npm?npmPeer(tls,env):undefined;
     if(npm && (!role || role==='monitor' && (req.method!=='GET' || req.url!=='/healthz'))) {res.writeHead(403).end();return false;}
+    if (npm && env.NPM_PROXY_PEER_ADDRESS &&
+        peer!==(role==='monitor'?env.NPM_LISTEN_ADDRESS:env.NPM_PROXY_PEER_ADDRESS)) {res.writeHead(403).end();return false;}
     const sensitive=['host','x-forwarded-proto','x-forwarded-for','forwarded','x-forwarded-host','x-real-ip','cf-connecting-ip'];
     const names=req.rawHeaders.filter((_,i)=>i%2===0).map(name=>name.toLowerCase());
     const duplicate=npm && sensitive.some(name=>names.filter(value=>value===name).length>1);
     if(npm && (names.length>40 || ['forwarded','x-forwarded-host','x-real-ip','cf-connecting-ip'].some(name=>names.includes(name)))) {res.writeHead(400).end();return false;}
-    if ((!npm && !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(peer ?? '')) || duplicate || req.headers.host !== host || req.headers['x-forwarded-proto'] !== 'https' || typeof forwarded !== 'string' || !isIP(forwarded) || req.headers.forwarded !== undefined || req.headers['x-forwarded-host'] !== undefined || npm && (req.headers['x-real-ip']!==undefined || req.headers['cf-connecting-ip']!==undefined)) {
+    if ((!npm && !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(peer ?? '')) || duplicate || req.headers.host !== host || (npm && tls.servername!==host) || req.headers['x-forwarded-proto'] !== 'https' || typeof forwarded !== 'string' || !isIP(forwarded) || req.headers.forwarded !== undefined || req.headers['x-forwarded-host'] !== undefined || npm && (req.headers['x-real-ip']!==undefined || req.headers['cf-connecting-ip']!==undefined)) {
       res.writeHead(400).end(); return false;
     }
     // Health probes have a distinct pinned credential and cannot consume visitor budgets.

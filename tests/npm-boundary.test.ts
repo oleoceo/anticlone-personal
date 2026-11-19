@@ -7,7 +7,7 @@ import {syntheticTls} from './npm-fixture.js';
 import {once} from 'node:events';
 import {request} from 'node:https';
 import {gatewayBoundary} from '../apps/gateway-boundary.js';
-import {npmServer} from '../apps/npm-transport.js';
+import {npmListenAddress,npmServer} from '../apps/npm-transport.js';
 
 test('NPM TLS authenticates certificate pins, rejects ambiguous claims and bounds budgets',{timeout:30000},async()=>{
   const dir=await mkdtemp(join(tmpdir(),'npm-boundary-'));
@@ -16,20 +16,28 @@ test('NPM TLS authenticates certificate pins, rejects ambiguous claims and bound
   const {writeFile}=await import('node:fs/promises');
   await writeFile(join(dir,'clients.crt'),await readFile(join(dir,'proxy.crt'),'utf8')+await readFile(join(dir,'monitor.crt'),'utf8')+await readFile(join(dir,'stranger.crt'),'utf8'));
   env.NPM_CLIENT_CA_FILE=join(dir,'clients.crt');
-  const boundary=gatewayBoundary(env);
-  const server=npmServer(env,(req,res)=>{if(boundary(req,res))res.writeHead(204).end();});
+  const local={...env,NPM_LISTEN_ADDRESS:'127.0.0.1',NPM_PROXY_PEER_ADDRESS:'127.0.0.1'};
+  const boundary=gatewayBoundary(local);
+  const server=npmServer(local,(req,res)=>{if(boundary(req,res))res.writeHead(204).end();});
   server.maxHeadersCount=40;server.listen(0,'127.0.0.1');await once(server,'listening');
   const addr=server.address();assert.ok(addr&&typeof addr!=='string');
   const ca=await readFile(join(dir,'server.crt'));
   const headers={host:'gateway.test','x-forwarded-proto':'https','x-forwarded-for':'192.0.2.1'};
-  const send=async(name:string|null='proxy',patch:Record<string,string|string[]|undefined>={},path='/runtime.js')=>{
+  const send=async(name:string|null='proxy',patch:Record<string,string|string[]|undefined>={},path='/runtime.js',servername='gateway.test',localAddress='127.0.0.1')=>{
     const identity=name?{cert:await readFile(join(dir,name+'.crt')),key:await readFile(join(dir,name+'.key'))}:{};
-    return new Promise<number>((resolve,reject)=>{const req=request({hostname:'127.0.0.1',port:addr.port,servername:'gateway.test',ca,...identity,path,headers:{...headers,...patch}},res=>{res.resume();res.on('end',()=>resolve(res.statusCode!));});req.on('error',reject);req.end();});
+    return new Promise<number>((resolve,reject)=>{const req=request({hostname:'127.0.0.1',port:addr.port,servername,localAddress,ca,checkServerIdentity:()=>undefined,...identity,path,headers:{...headers,...patch}},res=>{res.resume();res.on('end',()=>resolve(res.statusCode!));});req.on('error',reject);req.end();});
   };
   try{
     assert.throws(()=>gatewayBoundary({...env,NPM_MONITOR_FINGERPRINT:env.NPM_PROXY_FINGERPRINT}));
+    for(const address of ['0.0.0.0','::','172.32.0.1','8.8.8.8','localhost']) {
+      assert.throws(()=>npmListenAddress({...local,NPM_LISTEN_ADDRESS:address}),/invalid NPM private listener/);
+    }
+    assert.equal(npmListenAddress({NPM_LISTEN_ADDRESS:'172.20.0.1',NPM_PROXY_PEER_ADDRESS:'172.20.0.2'}),'172.20.0.1');
+    await assert.rejects(send('proxy',{},'/healthz','gateway.test','127.0.0.2'));
     await assert.rejects(send(null));
     assert.equal(await send('stranger'),403);
+    assert.equal(await send('proxy',{},'/healthz','wrong.test'),400);
+    assert.equal(await send('proxy',{},'/healthz',''),400);
     assert.equal(await send('monitor'),403);assert.equal(await send('monitor',{},'/healthz'),204);
     for(const patch of [{host:'evil.test'},{'x-forwarded-proto':'http'},{'x-forwarded-for':'192.0.2.1, 192.0.2.2'},{'x-forwarded-for':''},{forwarded:'for=192.0.2.1'},{'x-real-ip':'192.0.2.1'},{'cf-connecting-ip':'192.0.2.1'},{'x-forwarded-host':'gateway.test'},{'x-forwarded-for':['192.0.2.1','192.0.2.2']},{...Object.fromEntries(Array.from({length:41},(_,i)=>['padding'+i,'x'])),forwarded:'for=evil'}])assert.ok([400,431].includes(await send('proxy',patch)));
     for(let i=0;i<120;i++)assert.equal(await send(),204);

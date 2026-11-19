@@ -1,5 +1,11 @@
 # STATUS — AntiClone Personal
 
+## Gateway público de teste — Dev (F33)
+- Unidade Dev independente em `127.0.0.1:13003`, OPERATIONAL/NPM_MTLS, mesmo PostgreSQL do admin. Smoke mTLS/Host/pins/admin passou; zero autorizações operacionais habilitadas no ensaio.
+- Lint, typecheck, build, npm-boundary, dois cenários scoped Chromium/PostgreSQL e prova sintética Nginx do gate passaram. E2E operational-authorization direto parou no timeout de navegação; fixture NPM host-network indisponível no Docker Rootless.
+- **BLOCKED — NPM_TRAFFIC_GATE** para o NPM instalado. O socket do Docker compartilhado recusou acesso ao usuário Dev. Clone real, bind na bridge e publicação dependem do procedimento de leoceo.
+- Revisão independente `/root/gateway_review` sobre a base `740a0c5`. Procedimento, arquivos e rollback em [Gateway público Dev](docs/DEV-PUBLIC-GATEWAY.md).
+
 ## Pool de telemetria
 - Integrações cadastra origens HTTPS próprias. Seleção por revisão explícita em Instalação.
 - Exige autorização privada e ingresso provisionado. A desativação preserva aliases existentes.
