@@ -70,6 +70,7 @@ code { font-family: Consolas, "Courier New", monospace; }
 }
 .brand strong { line-height: 1.2; }
 .brand small { display: block; font-size: .75rem; font-weight: 400; margin-top: .15rem; }
+.brand .build-version { font-size: .6875rem; font-variant-numeric: tabular-nums; }
 
 .sidebar {
   position: fixed; inset: 0 auto 0 0;

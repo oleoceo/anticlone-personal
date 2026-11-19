@@ -23,7 +23,12 @@ export function useQuery<T>(key: string, load: (signal: AbortSignal) => Promise<
 }
 
 export function Brand() {
-  return <div className="brand"><span aria-hidden="true">A</span><strong>AntiClone <small>Personal</small></strong></div>;
+  const commit: string | undefined = import.meta.env.VITE_BUILD_COMMIT;
+  const modified = import.meta.env.VITE_BUILD_MODIFIED === true;
+  const version = commit ? `Build ${commit.slice(0, 7)}${modified ? ' · local' : ''}` : 'Build sem SHA';
+  return <div className="brand"><span aria-hidden="true">A</span><strong>AntiClone <small>Personal</small>
+    <small className="build-version" title={commit}>{version}</small>
+  </strong></div>;
 }
 
 export function Heading({title, description, actions}: {title: string; description?: string; actions?: ReactNode}) {
