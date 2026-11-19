@@ -1,5 +1,11 @@
 # STATUS — AntiClone Personal
 
+## Auditoria V2.2 no Dev — PR #82
+- Visão Geral com gráfico e tabela sobre a mesma série UTC, origem declarada e estimativa detalhada por projeto.
+- Configurações testa TLS e autenticação SMTP; Saúde identifica o perfil retornado pelo gateway.
+- Revisão independente `revisao` aprovou o delta funcional após exigir erro `EAUTH` na prova sem AUTH.
+- Resultados, evidências e limites de homologação em [Auditoria operacional V2.2](docs/AUDITORIA-V22-DEV.md).
+
 ## Sessão do admin privado Dev
 - O painel da porta 3002 usa sessão de navegador sem prazo fixo. Senha e TOTP continuam exigidos na entrada.
 - Logout, novo login e reinício revogam a sessão. O prazo padrão e o token bearer mantêm 15 minutos.

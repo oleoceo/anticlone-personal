@@ -7,7 +7,7 @@ import {Failure, Loading, useQuery} from './ui';
 
 type Environment = {
   database: 'READY' | 'UNAVAILABLE';
-  gateway: {state: string; checkedAt?: string};
+  gateway: {state: string; mode?: string; checkedAt?: string};
   publicationIssues: InstallationIssue[] | null;
   verifierIssue: string | null;
 };
@@ -25,6 +25,10 @@ const gatewayStates: Record<string, [string, string]> = {
   UNEXPECTED_RESPONSE: ['Resposta local inesperada', 'Confira se a porta e o perfil do gateway correspondem à sonda HTTP local.'],
   NOT_CONFIGURED: ['Gateway local sem sonda', 'Configure ADMIN_GATEWAY_HEALTH_PORT para o perfil HTTP direto. A cobertura pública permanece sem medição.'],
   INVALID_CONFIGURATION: ['Porta da sonda inválida', 'Informe uma porta TCP válida no ambiente privado do admin.'],
+};
+const gatewayModes: Record<string, string> = {
+  LAB: 'Laboratório', PILOT_OBSERVE: 'Somente observação',
+  OPERATIONAL: 'Operacional · ações exigem autorização por LP',
 };
 
 const events: Record<string,string> = {OPENED:'Episódio aberto', ATTEMPT:'Tentativa de envio', FAILED_UNCERTAIN:'Falha com resultado incerto',
@@ -49,6 +53,7 @@ export function HealthOperations({api, projects, setGuard}: {api: AdminApi; proj
             <p>{status.database==='READY' ? 'Respondendo' : 'Consulta indisponível. Confira a conexão privada do admin.'}</p>
           </section>
           <section className="operation-card"><h3>Gateway</h3><p><strong>{gateway?.[0]}</strong></p><p className="muted">{gateway?.[1]}</p>
+            {status.gateway.mode && <p>Perfil do gateway · {gatewayModes[status.gateway.mode]}</p>}
             {status.gateway.checkedAt && <small>{new Date(status.gateway.checkedAt).toLocaleString('pt-BR')}</small>}
           </section>
           <section className="operation-card"><h3>Publicação de endereços</h3>

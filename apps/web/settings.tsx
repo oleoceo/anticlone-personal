@@ -2,7 +2,7 @@ import {useState} from 'react';
 import {Link, useSearchParams} from 'react-router-dom';
 import {AdminApi, type Project} from './admin-api';
 import {CommerceSettings} from './commerce-settings';
-import {DetailsData, formData, InputError, useOperation, value, type SetGuard} from './operations';
+import {DetailsData, formData, formatDate, InputError, useOperation, value, type SetGuard} from './operations';
 import {Breadcrumbs, settingsPath, useContextNavigation} from './navigation';
 import {Failure, Heading, Loading, useQuery} from './ui';
 import {HealthOperations} from './health';
@@ -15,7 +15,7 @@ const smtpState: Record<string, string> = {incomplete: 'Configuração incomplet
 const transportState: Record<string, string> = {PRIVATE_ENVIRONMENT_NOT_CONFIGURED: 'Ambiente privado sem SMTP configurado',
   PRIVATE_ENVIRONMENT_MISMATCH: 'A configuração salva diverge do ambiente privado',
   PRIVATE_ENVIRONMENT_INVALID: 'Configuração do ambiente privado inválida',
-  AUTHORIZED_CONFIGURATION: 'Configuração compatível com o transporte privado', DISABLED: 'Solicitação de habilitação desativada'};
+  AUTHORIZED_CONFIGURATION: 'Configuração compatível com o transporte privado', DISABLED: 'Transporte privado configurado · alertas desativados'};
 const reviewLabels = {RELEASE: 'Liberar para nova tentativa', CANCEL: 'Cancelar futuras tentativas', ACK_UNKNOWN: 'Registrar resultado desconhecido'} as const;
 
 export function Settings({api, projects, section, setGuard}: {api: AdminApi; projects: Project[];
@@ -43,6 +43,15 @@ function NotificationSettings({api, setGuard}: {api: AdminApi; setGuard: SetGuar
   const operation = useOperation(setGuard);
   const config = query.data;
   const [edited, setEdited] = useState(false);
+  function testConnection() {
+    if (!config) return;
+    operation.review('Testar conexão SMTP', <p>O servidor vai verificar TLS e autenticação da configuração v{config.version}. O teste de conexão termina antes do envio de mensagens.</p>, async () => {
+      const result = await api.request<{state: string; checked_at?: string}>('smtp-test', {version: config.version});
+      if (result.state === 'VERIFIED') return 'TLS e autenticação SMTP verificados · v' + config.version + ' · ' + formatDate(result.checked_at);
+      if (result.state === 'WAIT') throw new InputError('Aguarde um minuto entre testes de conexão SMTP.');
+      throw new InputError(transportState[result.state] ?? 'A conexão SMTP falhou. Confira o endereço, TLS e as credenciais no ambiente privado.');
+    });
+  }
   function preference(enabled: boolean) {
     if (!config) return;
     operation.review(enabled ? 'Solicitar habilitação de alertas' : 'Desativar solicitação de alertas',
@@ -91,6 +100,8 @@ function NotificationSettings({api, setGuard}: {api: AdminApi; setGuard: SetGuar
         <button className="primary" type="submit" disabled={operation.busy || query.pending}>Revisar configuração SMTP</button>
       </form>
       <div className="action-links">
+        <button type="button" disabled={query.pending || operation.busy || edited ||
+          !['AUTHORIZED_CONFIGURATION', 'DISABLED'].includes(config.clone_transport)} onClick={testConnection}>Testar conexão SMTP</button>
         {!config.preference_requested ? <button type="button" disabled={query.pending || operation.busy ||
           edited || config.status === 'incomplete'} onClick={() => preference(true)}>Solicitar habilitação</button> :
           <button type="button" disabled={query.pending || operation.busy || edited} onClick={() => preference(false)}>Desativar solicitação</button>}

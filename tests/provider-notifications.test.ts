@@ -17,13 +17,20 @@ import {enableInstallation} from '../apps/installation.js';
 import {configureHealth} from '../apps/health-alerts.js';
 import {managePages} from '../apps/protected-pages.js';
 import {notificationAdmin,NotificationReviewConflict} from '../apps/notification-reviews.js';
-import {createAdminServer} from '../apps/admin-auth.js';
 import {smtpProvider,sendProviderNotice} from '../apps/smtp-provider.js';
 import {observe} from '../apps/detection.js';
 import {localGatewayMonitor} from '../apps/local-gateway-monitor.js';
 
 async function until(check:()=>Promise<boolean>,label:string){const end=Date.now()+18000;while(Date.now()<end){if(await check())return;await new Promise(r=>setTimeout(r,75));}throw Error('timeout '+label);}
 async function stop(child:ChildProcess|undefined,kill=false){if(!child||child.exitCode!==null||child.signalCode!==null)return;const timer=setTimeout(()=>child.kill('SIGKILL'),4000);try{child.kill(kill?'SIGKILL':'SIGTERM');await once(child,'exit');}finally{clearTimeout(timer);}}
+async function freePort(): Promise<number> {
+  const server = createServer().listen(0,'127.0.0.1');
+  await once(server,'listening');
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  await new Promise<void>(resolve=>server.close(()=>resolve()));
+  return address.port;
+}
 
 test('CTA/health provider TLS + independent worker + audited backlog in Chromium, durable retry and unknown owner',{timeout:180000},async()=>{
   assert.ok(process.env.TEST_DATABASE_URL);
@@ -37,12 +44,12 @@ test('CTA/health provider TLS + independent worker + audited backlog in Chromium
     onAuth(auth,_session,callback){if(rejectAuth||auth.username!=='synthetic-user'||auth.password!=='synthetic-private-password'){callback(Error('synthetic rejection'));return;}callback(null,{user:auth.username});},
     onData(stream,_session,callback){let body='';stream.on('data',chunk=>body+=String(chunk));stream.on('end',()=>{if(!stall){accepted.push(body);callback();}});}
   });smtp.on('error',()=>{});smtp.server.on('connection',socket=>{sockets.add(socket);socket.once('close',()=>sockets.delete(socket));});await new Promise<void>(resolve=>smtp.listen(0,'127.0.0.1',resolve));const smtpAddress=smtp.server.address();assert.ok(smtpAddress&&typeof smtpAddress!=='string');
-  const reserve=createServer().listen(0,'127.0.0.1');await once(reserve,'listening');const reserved=reserve.address();assert.ok(reserved&&typeof reserved!=='string');const port=reserved.port;await new Promise<void>(r=>reserve.close(()=>r()));
+  const port=await freePort();
   const site=createServer((_req,res)=>res.writeHead(200,{'content-type':'text/html'}).end(`<h1>Owned original/copy</h1><a href="/native">Native checkout</a><script async src="http://127.0.0.1:${port}/runtime.js"></script>`)).listen(0,'127.0.0.1');await once(site,'listening');const address=site.address();assert.ok(address&&typeof address!=='string');
   const original='http://127.0.0.1:'+address.port,copy='http://localhost:'+address.port;
   const privateEnv={SMTP_PROVIDER:'smtp',SMTP_HOST:'localhost',SMTP_PORT:String(smtpAddress.port),SMTP_TLS:'implicit',SMTP_SENDER:'sender@example.test',SMTP_RECIPIENT:'owner@example.test',SMTP_USER:'synthetic-user',SMTP_PASSWORD:'synthetic-private-password'};
   const env={...process.env,...privateEnv,NODE_EXTRA_CA_CERTS:join(dir,'cert'),DATABASE_URL:process.env.TEST_DATABASE_URL,PGOPTIONS:`-c search_path=${schema}`,PROJECT_ID:'one',PORT:String(port),ALLOWED_ORIGIN:original};
-  let gateway:ChildProcess|undefined,worker:ChildProcess|undefined,browser:Awaited<ReturnType<typeof chromium.launch>>|undefined,admin:ReturnType<typeof createServer>|undefined;
+  let gateway:ChildProcess|undefined,worker:ChildProcess|undefined,browser:Awaited<ReturnType<typeof chromium.launch>>|undefined,admin:ChildProcess|undefined;
   const launch=(file:string,extra:Record<string,string>={})=>{const child=spawn(process.execPath,['dist/apps/'+file],{env:{...env,...extra},stdio:['ignore','ignore','pipe']});child.stderr!.on('data',chunk=>logs+=String(chunk));return child;};
   const startGateway=async()=>{gateway=launch('server.js');await until(async()=>{try{return(await fetch('http://127.0.0.1:'+port+'/healthz')).ok;}catch{return false;}},'real gateway ready');};
   const startWorker=()=>worker=launch('cta-delivery-worker.js',{NOTIFICATION_WORKER_MODE:'PROVIDER',MONITOR_LOCAL_GATEWAY:'1',MONITOR_GATEWAY_PORT:String(port)});
@@ -75,11 +82,26 @@ test('CTA/health provider TLS + independent worker + audited backlog in Chromium
     const held=await notificationAdmin(db,{action:'inspect',project:'one'});assert.equal(held.items.length,2);assert.equal((await notificationAdmin(db,{action:'inspect',project:'two'})).items.length,0);
     mark('held backlog');
     const salt='0123456789abcdef0123456789abcdef',secret='GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
-    admin=createAdminServer(`scrypt$${salt}$${scryptSync('review password',Buffer.from(salt,'hex'),64).toString('hex')}`,secret,db).listen(0,'127.0.0.1');await once(admin,'listening');const adminAddress=admin.address();assert.ok(adminAddress&&typeof adminAddress!=='string');const adminBase='http://127.0.0.1:'+adminAddress.port;
-    await page.goto(adminBase+'/admin/ui/');await page.getByLabel('Senha administrativa').fill('review password');await page.getByLabel('Código TOTP').fill(new TOTP({secret:Secret.fromBase32(secret)}).generate());
+    const adminPort=await freePort(), adminBase='http://127.0.0.1:'+adminPort;
+    admin=launch('admin-server.js',{ADMIN_PORT:String(adminPort),ADMIN_TOTP_SECRET:secret,
+      ADMIN_PASSWORD_RECORD:`scrypt$${salt}$${scryptSync('review password',Buffer.from(salt,'hex'),64).toString('hex')}`});
+    await until(async()=>{try{return (await fetch(adminBase+'/admin/ui/novo/configuracoes')).ok;}catch{return false;}},'private admin');
+    await page.goto(adminBase+'/admin/ui/novo/configuracoes');await page.getByLabel('Senha administrativa').fill('review password');
+    await page.getByLabel('Código do autenticador').fill(new TOTP({secret:Secret.fromBase32(secret)}).generate());
     const logged=page.waitForResponse(r=>r.url().endsWith('/admin/ui/login'));await page.getByRole('button',{name:'Entrar',exact:true}).click();assert.equal((await logged).status(),204);
     assert.equal(await page.evaluate(async()=> (await fetch('/admin/ui/notifications',{method:'POST',headers:{'content-type':'application/json'},body:'{"action":"inspect","project":"one"}'})).status),403);
     mark('MFA CSRF');
+    rejectAuth=false;
+    await page.getByRole('button',{name:'Testar conexão SMTP',exact:true}).click();
+    await page.getByRole('button',{name:'Confirmar',exact:true}).click();
+    await page.getByText('TLS e autenticação SMTP verificados', {exact:false}).waitFor();
+    assert.equal(accepted.length,0,'a conexão real foi verificada sem disparar mensagem');
+    await page.getByRole('button',{name:'Testar conexão SMTP',exact:true}).click();
+    await page.getByRole('button',{name:'Confirmar',exact:true}).click();
+    await page.getByText('Aguarde um minuto entre testes de conexão SMTP.',{exact:true}).waitFor();
+    rejectAuth=true;
+    mark('React verifies SMTP TLS/auth without sending');
+    await page.goto(adminBase+'/admin/ui/');
     const form=page.locator('#backlog-form');await form.locator('[name=project]').fill('one');
     const submit=async(action:string)=>{const response=page.waitForResponse(r=>r.url().endsWith('/admin/ui/notifications'));await form.locator('button[value="'+action+'"]').click();return response;};
     assert.equal((await submit('inspect')).status(),200);
@@ -115,7 +137,7 @@ test('CTA/health provider TLS + independent worker + audited backlog in Chromium
     assert.ok(!logs.includes(privateEnv.SMTP_PASSWORD)&&!logs.includes(privateEnv.SMTP_USER),'provider failures never log credentials');
     process.stdout.write('PROVIDER_NOTIFICATIONS '+JSON.stringify({smtp_acceptances:accepted.length,cta:result.attempts.filter(r=>r.queue==='CTA'),health:result.attempts.filter(r=>r.queue==='HEALTH'),reviews:result.history.map(r=>r.decision)})+'\n');
   }catch(error){process.stdout.write('PROVIDER_FAILURE '+phase+' '+String(error)+'\n');throw error;}
-  finally{await stop(worker);await stop(gateway);if(browser)await browser.close();if(admin){admin.closeAllConnections();await new Promise<void>(r=>admin!.close(()=>r()));}site.closeAllConnections();await new Promise<void>(r=>site.close(()=>r()));for(const socket of sockets)socket.destroy();await new Promise<void>(r=>smtp.close(()=>r()));await db.end();await root.query(`DROP SCHEMA ${schema} CASCADE`);await root.end();await rm(dir,{recursive:true,force:true});}
+  finally{await stop(worker);await stop(gateway);if(browser)await browser.close();await stop(admin);site.closeAllConnections();await new Promise<void>(r=>site.close(()=>r()));for(const socket of sockets)socket.destroy();await new Promise<void>(r=>smtp.close(()=>r()));await db.end();await root.query(`DROP SCHEMA ${schema} CASCADE`);await root.end();await rm(dir,{recursive:true,force:true});}
 });
 
 test('provider worker isolates failing queues/projects, respects paused monitor generations and stops new admissions',{timeout:90000},async()=>{

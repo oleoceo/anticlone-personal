@@ -1,9 +1,10 @@
 import type { Pool } from 'pg';
-import { smtpProvider } from './smtp-provider.js';
+import { smtpProvider, verifyProviderConnection } from './smtp-provider.js';
 
 type Settings = {provider: string|null; host: string|null; port: number|null; tls_mode: string|null; sender: string|null; recipient: string|null};
 const names = ['provider','host','port','tls_mode','sender','recipient'] as const;
 export class Conflict extends Error {}
+const nextSmtpCheck = new WeakMap<Pool, number>();
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('invalid input');
   return value as Record<string, unknown>;
@@ -39,6 +40,29 @@ export async function getNotificationSettings(db:Pool) {
   const result=await db.query('SELECT * FROM notification_settings WHERE singleton=true');
   if (!result.rowCount) throw Error('settings missing');
   return present(result.rows[0]);
+}
+
+export async function testNotificationSmtp(db: Pool, input: unknown) {
+  const data = object(input);
+  if (Object.keys(data).join(',') !== 'version') throw new TypeError('invalid fields');
+  const expected = version(data.version);
+  const current = await getNotificationSettings(db);
+  if (current.version !== expected) throw new Conflict();
+  if (!['AUTHORIZED_CONFIGURATION', 'DISABLED'].includes(current.clone_transport)) {
+    return {state: current.clone_transport};
+  }
+
+  const now = Date.now();
+  if ((nextSmtpCheck.get(db) ?? 0) > now) return {state: 'WAIT'};
+  const config = smtpProvider(process.env);
+  if (!config) return {state: 'PRIVATE_ENVIRONMENT_NOT_CONFIGURED'};
+  nextSmtpCheck.set(db, now + 60_000);
+  try {
+    await verifyProviderConnection(config);
+    return {state: 'VERIFIED', checked_at: new Date().toISOString()};
+  } catch {
+    return {state: 'FAILED'};
+  }
 }
 export async function saveNotificationSettings(db:Pool, input:unknown) {
   const data=validate(input);

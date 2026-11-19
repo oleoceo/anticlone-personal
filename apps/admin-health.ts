@@ -7,7 +7,7 @@ import { installationPrerequisites } from './runtime-distribution.js';
 async function localGatewayHealth(value?: string) {
   if (!value) return {state:'NOT_CONFIGURED'};
   if (!/^\d{1,5}$/.test(value) || Number(value)<1 || Number(value)>65535) return {state:'INVALID_CONFIGURATION'};
-  const state=await new Promise<string>(resolve=>{
+  const status=await new Promise<{state:string; mode?:string}>(resolve=>{
     const req=request({hostname:'127.0.0.1',port:Number(value),path:'/healthz',agent:false,signal:AbortSignal.timeout(1500)},res=>{
       let body='';
       res.setEncoding('utf8');
@@ -16,19 +16,19 @@ async function localGatewayHealth(value?: string) {
         if(body.length>1024) req.destroy(new Error('probe budget'));
       });
       res.on('end',()=>{
-        if(res.statusCode===503) { resolve('BACKEND_UNAVAILABLE'); return; }
+        if(res.statusCode===503) { resolve({state:'BACKEND_UNAVAILABLE'}); return; }
         try {
           const result=JSON.parse(body);
           const gateway=res.statusCode===200 && result?.status==='ready' && ['LAB','PILOT_OBSERVE','OPERATIONAL'].includes(result.mode);
-          resolve(gateway?'READY':'UNEXPECTED_RESPONSE');
-        } catch { resolve('UNEXPECTED_RESPONSE'); }
+          resolve(gateway?{state:'READY',mode:result.mode}:{state:'UNEXPECTED_RESPONSE'});
+        } catch { resolve({state:'UNEXPECTED_RESPONSE'}); }
       });
-      res.on('error',()=>resolve('UNREACHABLE'));
+      res.on('error',()=>resolve({state:'UNREACHABLE'}));
     });
-    req.on('error',()=>resolve('UNREACHABLE'));
+    req.on('error',()=>resolve({state:'UNREACHABLE'}));
     req.end();
   });
-  return {state,checkedAt:new Date().toISOString()};
+  return {...status,checkedAt:new Date().toISOString()};
 }
 
 export async function adminHealth(db: Pool, body: unknown, env=process.env) {

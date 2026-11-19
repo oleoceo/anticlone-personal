@@ -28,9 +28,19 @@ export async function sendProviderAlert(config:SmtpProvider, id:string, host:str
 
 export async function sendProviderNotice(config:SmtpProvider,id:string,subject:string,text:string):Promise<void>{
   if(!/^(?:(?:cta|health)-)?[1-9][0-9]{0,19}$/.test(id)||!subject||subject.length>120||/[\r\n\0]/.test(subject)||text.length>4096)throw new TypeError('invalid notification');
+  const result=await withProviderTransport(config,transport=>transport.sendMail({from:config.sender,to:config.recipient,subject,text,
+    messageId:`<anticlone-${id}@${config.sender.split('@')[1]}>`}));
+  if (result.accepted.length!==1 || String(result.accepted[0]).toLowerCase()!==config.recipient.toLowerCase() || result.rejected.length) throw Error('SMTP recipient not accepted');
+}
+
+export async function verifyProviderConnection(config: SmtpProvider): Promise<void> {
+  await withProviderTransport(config, transport => transport.verify(), true);
+}
+
+async function withProviderTransport<T>(config: SmtpProvider, operation: (transport: ReturnType<typeof nodemailer.createTransport>) => Promise<T>, forceAuth = false): Promise<T> {
   let socket:Socket|undefined;
   const transport=nodemailer.createTransport({host:config.host,port:config.port,secure:config.tls_mode==='implicit',requireTLS:true,
-    auth:{user:config.user,pass:config.password},tls:{minVersion:'TLSv1.2',rejectUnauthorized:true},
+    auth:{user:config.user,pass:config.password},forceAuth,tls:{minVersion:'TLSv1.2',rejectUnauthorized:true},
     connectionTimeout:3000,greetingTimeout:3000,socketTimeout:3000,disableFileAccess:true,disableUrlAccess:true,
     getSocket(_options,callback){
       socket=createConnection({host:config.host,port:config.port});
@@ -41,8 +51,6 @@ export async function sendProviderNotice(config:SmtpProvider,id:string,subject:s
   let timer:ReturnType<typeof setTimeout>|undefined;
   try {
     const deadline=new Promise<never>((_resolve,reject)=>{timer=setTimeout(()=>{socket?.destroy();reject(Error('SMTP total deadline'));},10000);});
-    const result=await Promise.race([transport.sendMail({from:config.sender,to:config.recipient,subject,text,
-      messageId:`<anticlone-${id}@${config.sender.split('@')[1]}>`}),deadline]);
-    if (result.accepted.length!==1 || String(result.accepted[0]).toLowerCase()!==config.recipient.toLowerCase() || result.rejected.length) throw Error('SMTP recipient not accepted');
+    return await Promise.race([operation(transport),deadline]);
   } finally {if(timer)clearTimeout(timer);socket?.destroy();transport.close();}
 }

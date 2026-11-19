@@ -825,6 +825,8 @@ for (const width of [1440, 390]) {
     await recordObservedFact(lab.db, project.id, {page: lp.page, event: randomUUID(), session: 'ca'.repeat(16),
       action: 'CTA_CLICK_OBSERVED', traffic: 'DIRECT_UNKNOWN', version: null, evidence: 'BROWSER_UNVERIFIED'});
     await lab.db.query("INSERT INTO estimate_assumptions(project_id,version,ticket_minor,conversion_basis_points,currency) VALUES($1,1,12000,500,'BRL')", [project.id]);
+    await recordObservedFact(lab.db, project.id, {page: lp.page, event: randomUUID(), session: 'ca'.repeat(16),
+      action: 'SESSION_OBSERVED', traffic: 'DIRECT_UNKNOWN', version: null, evidence: 'BROWSER_UNVERIFIED'});
     const checkoutEnv = process.env.COMMERCE_ENCRYPTION_KEY;
     process.env.COMMERCE_ENCRYPTION_KEY = 'cd'.repeat(32);
     t.after(() => {
@@ -864,9 +866,16 @@ for (const width of [1440, 390]) {
     await capture('01-visao-geral');
     await page.getByRole('combobox', {name:'Métrica', exact:true}).selectOption('CTA_CLICK_OBSERVED');
     await page.getByLabel('Origem declarada').selectOption('DIRECT_UNKNOWN');
-    assert.equal(await page.getByRole('meter').getAttribute('value'), '1');
+    const chart = page.getByRole('img', {name:/Cliques de CTA por dia em UTC/});
+    assert.equal(await chart.locator('circle[data-count="1"]').count(), 1);
+    await capture('13-grafico', 'Atividade observada');
     await action(page, 'Tabela').click();
-    await page.getByRole('table').getByRole('cell', {name: '1', exact: true}).waitFor();
+    await page.getByRole('region', {name:'Atividade observada'}).getByRole('table').getByRole('cell', {name: '1', exact: true}).waitFor();
+    const finance = page.getByRole('region', {name:'Detalhamento das estimativas'});
+    await finance.getByText('R$ 120,00 · 5% · v1', {exact:true}).waitFor();
+    await finance.getByText('Estimativa R$ 6,00', {exact:true}).waitFor();
+    const traffic = page.getByRole('region', {name:'Origem do tráfego'});
+    assert.equal(await traffic.getByRole('meter', {name:'Direto ou desconhecido'}).getAttribute('value'), '1');
     for (const viewport of [360, 768, 1024, 1920]) {
       await page.setViewportSize({width: viewport, height: 844});
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'reflow at ' + viewport);
@@ -949,6 +958,7 @@ for (const width of [1440, 390]) {
     await capture('05-notificacoes', 'Notificações e SMTP');
     await action(page, 'Desativar solicitação').click();
     await action(page, 'Confirmar').click();
+    await page.getByText('Solicitação desativada.',{exact:true}).waitFor();
     await page.getByLabel('Projeto dos alertas').selectOption(project.id);
     const alert = (await lab.db.query('SELECT id::text FROM alert_outbox')).rows[0].id;
     await page.getByText(/^CLONE · /).click();
@@ -1318,6 +1328,7 @@ test('React provisions an original LP and copy, then real gateway applies scoped
     await panel.getByRole('navigation', {name: 'Navegação principal'}).filter({visible: true}).getByRole('link', {name: 'Configurações'}).click();
     await panel.getByRole('link', {name: 'Saúde e operações', exact: true}).click();
     await panel.getByText('Gateway local respondeu', {exact: true}).waitFor();
+    await panel.getByText('Perfil do gateway · Operacional · ações exigem autorização por LP',{exact:true}).waitFor();
     await panel.getByLabel('Projeto', {exact: true}).selectOption(ids.project);
     await panel.getByLabel('Acompanhar inatividade de sinais').check();
     await panel.getByLabel('Habilitar alertas operacionais').check();
