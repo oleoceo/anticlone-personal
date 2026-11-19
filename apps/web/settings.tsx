@@ -68,7 +68,7 @@ function NotificationSettings({api, setGuard}: {api: AdminApi; setGuard: SetGuar
         return enabled ? 'Habilitação solicitada.' : 'Solicitação desativada.';
       });
   }
-  return <><section className="panel form-panel">
+  return <div className="notification-workspace"><section className="panel form-panel">
     <h2>Notificações e SMTP</h2>
     {operation.notice()}
     {query.error !== undefined ? <Failure error={query.error} retry={query.revalidate}/> : !config ? <Loading/> : <>
@@ -125,7 +125,7 @@ function NotificationSettings({api, setGuard}: {api: AdminApi; setGuard: SetGuar
     </>}
   </section>
     <EmailLog query={emailLog}/>
-  </>;
+  </div>;
 }
 
 type EmailAttempt = {

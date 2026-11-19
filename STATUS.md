@@ -1,5 +1,10 @@
 # STATUS — AntiClone Personal
 
+## Hierarquia do painel V2.2
+- Ajustes compartilhados de largura, cabeçalhos, formulários e navegação.
+- Visão Geral com atividade e instalações lado a lado. Oferta com páginas e gestão separadas. Notificações com SMTP e logs lado a lado.
+- Revisão independente `review_panel`. Provas em `test-results/painel-v22/`.
+
 ## UX V2.2 — instalação da LP
 - URL oficial e contexto ficam no início da instalação. Os trechos publicados têm orientação para HTML, React/Vite e WordPress.
 - O atalho por teclado leva ao diagnóstico. A revisão e a rotação continuam no painel técnico.
