@@ -1,3 +1,4 @@
+import { adminHealth } from './admin-health.js';
 import {serveAdminFrontend} from './admin-frontend.js';
 import {ProjectRegistrationConflict,registerProject,registrationHistory} from './project-registration.js';
 import {commerceAdmin,CommerceConflict} from './commerce.js';
@@ -5,7 +6,7 @@ import {commerceScript} from './commerce-ui.js';
 import { configurationOrigin } from './page-redirect.js';
 import { operationalAdmin } from './operational-authorization.js';
 import {notificationAdmin,NotificationReviewConflict} from './notification-reviews.js';
-import { distributionAdmin } from './runtime-distribution.js';
+import { DistributionBlocked, distributionAdmin } from './runtime-distribution.js';
 import { metricsAdmin } from './observed-metrics.js';
 import { ProjectPurgeConflict } from './project-purge-preview.js';
 import { PageDeletionConflict } from './page-deletion.js';
@@ -64,7 +65,7 @@ export function handleAdminUi(req: IncomingMessage, res: ServerResponse, db: Poo
     }
     res.writeHead(404).end(); return false;
   }
-  if (req.method !== 'POST' || !['/admin/ui/commerce','/admin/ui/project-create','/admin/ui/project-history','/admin/ui/notifications','/admin/ui/receipt-history','/admin/ui/operational','/admin/ui/distribution','/admin/ui/observed-metrics','/admin/ui/pages','/admin/ui/checkout-metrics','/admin/ui/protection','/admin/ui/incidents','/admin/ui/incident-status','/admin/ui/login','/admin/ui/logout','/admin/ui/settings','/admin/ui/preference','/admin/ui/cta-inventory','/admin/ui/cta-import','/admin/ui/cta-selection','/admin/ui/cta-commercial','/admin/ui/installation','/admin/ui/installation-enable','/admin/ui/installation-disable'].includes(req.url ?? '')) { res.writeHead(404).end(); return false; }
+  if (req.method !== 'POST' || !['/admin/ui/health','/admin/ui/commerce','/admin/ui/project-create','/admin/ui/project-history','/admin/ui/notifications','/admin/ui/receipt-history','/admin/ui/operational','/admin/ui/distribution','/admin/ui/observed-metrics','/admin/ui/pages','/admin/ui/checkout-metrics','/admin/ui/protection','/admin/ui/incidents','/admin/ui/incident-status','/admin/ui/login','/admin/ui/logout','/admin/ui/settings','/admin/ui/preference','/admin/ui/cta-inventory','/admin/ui/cta-import','/admin/ui/cta-selection','/admin/ui/cta-commercial','/admin/ui/installation','/admin/ui/installation-enable','/admin/ui/installation-disable'].includes(req.url ?? '')) { res.writeHead(404).end(); return false; }
   if (req.headers.origin !== origin || site !== 'same-origin' || req.headers['content-type'] !== 'application/json') { res.writeHead(403).end(); return false; }
   const expected = login ? cookie('admin_login_csrf') : valid ? session.csrf : undefined;
   if (!expected || !/^[a-f0-9]{64}$/.test(expected) || req.headers['x-csrf-token'] !== expected) { res.writeHead(403).end(); return false; }
@@ -82,8 +83,14 @@ export function handleAdminUi(req: IncomingMessage, res: ServerResponse, db: Poo
       const {project,...cursor}=value;
       void receiptHistory(db,project,cursor).then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error:unknown)=>res.writeHead(error instanceof TypeError?400:503).end());return;
     }
-    const operation=req.url === '/admin/ui/commerce' ? commerceAdmin(db,body) : req.url === '/admin/ui/project-create' ? registerProject(db,body,req.headers['idempotency-key']) : req.url === '/admin/ui/project-history' ? registrationHistory(db,body) : req.url === '/admin/ui/notifications' ? notificationAdmin(db,body) : req.url === '/admin/ui/operational' ? operationalAdmin(db,body) : req.url === '/admin/ui/distribution' ? distributionAdmin(db,body) : req.url === '/admin/ui/observed-metrics' ? metricsAdmin(db,body) : req.url === '/admin/ui/pages' ? managePages(db,body) : req.url === '/admin/ui/checkout-metrics' ? checkoutSummary(db,body) : req.url === '/admin/ui/protection' ? protectionAdmin(db,body) : req.url === '/admin/ui/incidents' ? incidentList(db,body) : req.url === '/admin/ui/incident-status' ? classifyIncident(db,body) : req.url === '/admin/ui/settings' ? saveNotificationSettings(db,body) : req.url === '/admin/ui/preference' ? setNotificationPreference(db,body) : req.url === '/admin/ui/cta-inventory' ? inventory(db,body) : req.url === '/admin/ui/cta-import' ? importUiInventory(db,body) : req.url?.startsWith('/admin/ui/installation') ? installation(db,body,req.url) : req.url === '/admin/ui/cta-commercial' ? approveCommercial(db,body).then(()=>({state:'APPROVED'})) : selectObservation(db,body).then(()=>({state:'PENDING'}));
-    void operation.then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error:unknown)=>res.writeHead(error instanceof ProjectRegistrationConflict || error instanceof CommerceConflict || error instanceof NotificationReviewConflict || error instanceof ProjectPurgeConflict || error instanceof PageDeletionConflict || error instanceof DeletedProjectConflict || error instanceof LifecycleConflict || error instanceof PageConflict || error instanceof IncidentConflict || error instanceof Conflict || error instanceof SelectionConflict || error instanceof InstallationOriginConflict ? 409 : error instanceof DeletedProjectConflict ? 409 : error instanceof TypeError ? 400 : 503).end());
+    const operation=req.url === '/admin/ui/health' ? adminHealth(db,body) : req.url === '/admin/ui/commerce' ? commerceAdmin(db,body) : req.url === '/admin/ui/project-create' ? registerProject(db,body,req.headers['idempotency-key']) : req.url === '/admin/ui/project-history' ? registrationHistory(db,body) : req.url === '/admin/ui/notifications' ? notificationAdmin(db,body) : req.url === '/admin/ui/operational' ? operationalAdmin(db,body) : req.url === '/admin/ui/distribution' ? distributionAdmin(db,body) : req.url === '/admin/ui/observed-metrics' ? metricsAdmin(db,body) : req.url === '/admin/ui/pages' ? managePages(db,body) : req.url === '/admin/ui/checkout-metrics' ? checkoutSummary(db,body) : req.url === '/admin/ui/protection' ? protectionAdmin(db,body) : req.url === '/admin/ui/incidents' ? incidentList(db,body) : req.url === '/admin/ui/incident-status' ? classifyIncident(db,body) : req.url === '/admin/ui/settings' ? saveNotificationSettings(db,body) : req.url === '/admin/ui/preference' ? setNotificationPreference(db,body) : req.url === '/admin/ui/cta-inventory' ? inventory(db,body) : req.url === '/admin/ui/cta-import' ? importUiInventory(db,body) : req.url?.startsWith('/admin/ui/installation') ? installation(db,body,req.url) : req.url === '/admin/ui/cta-commercial' ? approveCommercial(db,body).then(()=>({state:'APPROVED'})) : selectObservation(db,body).then(()=>({state:'PENDING'}));
+    void operation.then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error:unknown)=>{
+      if (error instanceof DistributionBlocked) {
+        res.writeHead(400,{'Content-Type':'application/json'}).end(JSON.stringify({code:error.code}));
+        return;
+      }
+      res.writeHead(error instanceof ProjectRegistrationConflict || error instanceof CommerceConflict || error instanceof NotificationReviewConflict || error instanceof ProjectPurgeConflict || error instanceof PageDeletionConflict || error instanceof DeletedProjectConflict || error instanceof LifecycleConflict || error instanceof PageConflict || error instanceof IncidentConflict || error instanceof Conflict || error instanceof SelectionConflict || error instanceof InstallationOriginConflict ? 409 : error instanceof DeletedProjectConflict ? 409 : error instanceof TypeError ? 400 : 503).end();
+    });
   }); return false;
 }
 

@@ -68,7 +68,12 @@ test('distribution v1: persistent revisions, admin HTML/CSS, real browser layers
     await db.query("INSERT INTO protected_page_urls(page_id,origin,pathname) VALUES($1,$2,'/')",[pageId,origin]);
     await enableInstallation(db,'one');
     await recordInstallationClaim(db,'one',origin,'core');
-    assert.equal((await distributionAdmin(db,request,env)).state,'NOT_PUBLISHED');
+    const blocked=await distributionAdmin(db,request,{});
+    assert.equal(blocked.state,'NOT_PUBLISHED');
+    assert.equal(blocked.publication.ready,false);
+    assert.deepEqual(blocked.publication.issues.map(issue=>issue.code),Array(3).fill('RUNTIME_ORIGIN_MISSING'));
+    await assert.rejects(distributionAdmin(db,{...request,action:'publish'},{}),{code:'RUNTIME_ORIGIN_MISSING'});
+    assert.equal((await distributionAdmin(db,request,env)).publication.ready,true);
     assert.equal((await db.query('SELECT count(*)::int n FROM runtime_aliases')).rows[0].n,0);
     await assert.rejects(distributionAdmin(db,{...request,project:'two',action:'publish'},env));
     const published=await Promise.all([1,2].map(()=>distributionAdmin(db,{...request,action:'publish'},env)));

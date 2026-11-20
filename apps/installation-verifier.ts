@@ -3,6 +3,7 @@ import {randomUUID,createHash} from 'node:crypto';
 import {lookup} from 'node:dns/promises';
 import {request} from 'node:https';
 import {resolve} from 'node:path';
+import {isIP} from 'node:net';
 import {publicAddress} from './infrastructure-dns.js';
 import type {Distribution} from './runtime-distribution.js';
 
@@ -11,6 +12,12 @@ export type VerificationResponse={status:number;headers:Record<string,string>;bo
 export type VerificationSpec={target:string;distribution:Distribution};
 export type ControlledCheck={status:'FULL'|'PARTIAL'|'UNSUPPORTED'|'NOT_VERIFIED';checkedAt:string;scope:'CONTROLLED_BROWSER_CURRENT_LOAD';reason:string;layers:Record<string,boolean>;blocked:number;activeMitigation:'NOT_TESTED'};
 type Broker=(value:VerificationRequest)=>Promise<VerificationResponse>;
+
+function acceptableHttps(url: URL) {
+  const host=url.hostname.replace(/^\[|\]$/g,'');
+  return url.protocol==='https:' && !url.port && !url.username && !url.password && !url.hash &&
+    url.hostname.includes('.') && !url.hostname.endsWith('.') && (!isIP(host) || publicAddress(host));
+}
 
 // No redirects, cookies, authentication, proxy environment, automatic DNS
 // fallback, compression or unbounded response bodies. Addresses are pinned to
@@ -21,7 +28,7 @@ export function publicHttpsBroker(target?:string,signal?:AbortSignal):Broker {
   return async value=>{
     signal?.throwIfAborted();
     const url=new URL(value.url);
-    if(url.protocol!=='https:'||url.port||url.username||url.password||url.hash||url.hostname.endsWith('.')||!url.hostname.includes('.'))throw Error('HTTPS target required');
+    if(!acceptableHttps(url))throw Error('HTTPS target required');
     if(!pins.has(url.hostname))pins.set(url.hostname,(async()=>{
       let deadline:ReturnType<typeof setTimeout>|undefined;
       const addresses=await Promise.race([lookup(url.hostname,{all:true}),new Promise<never>((_accept,reject)=>{deadline=setTimeout(()=>reject(Error('DNS deadline')),1500);})]).finally(()=>clearTimeout(deadline));
@@ -46,10 +53,10 @@ export function publicHttpsBroker(target?:string,signal?:AbortSignal):Broker {
 
 export function verificationPolicy(spec:VerificationSpec) {
   const target=new URL(spec.target);
-  if(target.protocol!=='https:'||target.port||target.username||target.password||target.hash||target.search)throw new TypeError('canonical approved HTTPS page required');
+  if(!acceptableHttps(target)||target.search)throw new TypeError('canonical approved HTTPS page required');
   const path=(name:string)=>spec.distribution.paths?.[name]??name;
   const urls={bootstrap:spec.distribution.bases.SCRIPT+path('runtime.js'),core:spec.distribution.bases.SCRIPT+path('core.js'),fallback:spec.distribution.bases.SCRIPT+path('fallback.js'),html_canary:spec.distribution.bases.STATIC_ASSETS+path('html.gif'),css_canary:spec.distribution.bases.STATIC_ASSETS+path('css.gif'),observe:spec.distribution.bases.TELEMETRY+path('observe'),fallback_observe:spec.distribution.bases.TELEMETRY+path('observe/fallback')};
-  for(const value of Object.values(urls)){const url=new URL(value);if(url.protocol!=='https:'||url.port||url.username||url.password)throw new TypeError('HTTPS runtime required');}
+  for(const value of Object.values(urls)){const url=new URL(value);if(!acceptableHttps(url))throw new TypeError('HTTPS runtime required');}
   return {urls,allow(value:VerificationRequest,type:string,mode:string){
     if(value.url.length>4096||value.body.length>2048)return false;
     const url=new URL(value.url);
@@ -68,10 +75,12 @@ export function verificationPolicy(spec:VerificationSpec) {
   }};
 }
 
+export const validVerifierImage = (image: string) => /^[a-z0-9][a-z0-9/_.:@-]{0,200}$/.test(image);
+
 let busy=false;
 export async function runControlledCheck(spec:VerificationSpec,image:string,broker?:Broker):Promise<ControlledCheck> {
   if(busy)throw Error('verification busy');
-  if(!/^[a-z0-9][a-z0-9/_.:@-]{0,200}$/.test(image))throw new TypeError('invalid verifier image');
+  if(!validVerifierImage(image))throw new TypeError('invalid verifier image');
   const policy=verificationPolicy(spec),name='anticlone-verifier-'+randomUUID();
   const abort=new AbortController(),transport=broker??publicHttpsBroker(spec.target,abort.signal);
   busy=true;

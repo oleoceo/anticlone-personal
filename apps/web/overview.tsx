@@ -1,7 +1,7 @@
 import {useState} from 'react';
 import {Link, useLocation, useNavigate} from 'react-router-dom';
 import {AdminApi, type Project, type ProjectState} from './admin-api';
-import {incidentPath, installPath, projectPath, useContextNavigation} from './navigation';
+import {incidentPath, installPath, newPagePath, offerPath, projectPath, projectsPath, useContextNavigation} from './navigation';
 import {commerceExponents, money} from './conversions';
 import {labels, Failure, Heading, Loading, useQuery} from './ui';
 import type {Incident} from './protection-contracts';
@@ -13,7 +13,7 @@ type OverviewReport = {
 };
 const reviewStates: Record<string, string> = {unverified: 'Não verificado', investigating: 'Em investigação',
   confirmed_copy: 'Cópia confirmada', false_positive: 'Falso positivo'};
-type InstallationSummary = {state: string; diagnostic?: {status: string; controlledVerification: {status: string}}};
+import {healthPath, installationMessages, publicationLabel, type InstallationStatus} from './installation-status';
 
 function quantity(count: number, singular: string, plural: string) {
   return count + ' ' + (count === 1 ? singular : plural);
@@ -50,7 +50,7 @@ export function Overview({api, projects}: {api: AdminApi; projects: Project[]}) 
   const pageId = filters.get('lp');
   const page = project && inventory.data?.[0]?.state?.pages.find(item => item.id === pageId);
   const installation = useQuery(page && project ? project.id + ':' + page.id : '', signal =>
-    api.request<InstallationSummary>('distribution', {action: 'inspect', project: project!.id, page: page!.id}, signal));
+    api.request<InstallationStatus>('distribution', {action: 'inspect', project: project!.id, page: page!.id}, signal));
   const alerts = useQuery(project?.id ?? '', signal => api.request<{state: string; items: unknown[]}>(
     'notifications', {action: 'inspect', project: project!.id}, signal));
   function change(name: string, value: string) {
@@ -60,12 +60,26 @@ export function Overview({api, projects}: {api: AdminApi; projects: Project[]}) 
     void navigate({pathname: location.pathname, search: filters.toString()}, {state: location.state, replace: true});
   }
   const observations = report.data?.observations;
+  const rows=inventory.data ?? [];
+  const projectCount=inventory.data && rows.every(row=>row.state!==null) ?
+    rows.filter(row=>row.state?.state==='ACTIVE').length : null;
+  const activePages=projectCount!==null ? rows.reduce((sum,row)=>sum+(row.state?.state==='ACTIVE' ?
+    row.state.pages.filter(item=>item.enabled && item.lifecycle_state==='ACTIVE').length : 0),0) : null;
+  const incidentCount=inventory.data && rows.every(row=>row.incidents!==null) ?
+    rows.reduce((sum,row)=>sum+(row.incidents?.length ?? 0),0) : null;
+  const clicks=observations?.filter(row=>row.action==='CTA_CLICK_OBSERVED').reduce((sum,row)=>sum+row.events,0);
+  const count=(value: number|null|undefined, pending: boolean)=>value ?? (pending ? 'Consultando' : 'Indisponível');
+  const needsPage=rows.filter(row=>row.state?.state==='ACTIVE' && row.state.pages.length===0);
   return <>
     <Heading title="Visão Geral" description="Projetos, sinais observados e resultados comerciais."
-      actions={<button type="button" onClick={() => {
-        setUntil(Date.now()); inventory.revalidate(); installation.revalidate(); alerts.revalidate();
-      }}>Atualizar visão geral</button>}/>
-    <section className="panel filters">
+      actions={<div className="action-links">
+        <Link className="button primary" {...nav.link(projects.length ? projectsPath : offerPath)}>
+          {projects.length ? 'Ver projetos' : 'Proteger oferta'}</Link>
+        <button type="button" onClick={() => {
+          setUntil(Date.now()); inventory.revalidate(); installation.revalidate(); alerts.revalidate();
+        }}>Atualizar visão geral</button>
+      </div>}/>
+    <section className="filters overview-filters" aria-label="Filtros da visão geral">
       <label>Projeto<select value={project?.id ?? ''} onChange={event => change('projeto', event.target.value)}>
         <option value="">Todos os projetos</option>{projects.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
       </select></label>
@@ -76,6 +90,32 @@ export function Overview({api, projects}: {api: AdminApi; projects: Project[]}) 
       <label>Período dos resultados<select value={days} onChange={event => change('dias', event.target.value)}>
         <option value="1">Últimas 24 horas</option><option value="7">Últimos 7 dias</option>
       </select></label>
+    </section>
+    <dl className="overview-metrics">
+      <div><dt>Projetos ativos</dt><dd>{count(projectCount,inventory.pending)}</dd></div>
+      <div><dt>LPs ativas</dt><dd>{count(activePages,inventory.pending)}</dd></div>
+      <div><dt>Incidentes no histórico retornado</dt><dd>{count(incidentCount,inventory.pending)}</dd></div>
+      <div><dt>Cliques de CTA no período</dt><dd>{count(clicks,report.pending)}</dd></div>
+    </dl>
+    <section className="panel">
+      <div className="panel-heading"><h2>Instalações e alertas</h2><Link {...nav.link(healthPath)}>Saúde e operações</Link></div>
+      {needsPage.map(row=><div className="panel-heading" key={row.project.id}>
+        <p>{row.project.name} ainda precisa da primeira LP.</p>
+        <Link className="button" {...nav.link(newPagePath(row.project.id))}>Cadastrar LP</Link>
+      </div>)}
+      {!project ? <p>Selecione um projeto e uma LP para consultar a instalação.</p> : <>
+        {alerts.error !== undefined ? <Failure error={alerts.error} retry={alerts.revalidate}/> : alerts.pending ? <Loading/> :
+          <p>{alerts.data?.state === 'AVAILABLE' ? quantity(alerts.data.items.length, 'alerta', 'alertas') + ' no recorte de revisão' : 'Revisão de alertas indisponível'}</p>}
+        {page ? <>
+          {installation.error !== undefined ? <Failure error={installation.error} retry={installation.revalidate}/> :
+            installation.pending ? <Loading/> : installation.data && <div>
+              <p><strong>{publicationLabel(installation.data)}</strong> · {
+                labels[installation.data.diagnostic?.status ?? ''] ?? 'Sem diagnóstico de camadas'}</p>
+              {installation.data.verification.issue && <p className="muted">{installationMessages[installation.data.verification.issue]}</p>}
+            </div>}
+          <Link className="button" {...nav.link(installPath(project.id, page.id))}>Abrir diagnóstico de {page.name}</Link>
+        </> : <p>Selecione uma LP para consultar a instalação.</p>}
+      </>}
     </section>
     <section className="panel">
       <h2>Resultados do período</h2>
@@ -112,20 +152,6 @@ export function Overview({api, projects}: {api: AdminApi; projects: Project[]}) 
             </div>)}
           </> : <p>Consulta de incidentes indisponível.</p>}
         </li>)}</ul> : <p>Nenhum projeto cadastrado.</p>}
-    </section>
-    <section className="panel">
-      <h2>Instalações e alertas</h2>
-      {!project ? <p>Selecione um projeto para consultar alertas em revisão e uma LP para ver o diagnóstico.</p> : <>
-        {alerts.error !== undefined ? <Failure error={alerts.error} retry={alerts.revalidate}/> : alerts.pending ? <Loading/> :
-          <p>{alerts.data?.state === 'AVAILABLE' ? quantity(alerts.data.items.length, 'alerta', 'alertas') + ' no recorte de revisão' : 'Revisão de alertas indisponível'}</p>}
-        {page ? <>
-          {installation.error !== undefined ? <Failure error={installation.error} retry={installation.revalidate}/> :
-            installation.pending ? <Loading/> : <p>{installation.data?.state === 'PUBLISHED' ? 'Endereços publicados' :
-              installation.data?.state === 'NOT_PUBLISHED' ? 'Endereços ainda não publicados' : 'Distribuição indisponível'} · {
-              labels[installation.data?.diagnostic?.controlledVerification.status ?? ''] ?? 'Verificação controlada indisponível'}</p>}
-          <Link {...nav.link(installPath(project.id, page.id))}>Abrir diagnóstico de {page.name}</Link>
-        </> : <p>Selecione uma LP para consultar a instalação.</p>}
-      </>}
     </section>
   </>;
 }

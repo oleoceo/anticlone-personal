@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {randomUUID} from 'node:crypto';
+import {randomUUID,scryptSync} from 'node:crypto';
 import {createServer,request} from 'node:https';
 import {once} from 'node:events';
 import {mkdtemp,readFile,readdir,rm} from 'node:fs/promises';
@@ -8,6 +8,9 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {Pool} from 'pg';
+import {chromium} from 'playwright';
+import {Secret,TOTP} from 'otpauth';
+import {createAdminServer} from '../apps/admin-auth.js';
 import {createSocket} from 'node:dgram';
 import {publicHttpsBroker,verificationPolicy,runControlledCheck,type VerificationResponse} from '../apps/installation-verifier.js';
 import {distributionAdmin,distributionSnippets,verifyPublishedInstallation,type Distribution} from '../apps/runtime-distribution.js';
@@ -34,6 +37,7 @@ test('network-none sandboxed Chromium + mediated real TLS/PostgreSQL: FULL, CSP 
   const dir=await mkdtemp(join(tmpdir(),'verifier-'));
   const original='https://owner.verifier.test',gateway='https://gateway.verifier.test',page=randomUUID(),installation=randomUUID();
   let policy='',html='',css='',coep='',submitted=0,networkCalls=0,stale=false,isolationChecked=false,udpPackets=0;
+  let documentUnavailable=false,gatewayUnavailable=false;
   const udp=createSocket('udp4');udp.on('message',()=>udpPackets++);udp.bind(0,'127.0.0.1');await once(udp,'listening');const udpPort=udp.address().port;
   const scripts=Object.fromEntries(await Promise.all([['runtime.js','bootstrap.js'],['core.js','core.js'],['fallback.js','fallback.js']].map(async([name,file])=>[name,await readFile('runtime/'+file)])));
   const maintenance=projectMaintenance(db,{SMTP_PORT:'1'});
@@ -43,7 +47,12 @@ test('network-none sandboxed Chromium + mediated real TLS/PostgreSQL: FULL, CSP 
   const cert=await readFile(join(dir,'cert'));
   const server=createServer({key:await readFile(join(dir,'key')),cert},(req,res)=>{
     networkCalls++;
-    if(req.headers.host==='gateway.verifier.test'){if(!distributed(req,res)&&!scoped(req,res))res.writeHead(404).end();return;}
+    if(req.headers.host==='gateway.verifier.test'){
+      if(gatewayUnavailable)res.writeHead(503).end();
+      else if(!distributed(req,res)&&!scoped(req,res))res.writeHead(404).end();
+      return;
+    }
+    if(documentUnavailable){res.writeHead(503).end();return;}
     if(req.method!=='GET'){submitted++;res.writeHead(405).end();return;}
     if(policy)res.setHeader('content-security-policy',policy);
     if(coep)res.setHeader('cross-origin-embedder-policy',coep);
@@ -80,6 +89,9 @@ test('network-none sandboxed Chromium + mediated real TLS/PostgreSQL: FULL, CSP 
     const spec={target:original+'/page',distribution},image='anticlone-verifier:test';
     const run=(input:typeof spec,selectedImage:string)=>runControlledCheck(input,selectedImage,broker);
     const env={INSTALLATION_VERIFIER_IMAGE:image};
+    const unchecked=await distributionAdmin(db,{action:'inspect',project:'owner',page},env);
+    assert.deepEqual(unchecked.verification,{ready:true,issue:null});
+    assert.equal(unchecked.diagnostic?.controlledVerification.reason,'NO_CURRENT_VERIFICATION');
     const full=await verifyPublishedInstallation(db,'owner',page,env,run);
     assert.equal(full.status,'FULL',JSON.stringify(full));assert.equal(full.activeMitigation,'NOT_TESTED');assert.ok(full.blocked>0);
     assert.ok(Object.values(full.layers).every(Boolean));assert.ok(networkCalls>10);
@@ -94,15 +106,52 @@ test('network-none sandboxed Chromium + mediated real TLS/PostgreSQL: FULL, CSP 
     const forged=await run(spec,image);assert.notEqual(forged.status,'FULL');assert.equal(forged.layers.core,false,'preload/image/fake POST is not runtime execution');assert.equal(forged.layers.bootstrap,false);
     html=snippets.html;coep='require-corp';const isolatedPolicy=await run(spec,image);assert.equal(isolatedPolicy.status,'NOT_VERIFIED');assert.equal(isolatedPolicy.reason,'ISOLATION_POLICY_NOT_REPRODUCED');coep='';
     policy=`default-src 'none'; img-src ${gateway}; style-src 'unsafe-inline'; script-src 'none'`;
-    const partial=await run(spec,image);assert.equal(partial.status,'PARTIAL',JSON.stringify(partial));assert.equal(partial.layers.core,false);assert.equal(partial.layers.html_canary,true);
+    const partial=await verifyPublishedInstallation(db,'owner',page,env,run);
+    assert.equal(partial.status,'PARTIAL',JSON.stringify(partial));
+    const diagnosed=(await distributionAdmin(db,{action:'inspect',project:'owner',page},env)).diagnostic!;
+    assert.equal(diagnosed.status,'PARTIAL');
+    assert.equal(diagnosed.layers.find(layer=>layer.layer==='core')?.controlled,'NOT_OBSERVED');
+    assert.equal(diagnosed.layers.find(layer=>layer.layer==='html_canary')?.controlled,'OBSERVED');assert.equal(partial.layers.core,false);assert.equal(partial.layers.html_canary,true);
+    const secret='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+    const clock=Date.now();
+    const code=new TOTP({secret:Secret.fromBase32(secret)}).generate({timestamp:clock});
+    const password='control-panel fixture';
+    const salt=Buffer.alloc(16,1);
+    await db.query('CREATE TABLE admin_totp_replay (factor_id text PRIMARY KEY,last_counter bigint NOT NULL)');
+    await db.query('CREATE TABLE admin_totp_codes (factor_id text NOT NULL,digest text NOT NULL,valid_until bigint NOT NULL,PRIMARY KEY (factor_id,digest))');
+    const admin=createAdminServer('scrypt$'+salt.toString('hex')+'$'+scryptSync(password,salt,64).toString('hex'),secret,db,()=>clock)
+      .listen(0,'127.0.0.1');
+    await once(admin,'listening');
+    const adminAddress=admin.address();
+    assert.ok(adminAddress&&typeof adminAddress!=='string');
+    try {
+      const panelBrowser=await chromium.launch();
+      try {
+        const panel=await panelBrowser.newPage({viewport:{width:390,height:844},hasTouch:true});
+        await panel.goto('http://127.0.0.1:'+adminAddress.port+'/admin/ui/novo/projetos/owner/lps/'+page+'/instalacao');
+        await panel.getByLabel('Senha administrativa').fill(password);
+        await panel.getByLabel('Código do autenticador').fill(code);
+        await panel.getByRole('button',{name:'Entrar',exact:true}).click();
+        await panel.getByText('Parcial na carga verificada',{exact:true}).waitFor();
+        const layers=panel.locator('.layers li');
+        await layers.filter({hasText:'Canário HTML'}).getByText('Comprovado na carga verificada',{exact:true}).waitFor();
+        await layers.filter({hasText:/^Core/}).getByText('Sem prova na carga verificada',{exact:true}).waitFor();
+        assert.equal(await panel.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+        const capture=process.env.TEST_FRONTEND_CONTROLLED_CAPTURE;
+        if(capture)await panel.screenshot({path:capture,fullPage:true,animations:'disabled'});
+      } finally { await panelBrowser.close(); }
+    } finally { await new Promise<void>(resolve=>{admin.close(()=>resolve());admin.closeAllConnections();}); }
     policy="default-src 'none'";const unsupported=await run(spec,image);assert.equal(unsupported.status,'UNSUPPORTED',JSON.stringify(unsupported));
-    policy='';const unavailable=await runControlledCheck(spec,image,async()=>{throw Error('synthetic HTTPS outage');});assert.equal(unavailable.status,'NOT_VERIFIED');
-    const gatewayDown=await runControlledCheck(spec,image,async value=>{if(new URL(value.url).origin===gateway)throw Error('synthetic gateway outage');return broker(value);});assert.equal(gatewayDown.status,'NOT_VERIFIED','loaded document with unavailable gateway is not unsupported');
+    policy='';documentUnavailable=true;
+    const unavailable=await run(spec,image);assert.equal(unavailable.status,'NOT_VERIFIED');
+    documentUnavailable=false;gatewayUnavailable=true;
+    const gatewayDown=await run(spec,image);assert.equal(gatewayDown.status,'NOT_VERIFIED','loaded document with unavailable gateway is not unsupported');
+    gatewayUnavailable=false;
     stale=true;const changed=await verifyPublishedInstallation(db,'owner',page,env,run);assert.equal(changed.status,'NOT_VERIFIED');assert.equal(changed.reason,'CONFIGURATION_CHANGED');
     assert.equal((await distributionAdmin(db,{action:'inspect',project:'owner',page})).diagnostic?.status,'NOT_VERIFIED','old successful revision never validates new configuration');
     await assert.rejects(verifyPublishedInstallation(db,'other',page,env,run));
     await assert.rejects(distributionAdmin(db,{action:'verify',project:'owner',page,url:'http://169.254.169.254/'}));
-    await assert.rejects(verifyPublishedInstallation(db,'owner',page,{},run),/not configured/);
+    await assert.rejects(verifyPublishedInstallation(db,'owner',page,{},run),/ISOLATED_VERIFIER_UNAVAILABLE/);
     assert.equal((await db.query("SELECT count(*)::int n FROM controlled_installation_checks WHERE project_id='other'")).rows[0].n,0);
     assert.equal(udpPackets,0,'network-none prevents UDP/WebRTC egress to the host');
     await db.query("UPDATE controlled_installation_checks SET checked_at=now()-interval '8 days'");

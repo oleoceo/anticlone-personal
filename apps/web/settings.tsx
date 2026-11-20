@@ -3,8 +3,9 @@ import {Link} from 'react-router-dom';
 import {AdminApi, type Project} from './admin-api';
 import {CommerceSettings} from './commerce-settings';
 import {DetailsData, formData, InputError, useOperation, value, type SetGuard} from './operations';
-import {Breadcrumbs, settingsPath, useContextNavigation, overviewPath} from './navigation';
+import {Breadcrumbs, settingsPath, useContextNavigation} from './navigation';
 import {Failure, Heading, Loading, useQuery} from './ui';
+import {HealthOperations} from './health';
 
 type Smtp = {version: number; provider: string | null; host: string | null; port: number | null;
   tls_mode: string | null; sender: string | null; recipient: string | null; status: string;
@@ -30,14 +31,7 @@ export function Settings({api, projects, section, setGuard}: {api: AdminApi; pro
         aria-current={part === (section ?? 'notificacoes') ? 'page' : undefined} {...nav.link(settingsPath + '/' + part)}>{label}</Link>)}
     </nav>
     {section === 'integracoes' ? <CommerceSettings api={api} setGuard={setGuard}/> : section === 'operacoes' ?
-      <section className="panel">
-        <h2>Diagnósticos e operações privadas</h2>
-        <p>Consulte a situação da instalação por LP e as filas de revisão por projeto.</p>
-        <div className="action-links"><Link {...nav.link(overviewPath)}>Abrir diagnósticos na Visão Geral</Link>
-          <Link {...nav.link(settingsPath + '/notificacoes')}>Abrir revisão de alertas</Link></div>
-        <p>O histórico completo de saúde, a configuração do monitor, a recuperação e a retenção usam as ferramentas privadas existentes.</p>
-        <p><a href="/admin/ui/">Abrir painel anterior</a> para operações avançadas disponíveis durante a transição.</p>
-      </section> : <>
+      <HealthOperations api={api} projects={projects} setGuard={setGuard}/> : <>
         <NotificationSettings api={api} setGuard={setGuard}/>
         <NotificationQueue api={api} projects={projects} setGuard={setGuard}/>
       </>}

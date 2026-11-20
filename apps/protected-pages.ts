@@ -113,6 +113,7 @@ export async function managePages(db: Pool, body: unknown) {
   }
   if (action==='list' && Object.keys(data).sort().join(',')==='action,project') {
     const rows=await db.query(`SELECT p.id,p.project_id,p.installation_id,p.name,p.enabled,p.url_review_required,
+      to_jsonb(p)->>'lifecycle_state' AS lifecycle_state,
       COALESCE(json_agg(json_build_object('origin',u.origin,'pathname',u.pathname) ORDER BY u.origin,u.pathname) FILTER (WHERE u.page_id IS NOT NULL),'[]'::json) AS urls
       FROM protected_pages p LEFT JOIN protected_page_urls u ON u.page_id=p.id WHERE p.project_id=$1 GROUP BY p.id ORDER BY p.name,p.id`,[project]);
     return {pages:rows.rows,installationStatus:'NOT_VERIFIED',message:'Inclua o mesmo script na nova página; sinais não comprovam instalação.'};

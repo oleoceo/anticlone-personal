@@ -6,6 +6,18 @@ import { notificationAdmission, notificationRetention,reviewedRelease } from './
 import { operationallyEligible } from './operational-eligibility.js';
 import {providerAuthorized,sendProviderNotice,type SmtpProvider} from './smtp-provider.js';
 
+export async function healthSettings(db: Pool, project: string) {
+  return (await db.query(`SELECT s.enabled,s.operational_enabled,s.inactivity_seconds,l.last_observed_at
+    FROM installation_health_settings s LEFT JOIN installation_last_signal l ON l.project_id=s.project_id
+    WHERE s.project_id=$1`,[project])).rows[0] ?? null;
+}
+
+export async function healthHistory(db: Pool, project: string) {
+  return (await db.query(`SELECT e.id,e.kind,e.source,e.nature,e.safe_code,e.opened_at,e.recovered_at,e.invalidated_at,h.event,h.occurred_at
+    FROM health_episodes e LEFT JOIN health_history h ON h.episode_id=e.id
+    WHERE e.project_id=$1 ORDER BY e.id DESC,h.id DESC LIMIT 200`,[project])).rows;
+}
+
 // Claims are unauthenticated; inactivity describes only a lack of observed claims.
 export async function configureHealth(db: Pool, project: string, enabled: boolean, seconds: number, operationalEnabled: boolean) {
   if (typeof enabled !== 'boolean' || typeof operationalEnabled !== 'boolean' || !Number.isInteger(seconds) || seconds < 60 || seconds > 2592000) throw new TypeError('invalid health configuration');

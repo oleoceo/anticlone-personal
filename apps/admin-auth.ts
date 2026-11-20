@@ -14,7 +14,7 @@ import { importInventory, approveDestination, approveCommercial, mapPoint, revie
 import { publishCtaPolicy } from './cta-policy.js';
 import { Conflict, getNotificationSettings, saveNotificationSettings, setNotificationPreference } from './notification-settings.js';
 import { handleAdminUi } from './admin-ui.js';
-import { configureHealth } from './health-alerts.js';
+import { configureHealth, healthHistory, healthSettings } from './health-alerts.js';
 import { disableInstallation, enableInstallation, installationDiagnostic, InstallationOriginConflict } from './installation.js';
 
 // Private loopback process, one owner, ephemeral sessions and rate limit.
@@ -73,7 +73,7 @@ export function createAdminServer(passwordRecord: string, totpSecret: string, db
       }
       const healthPath = /^\/admin\/projects\/([a-zA-Z0-9_-]{1,64})\/health$/.exec(req.url ?? '');
       if (healthPath && req.method === 'GET') {
-        void db.query(`SELECT s.enabled,s.operational_enabled,s.inactivity_seconds,l.last_observed_at FROM installation_health_settings s LEFT JOIN installation_last_signal l ON l.project_id=s.project_id WHERE s.project_id=$1`,[healthPath[1]]).then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result.rows[0] ?? null))).catch(()=>res.writeHead(503).end()); return;
+        void healthSettings(db,healthPath[1]).then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result))).catch(()=>res.writeHead(503).end()); return;
       }
       if (healthPath && req.method === 'POST') {
         if (req.headers['content-type'] !== 'application/json') { res.writeHead(415).end(); return; }
@@ -88,7 +88,7 @@ export function createAdminServer(passwordRecord: string, totpSecret: string, db
       }
       const healthHistoryPath = /^\/admin\/projects\/([a-zA-Z0-9_-]{1,64})\/health\/history$/.exec(req.url ?? '');
       if (healthHistoryPath && req.method === 'GET') {
-        void db.query(`SELECT e.id,e.kind,e.source,e.nature,e.safe_code,e.opened_at,e.recovered_at,e.invalidated_at,h.event,h.occurred_at FROM health_episodes e LEFT JOIN health_history h ON h.episode_id=e.id WHERE e.project_id=$1 ORDER BY e.id DESC,h.id DESC LIMIT 200`,[healthHistoryPath[1]]).then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result.rows))).catch(()=>res.writeHead(503).end()); return;
+        void healthHistory(db,healthHistoryPath[1]).then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result))).catch(()=>res.writeHead(503).end()); return;
       }
       const installationPath = /^\/admin\/projects\/([a-zA-Z0-9_-]{1,64})\/installation(?:\/(disable))?$/.exec(req.url ?? '');
       if (installationPath && (req.method === 'GET' || req.method === 'POST')) {

@@ -1,13 +1,16 @@
+import {installationMessages} from './installation-status';
+
 const apiRoot = '/admin/ui/';
 type Bootstrap = {authenticated: boolean; csrf: string};
 
 export class AdminError extends Error {
-  constructor(readonly status: number) {
+  constructor(readonly status: number, readonly code?: string) {
     super('Falha da API administrativa');
   }
 }
 
 export function errorMessage(error: unknown): string {
+  if (error instanceof AdminError && error.code && Object.hasOwn(installationMessages,error.code)) return installationMessages[error.code];
   const status = error instanceof AdminError ? error.status : 0;
   switch (status) {
     case 400: return 'O servidor recusou os dados ou a operação. Confira os campos e a configuração atual.';
@@ -93,14 +96,18 @@ export class AdminApi {
         body: JSON.stringify(body),
       }),
     });
-    if (!response.ok) throw new AdminError(response.status);
+    if (!response.ok) {
+      const body: {code?: string} | null = path === 'distribution' && response.status === 400
+        ? await response.json().catch(() => null) : null;
+      throw new AdminError(response.status, body?.code);
+    }
     return response.status === 204 ? undefined as T : response.json() as Promise<T>;
   }
 }
 
 export type Project = {id: string; name: string};
 export type PageUrl = {origin: string; pathname: string};
-export type Page = {id: string; project_id: string; name: string; enabled: boolean; urls: PageUrl[]};
+export type Page = {id: string; project_id: string; name: string; enabled: boolean; lifecycle_state?: string; urls: PageUrl[]};
 export type ProjectState = {state: string; pages: {id: string; lifecycle_state: string; name: string; enabled: boolean}[]};
 export type ProjectHistory = {registration: {project_id: string; name: string; origin: string}[]; changes?: unknown[]};
 
