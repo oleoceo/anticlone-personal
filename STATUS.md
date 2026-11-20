@@ -3,6 +3,7 @@
 ## Sincronização do Dev com o GitHub
 - O [PR #84](https://github.com/oleoceo/anticlone-personal/pull/84) integra a conciliação `71f9993` e o histórico do SHA implantado `04ea124846be851a2e8396754f765a1fe318d1e2`.
 - A primeira CI passou em 148 de 149 testes. O ajuste de recuperação cobre as migrações 059–068 e conserva a prova de rollback com a fixture 069.
+- A segunda CI passou no teste de recuperação e encontrou uma ambiguidade no seletor da confirmação de suspensão. O teste agora aguarda o aviso de status.
 - A revisão independente `/root/review` foi favorável à integração condicionada à CI. O PR registra o resultado final dos checks.
 
 ## Homologação pública Dev — instalação e detecção

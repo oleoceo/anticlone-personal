@@ -1333,7 +1333,9 @@ test('React provisions an original LP and copy, then real gateway applies scoped
       await visit.waitForURL(original + point.target);
     }
     assert.equal((await lab.db.query('SELECT count(*)::int n FROM cta_mappings')).rows[0].n, 2);
-    await confirm('Suspender autorização', 'Autorização suspensa.');
+    await action(panel, 'Suspender autorização').click();
+    await action(panel, 'Confirmar').click();
+    await panel.getByRole('status').getByText('Autorização suspensa.', {exact: true}).waitFor();
     await visit.goto(copy + '/lp');
     await visit.getByRole('link', {name: 'Comprar'}).click();
     await visit.waitForURL(copy + '/checkout-nativo');
