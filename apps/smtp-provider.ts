@@ -1,3 +1,4 @@
+import { cloneAlertEmail, type CloneAlert } from './clone-alert-email.js';
 import nodemailer from 'nodemailer';
 import type { PoolClient } from 'pg';
 import { createConnection, type Socket } from 'node:net';
@@ -22,18 +23,13 @@ export async function providerAuthorized(db: Pick<PoolClient,'query'>, config:Sm
   return !!row?.requested && (['provider','host','port','tls_mode','sender','recipient'] as const).every(key=>row[key]===config[key]);
 }
 
-export async function sendProviderAlert(config: SmtpProvider, alert: {
-  outboxId: string; incidentId: string; project: string; host: string;
-}): Promise<void> {
-  return sendProviderNotice(config, alert.outboxId, `AntiClone: unverified clone signal (incident #${alert.incidentId})`, [
-    `Incident #${alert.incidentId} requires review.`,
-    `Project ID: ${alert.project}`,
-    `Unverified browser claim for host: ${alert.host}`,
-  ].join('\n'));
+export async function sendProviderAlert(config: SmtpProvider, alert: CloneAlert): Promise<void> {
+  const {subject, text, html} = cloneAlertEmail(alert);
+  return sendProviderNotice(config, alert.outboxId, subject, text, html);
 }
 
-export async function sendProviderNotice(config:SmtpProvider,id:string,subject:string,text:string):Promise<void>{
-  if(!/^(?:(?:cta|health)-)?[1-9][0-9]{0,19}$/.test(id)||!subject||subject.length>120||/[\r\n\0]/.test(subject)||text.length>4096)throw new TypeError('invalid notification');
+export async function sendProviderNotice(config:SmtpProvider,id:string,subject:string,text:string,html?:string):Promise<void>{
+  if(!/^(?:(?:cta|health)-)?[1-9][0-9]{0,19}$/.test(id)||!subject||subject.length>120||/[\r\n\0]/.test(subject)||text.length>4096||(html?.length??0)>16384)throw new TypeError('invalid notification');
   let socket:Socket|undefined;
   const transport=nodemailer.createTransport({host:config.host,port:config.port,secure:config.tls_mode==='implicit',requireTLS:true,
     auth:{user:config.user,pass:config.password},tls:{minVersion:'TLSv1.2',rejectUnauthorized:true},
@@ -47,7 +43,7 @@ export async function sendProviderNotice(config:SmtpProvider,id:string,subject:s
   let timer:ReturnType<typeof setTimeout>|undefined;
   try {
     const deadline=new Promise<never>((_resolve,reject)=>{timer=setTimeout(()=>{socket?.destroy();reject(Error('SMTP total deadline'));},10000);});
-    const result=await Promise.race([transport.sendMail({from:config.sender,to:config.recipient,subject,text,
+    const result=await Promise.race([transport.sendMail({from:config.sender,to:config.recipient,subject,text,html,
       messageId:`<anticlone-${id}@${config.sender.split('@')[1]}>`}),deadline]);
     if (result.accepted.length!==1 || String(result.accepted[0]).toLowerCase()!==config.recipient.toLowerCase() || result.rejected.length) throw Error('SMTP recipient not accepted');
   } finally {if(timer)clearTimeout(timer);socket?.destroy();transport.close();}
