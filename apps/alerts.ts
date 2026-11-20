@@ -1,4 +1,6 @@
-﻿import { notificationAdmission } from './notification-lifecycle.js';
+﻿import { cloneAlertContext } from './clone-alert-context.js';
+import type { CloneAlert } from './clone-alert-email.js';
+import { notificationAdmission } from './notification-lifecycle.js';
 import { createConnection } from 'node:net';
 import {reviewedRelease} from './notification-lifecycle.js';
 import nodemailer, { type SendMailOptions } from 'nodemailer';
@@ -46,10 +48,11 @@ export async function deliverOne(pool: Pool, project: string, port: number | Smt
       AND a.sent_at IS NULL AND a.expired_at IS NULL AND (a.attempts=0 OR a.next_attempt<=clock_timestamp())
       AND i.first_seen <= clock_timestamp()-interval '24 hours' AND ($2::timestamptz IS NULL OR i.first_seen>$2 OR ${released})`, [project,cutoff]);
     if (!budgetMayBeAvailable(pool)) { await client.query('COMMIT'); return; }
-    let item: {id: string; host: string; attempts:number} | undefined;
+    let item: {id: string; incident_id: string; host: string; attempts: number} | undefined;
+    let alert: CloneAlert | undefined;
     try {
       if (await lockBudget(client, pool)) {
-        const pending = await client.query(`SELECT a.id, i.host, a.attempts FROM alert_outbox a JOIN incidents i ON i.id=a.incident_id
+        const pending = await client.query(`SELECT a.id, i.id AS incident_id, i.host, a.attempts FROM alert_outbox a JOIN incidents i ON i.id=a.incident_id
           WHERE i.project_id=$1 AND ($2::timestamptz IS NULL OR i.first_seen>$2 OR ${released}) AND a.sent_at IS NULL AND a.expired_at IS NULL AND i.first_seen > clock_timestamp()-interval '24 hours' AND a.attempts < 3 AND a.next_attempt <= now() ORDER BY a.id LIMIT 1 FOR UPDATE OF a SKIP LOCKED`, [project,cutoff]);
         item = pending.rows[0];
         if (item) {
@@ -57,6 +60,7 @@ export async function deliverOne(pool: Pool, project: string, port: number | Smt
             FROM incidents i WHERE a.id=$1 AND i.id=a.incident_id AND a.expired_at IS NULL
             AND i.first_seen > clock_timestamp()-interval '24 hours' RETURNING a.id`, [item.id]);
           if (reserved.rowCount) {
+            if (typeof port !== 'number') alert = await cloneAlertContext(client, {outboxId:item.id, incidentId:item.incident_id, project, host:item.host});
             await recordBudget(client);
             if (history) await client.query('INSERT INTO clone_delivery_attempts(outbox_id,attempt,transport) VALUES($1,$2,$3)',[item.id,item.attempts+1,typeof port==='number'?'SMTP_LOCAL':'SMTP_PROVIDER']);
           }
@@ -70,7 +74,7 @@ export async function deliverOne(pool: Pool, project: string, port: number | Smt
       if (typeof port==='number') {
         const result=await sendLocalMail(port,{ from: 'anticlone@example.test', to: 'owner@example.test', subject: 'Unverified clone signal', text: `Unverified browser claim for host: ${item.host}`, messageId: `<anticlone-${item.id}@example.test>` });
           if (result.accepted.length!==1 || result.accepted[0]!=='owner@example.test') throw Error('recipient rejected');
-      } else await sendProviderAlert(port,item.id,item.host);
+      } else await sendProviderAlert(port, alert!);
     } catch {
       if (history) await client.query("UPDATE clone_delivery_attempts SET finished_at=clock_timestamp(),outcome='FAILED' WHERE outbox_id=$1 AND attempt=$2",[item.id,item.attempts+1]);
       return; // Acceptance may be uncertain; retry is bounded, never exactly-once.

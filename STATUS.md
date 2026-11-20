@@ -1,5 +1,11 @@
 # STATUS — AntiClone Personal
 
+## Homologação operacional Dev — alerta de cópia F26
+- Em 20/11/2026, o gateway público persistiu os sinais da LP C e da cópia controlada no PostgreSQL Dev. Incidente 10, outbox 10, uma tentativa aceita pelo Brevo.
+- A mensagem entregue ao transporte descreve a suspeita e o host. A correção inclui o ID do incidente e o projeto no alerta, preservando o Message-ID vinculado ao outbox.
+- A regressão com PostgreSQL, Chromium e SMTP TLS exercita resposta 451, retentativa, destinatário e uma única mensagem capturada. O recebimento externo depende da conferência da caixa autorizada.
+- Revisão independente `revisao_alerta` favorável ao delta funcional `ac475666c3a4`. A correção segue em branch de trabalho para CI e futura aplicação no Dev.
+
 ## Auditoria V2.2 no Dev — PR #82
 - Visão Geral com gráfico e tabela sobre a mesma série UTC, origem declarada e estimativa detalhada por projeto.
 - Configurações testa TLS e autenticação SMTP; Saúde identifica o perfil retornado pelo gateway.
@@ -160,3 +166,9 @@
 - Revisao independente /root/p2_review favoravel ao delta SQL/teste, sem P0/P1/P2; achado no preparo do teste corrigido.
 - Regressao Linux e CI oficial do SHA final: resultados e links registrados no PR75; nao presumir sucesso antes dos checks.
 - Sem merge/deploy/credenciais reais/migrations de producao; restante do PR preservado.
+
+
+## F26 — alerta de cópia no PR #83
+- O proprietário confirmou o recebimento do incidente 10 na caixa de entrada durante a homologação Dev. A mensagem anterior trazia apenas uma observação não verificada e o host.
+- O provedor SMTP gera HTML e texto em português, com contexto do incidente e rota relativa do Admin Dev. LP depende de recibo recente que a associe ao projeto e host.
+- Validação reproduzível em `tests/smtp-provider.test.ts`: conteúdo, escaping, triagem, isolamento, TLS, histórico e retry. Aplicação ao Dev e integração dependem de aprovação.

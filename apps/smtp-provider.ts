@@ -1,3 +1,4 @@
+import { cloneAlertEmail, type CloneAlert } from './clone-alert-email.js';
 import nodemailer from 'nodemailer';
 import type { PoolClient } from 'pg';
 import { createConnection, type Socket } from 'node:net';
@@ -22,13 +23,14 @@ export async function providerAuthorized(db: Pick<PoolClient,'query'>, config:Sm
   return !!row?.requested && (['provider','host','port','tls_mode','sender','recipient'] as const).every(key=>row[key]===config[key]);
 }
 
-export async function sendProviderAlert(config:SmtpProvider, id:string, host:string): Promise<void> {
-  return sendProviderNotice(config,id,'AntiClone: unverified clone signal',`Project observation requires review. Unverified browser claim for host: ${host}`);
+export async function sendProviderAlert(config: SmtpProvider, alert: CloneAlert): Promise<void> {
+  const {subject, text, html} = cloneAlertEmail(alert);
+  return sendProviderNotice(config, alert.outboxId, subject, text, html);
 }
 
-export async function sendProviderNotice(config:SmtpProvider,id:string,subject:string,text:string):Promise<void>{
-  if(!/^(?:(?:cta|health)-)?[1-9][0-9]{0,19}$/.test(id)||!subject||subject.length>120||/[\r\n\0]/.test(subject)||text.length>4096)throw new TypeError('invalid notification');
-  const result=await withProviderTransport(config,transport=>transport.sendMail({from:config.sender,to:config.recipient,subject,text,
+export async function sendProviderNotice(config:SmtpProvider,id:string,subject:string,text:string,html?:string):Promise<void>{
+  if(!/^(?:(?:cta|health)-)?[1-9][0-9]{0,19}$/.test(id)||!subject||subject.length>120||/[\r\n\0]/.test(subject)||text.length>4096||(html?.length??0)>16384)throw new TypeError('invalid notification');
+  const result=await withProviderTransport(config,transport=>transport.sendMail({from:config.sender,to:config.recipient,subject,text,html,
     messageId:`<anticlone-${id}@${config.sender.split('@')[1]}>`}));
   if (result.accepted.length!==1 || String(result.accepted[0]).toLowerCase()!==config.recipient.toLowerCase() || result.rejected.length) throw Error('SMTP recipient not accepted');
 }

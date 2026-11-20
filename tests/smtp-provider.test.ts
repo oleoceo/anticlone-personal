@@ -1,3 +1,5 @@
+import { cloneAlertContext } from '../apps/clone-alert-context.js';
+import { cloneAlertEmail } from '../apps/clone-alert-email.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, mkdtemp, rm } from 'node:fs/promises';
@@ -40,6 +42,32 @@ test('private SMTP configuration rejects ambiguous recipients, plaintext and cre
   }
 });
 
+test('clone email renders equivalent evidence, escapes markup, and distinguishes triage from risk', () => {
+  const key = {outboxId:'51', incidentId:'7', project:'one', host:'copy.test'};
+  const absent = cloneAlertEmail(key);
+  assert.match(absent.text, /LP: Sem associação única/);
+  assert.match(absent.text, /Risco do domínio no projeto: Sem avaliação registrada/);
+  assert.match(absent.text, /Confiança: Indisponível/);
+  assert.match(absent.text, /Primeira detecção \(UTC\): Indisponível/);
+  assert.match(absent.text, /Fontes de sinais: Sem fontes registradas/);
+  assert.match(absent.text, /Estado: Indisponível/);
+  const alert = cloneAlertEmail({...key, projectName:'A & B', pageName:`<img src="x" onerror='x'>`,
+    firstSeen:new Date('2026-11-20T14:33:17Z'), status:'investigating', risk:'HIGH',
+    confidence:'test_only', sources:['core','core','fallback','__proto__']});
+  assert.match(alert.subject, /#7 · Em investigação/);
+  assert.match(alert.text, /20\/11\/2026.*14:33:17/);
+  assert.match(alert.text, /Risco do domínio no projeto: Alto/);
+  assert.match(alert.text, /Confiança: Somente ambiente de teste/);
+  assert.match(alert.text, /Clonagem ainda não confirmada/);
+  assert.match(alert.text, /Runtime principal \(Core\), Runtime de contingência \(Fallback\)/);
+  assert.match(alert.html, /A &amp; B/);
+  assert.ok(alert.html.includes('&lt;img src=&quot;x&quot; onerror=&#39;x&#39;&gt;'));
+  assert.doesNotMatch(alert.html, /<img|href=/);
+  assert.match(alert.text, /\/admin\/ui\/novo\/projetos\/one\/incidentes\/7/);
+  assert.match(cloneAlertEmail({...key, status:'confirmed_copy'}).text, /confirmação foi registrada na triagem/);
+  assert.match(cloneAlertEmail({...key, status:'false_positive'}).text, /Estado: Falso positivo/);
+});
+
 test('provider TLS, durable attempts, browser clone dedup, retry/restart and authenticated administrative history', {timeout:90000},async()=>{
   assert.ok(process.env.TEST_DATABASE_URL);
   const dir=await mkdtemp(join(tmpdir(),'anticlone-smtp-'));
@@ -52,13 +80,23 @@ test('provider TLS, durable attempts, browser clone dedup, retry/restart and aut
   const options=`-c search_path=${schema}`;
   const db=new Pool({connectionString:process.env.TEST_DATABASE_URL,options});
   let rejectAuth=true;
+  let deferRecipient=false;
+  let deferredRecipients=0;
   const messages:string[]=[];
   const smtp=new SMTPServer({secure:true,key:await readFile(key),cert:await readFile(cert),
     onAuth(auth,_session,callback){
       if(rejectAuth || auth.username!==privateEnv.SMTP_USER || auth.password!==privateEnv.SMTP_PASSWORD) {callback(new Error('synthetic authentication rejection'));return;}
       callback(null,{user:auth.username});
     },onMailFrom(address,_session,callback){assert.equal(address.address,privateEnv.SMTP_SENDER);callback();},
-    onRcptTo(address,_session,callback){assert.equal(address.address,privateEnv.SMTP_RECIPIENT);callback();},
+    onRcptTo(address,_session,callback){
+      assert.equal(address.address,privateEnv.SMTP_RECIPIENT);
+      if(deferRecipient){
+        deferredRecipients++;
+        callback(Object.assign(new Error('temporary recipient failure'),{responseCode:451}));
+        return;
+      }
+      callback();
+    },
     onData(stream,_session,callback){let text='';stream.on('data',chunk=>{text+=String(chunk);});stream.on('end',()=>{messages.push(text);callback();});}});
   smtp.on('error',()=>{}); // Expected TLS rejection is verified below.
   smtp.listen(0,'127.0.0.1');await once(smtp.server,'listening');
@@ -79,8 +117,9 @@ test('provider TLS, durable attempts, browser clone dedup, retry/restart and aut
     await db.query('INSERT INTO projects VALUES($1,$1,$2)', ['one',original]);
     await db.query("INSERT INTO projects VALUES('two','Other project','http://other.test')");
     await db.query(`UPDATE notification_settings SET provider=$1,host=$2,port=$3,tls_mode=$4,sender=$5,recipient=$6,requested=true`,[config.provider,config.host,config.port,config.tls_mode,config.sender,config.recipient]);
+    await db.query("SELECT setval(pg_get_serial_sequence('alert_outbox','id'),50)");
     // TLS certificate validation cannot be disabled by configuration.
-    await assert.rejects(sendProviderAlert(config,'1','copy.test'));
+    await assert.rejects(sendProviderAlert(config,{outboxId:'1',incidentId:'2',project:'one',host:'copy.test'}));
     assert.equal(messages.length,0);
     child=start();
     await until(async()=>{try{return(await fetch(`http://127.0.0.1:${apiPort}/runtime.js`)).ok;}catch{return false;}},'gateway startup');
@@ -106,10 +145,67 @@ test('provider TLS, durable attempts, browser clone dedup, retry/restart and aut
     assert.equal((await db.query('SELECT * FROM clone_delivery_attempts')).rowCount,1);
     await db.query('UPDATE notification_settings SET requested=true');
     rejectAuth=false;
+    deferRecipient=true;
+    await db.query('UPDATE alert_outbox SET next_attempt=clock_timestamp()');
+    child=start();
+    await until(async()=>(await db.query("SELECT * FROM clone_delivery_attempts WHERE outcome='FAILED'")).rowCount===2,'temporary SMTP rejection persisted');
+    assert.equal(deferredRecipients,1);
+    assert.equal(messages.length,0);
+    const deferred=(await investigation(db,'one'))[0];
+    assert.equal(deferred.notification.outbox.state,'PENDING');
+    assert.equal(deferred.notification.outbox.attempts,2);
+    await stop(child);child=undefined;
+    const {rows:[identity]}=await db.query('SELECT i.id AS incident_id, a.id AS outbox_id FROM incidents i JOIN alert_outbox a ON a.incident_id=i.id');
+    // Exercise the same enrichment used by the provider with real optional tables.
+    for (const migration of ['025_installation_signals','037_protected_pages','054_investigation_receipts']) {
+      await db.query(await readFile(`infra/${migration}.sql`,'utf8'));
+    }
+    const incidentKey={outboxId:identity.outbox_id, incidentId:identity.incident_id, project:'one', host:'localhost'};
+    const connection=await db.connect();
+    try {
+      await connection.query(`INSERT INTO risk_assessment_days(project_id,host,day,level,evaluator_version,source,reason,confidence,observed_at)
+        VALUES ('one','localhost',CURRENT_DATE,'UNCERTAIN','v1','server_default','insufficient_evidence','insufficient',(SELECT first_seen-interval '1 second' FROM incidents WHERE id=$1)),
+               ('two','localhost',CURRENT_DATE,'HIGH','v1','lab_configuration','controlled_fixture','test_only',now())`,[identity.incident_id]);
+      await connection.query(`INSERT INTO investigation_receipts(project_id,page_id,installation_id,kind,source,resource,claimed_host)
+        SELECT project_id,id,installation_id,'runtime_receipt','core','observe',
+          CASE WHEN project_id='one' THEN 'other.test' ELSE 'localhost' END FROM protected_pages`);
+      const absent=await cloneAlertContext(connection,incidentKey);
+      assert.equal(absent.projectName,'one');
+      assert.equal(absent.pageName,null);
+      assert.equal(absent.risk,'UNCERTAIN');
+      assert.equal(absent.confidence,'insufficient');
+      assert.equal(absent.status,'unverified');
+      assert.ok(absent.firstSeen instanceof Date);
+      assert.ok(absent.sources?.includes('core'));
+      await connection.query(`INSERT INTO canary_observations(project_id,host,source,day,observed_at)
+        SELECT project_id,host,'html_canary',CURRENT_DATE,first_seen-interval '1 minute' FROM incidents WHERE id=$1`,[identity.incident_id]);
+      assert.ok((await cloneAlertContext(connection,incidentKey)).sources?.includes('html_canary'));
+      await connection.query("UPDATE protected_pages SET name='LP principal' WHERE project_id='one'");
+      await connection.query("UPDATE investigation_receipts SET claimed_host='localhost' WHERE project_id='one'");
+      assert.equal((await cloneAlertContext(connection,incidentKey)).pageName,'LP principal');
+      await connection.query("INSERT INTO protected_pages(id,project_id,installation_id,name) VALUES(gen_random_uuid(),'one',gen_random_uuid(),'Segunda LP')");
+      await connection.query(`INSERT INTO investigation_receipts(project_id,page_id,installation_id,kind,source,resource,claimed_host)
+        SELECT project_id,id,installation_id,'runtime_receipt','fallback','observe','localhost' FROM protected_pages WHERE name='Segunda LP'`);
+      assert.equal((await cloneAlertContext(connection,incidentKey)).pageName,null);
+      await connection.query("UPDATE investigation_receipts SET claimed_host='other.test' WHERE page_id=(SELECT id FROM protected_pages WHERE name='Segunda LP')");
+    } finally {connection.release();}
+    deferRecipient=false;
     await db.query('UPDATE alert_outbox SET next_attempt=clock_timestamp()');
     child=start();
     await until(async()=>(await db.query('SELECT * FROM alert_outbox WHERE sent_at IS NOT NULL')).rowCount===1,'retry accepted after restart');
     assert.equal(messages.length,1);
+    assert.notEqual(identity.incident_id,identity.outbox_id);
+    assert.match(messages[0], /Content-Type: multipart\/alternative/);
+    assert.match(messages[0], /Content-Type: text\/plain/);
+    assert.match(messages[0], /Content-Type: text\/html/);
+    assert.match(messages[0], new RegExp(`Incidente: #${identity.incident_id}`));
+    const messageBody=messages[0].replace(/=\r?\n/g,'');
+    assert.match(messageBody, /ID one/);
+    assert.match(messageBody, /LP principal/);
+    assert.match(messageBody, /Can=C3=A1rio HTML/);
+    assert.doesNotMatch(messageBody, /Other project|Segunda LP/);
+    assert.match(messages[0], /localhost/);
+    assert.ok(messages[0].includes(`Message-ID: <anticlone-${identity.outbox_id}@example.test>`));
     await page.reload();
     await stop(child);child=start();
     await until(async()=>{try{return(await fetch(`http://127.0.0.1:${apiPort}/runtime.js`)).ok;}catch{return false;}},'second restart');
@@ -118,7 +214,7 @@ test('provider TLS, durable attempts, browser clone dedup, retry/restart and aut
     assert.equal((await db.query('SELECT * FROM incidents')).rowCount,1);
     const delivered=(await investigation(db,'one'))[0];
     assert.equal(delivered.notification.outbox.state,'ACCEPTED_BY_TRANSPORT');
-    assert.deepEqual(delivered.notification.history.map((item:{outcome:string})=>item.outcome),['FAILED','ACCEPTED']);
+    assert.deepEqual(delivered.notification.history.map((item:{outcome:string})=>item.outcome),['FAILED','FAILED','ACCEPTED']);
     assert.equal((await investigation(db,'two')).length,0);
     await db.query('CREATE TABLE admin_totp_replay (factor_id text PRIMARY KEY,last_counter bigint NOT NULL)');
     await db.query('CREATE TABLE admin_totp_codes (factor_id text NOT NULL,digest text NOT NULL,valid_until bigint NOT NULL,PRIMARY KEY(factor_id,digest))');
@@ -148,7 +244,7 @@ test('provider TLS, durable attempts, browser clone dedup, retry/restart and aut
       onData(stream,_session,callback){stream.resume();stream.on('end',()=>callback());}});
     starttls.listen(0,'127.0.0.1');await once(starttls.server,'listening');
     try {
-      const sender=spawn(process.execPath,['--input-type=module','-e',"import {smtpProvider,sendProviderAlert} from './dist/apps/smtp-provider.js'; await sendProviderAlert(smtpProvider(process.env),'99','controlled.test');"],
+      const sender=spawn(process.execPath,['--input-type=module','-e',"import {smtpProvider,sendProviderAlert} from './dist/apps/smtp-provider.js'; await sendProviderAlert(smtpProvider(process.env),{outboxId:'99',incidentId:'100',project:'one',host:'controlled.test'});"],
         {env:{...env,SMTP_TLS:'starttls',SMTP_PORT:String((starttls.server.address() as AddressInfo).port)},stdio:'pipe'});
       let error='';sender.stderr.on('data',chunk=>{error+=String(chunk);});
       const [code]=await once(sender,'exit');assert.equal(code,0,error);assert.equal(tlsAuthenticated,true);
@@ -184,7 +280,7 @@ test('provider TLS, durable attempts, browser clone dedup, retry/restart and aut
     slow.listen(0,'127.0.0.1');await once(slow.server,'listening');
     try {
       const started=Date.now();
-      const sender=spawn(process.execPath,['--input-type=module','-e',"import {smtpProvider,sendProviderAlert} from './dist/apps/smtp-provider.js'; await sendProviderAlert(smtpProvider(process.env),'100','controlled.test');"],
+      const sender=spawn(process.execPath,['--input-type=module','-e',"import {smtpProvider,sendProviderAlert} from './dist/apps/smtp-provider.js'; await sendProviderAlert(smtpProvider(process.env),{outboxId:'100',incidentId:'101',project:'one',host:'controlled.test'});"],
         {env:{...env,SMTP_PORT:String((slow.server.address() as AddressInfo).port)},stdio:'pipe'});
       let error='';sender.stderr.on('data',chunk=>{error+=String(chunk);});
       const [code]=await once(sender,'exit');assert.notEqual(code,0);assert.match(error,/SMTP total deadline/);
