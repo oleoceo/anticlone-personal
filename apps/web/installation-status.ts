@@ -1,7 +1,7 @@
 export type InstallationIssue = {code: string; role?: string};
 export type InstallationStatus = {
   state: 'PUBLISHED' | 'NOT_PUBLISHED' | 'NOT_INSTALLED';
-  publication: {ready: boolean; issues: InstallationIssue[]; rotationAvailable: boolean; changesRequired: boolean};
+  publication: {ready: boolean; defaultsReady?: boolean; issues: InstallationIssue[]; rotationAvailable: boolean; changesRequired: boolean};
   verification: {ready: boolean; issue: string | null};
   diagnostic?: {
     status: string;
@@ -14,7 +14,18 @@ export type InstallationStatus = {
 export const roleLabels = {SCRIPT: 'Scripts', TELEMETRY: 'Telemetria', STATIC_ASSETS: 'Recursos estáticos'};
 export const healthPath = '/configuracoes/operacoes';
 
+export const telemetryEndpointLabels = {
+  DISABLED: 'Desativado para novas revisões',
+  NOT_AUTHORIZED: 'Aguardando autorização no ambiente privado',
+  UNVERIFIED: 'Aguardando verificação do endpoint',
+  DNS_FAILED: 'DNS não validado',
+  HTTPS_FAILED: 'HTTPS não validado',
+  GATEWAY_NOT_READY: 'Gateway indisponível no endpoint',
+  OPERATIONAL: 'Operacional',
+};
+
 export const installationMessages: Record<string, string> = {
+  TELEMETRY_ORIGIN_UNAVAILABLE: 'O endpoint de telemetria está desativado, sem autorização ou sem verificação operacional. Atualize a situação ou escolha outro endpoint.',
   RUNTIME_ORIGIN_MISSING: 'Falta uma origem de runtime na configuração privada. Configure RUNTIME_PUBLIC_ORIGIN ou a origem específica do papel.',
   RUNTIME_ORIGIN_INVALID: 'A origem de runtime é inválida. Revise a configuração privada e informe apenas a origem, sem caminho nem barra final.',
   RUNTIME_ADMIN_HOST_CONFLICT: 'A origem de runtime usa o mesmo host do painel administrativo. Configure um host distinto.',

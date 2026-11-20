@@ -1,3 +1,5 @@
+import {listTelemetryOrigins, telemetryOriginAdmin} from './telemetry-origins.js';
+import {listEmailAttempts} from './notification-email-log.js';
 import { adminHealth } from './admin-health.js';
 import {serveAdminFrontend} from './admin-frontend.js';
 import {ProjectRegistrationConflict,registerProject,registrationHistory} from './project-registration.js';
@@ -14,11 +16,11 @@ import { DeletedProjectConflict } from './admin-project-write.js';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createHash, randomBytes } from 'node:crypto';
 import type { Pool } from 'pg';
-import { Conflict, getNotificationSettings, saveNotificationSettings, setNotificationPreference } from './notification-settings.js';
+import { Conflict, getNotificationSettings, saveNotificationSettings, setNotificationPreference, testNotificationSmtp } from './notification-settings.js';
 import { approveCommercial, importInventory, selectObservation, SelectionConflict } from './cta-inventory.js';
 import { disableInstallation, enableInstallation, installationDiagnostic, InstallationOriginConflict } from './installation.js';
 import { investigation } from './investigation.js';
-import {receiptHistory} from './investigation-receipts.js';
+import {importOriginalRequest,receiptHistory} from './investigation-receipts.js';
 import { checkoutMetrics } from './checkout-webhook.js';
 import { classifyIncident, IncidentConflict } from './incident-triage.js';
 import { protectionAdmin } from './protection-admin.js';
@@ -59,13 +61,21 @@ export function handleAdminUi(req: IncomingMessage, res: ServerResponse, db: Poo
       if (!valid) { res.writeHead(401).end(); return false; }
       void db.query('SELECT id,name FROM projects ORDER BY name,id').then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result.rows))).catch(()=>res.writeHead(503).end()); return false;
     }
+    if (req.url === '/admin/ui/telemetry-origins') {
+      if (!valid) { res.writeHead(401).end(); return false; }
+      void listTelemetryOrigins(db,process.env,true).then(result => res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify(result))).catch(() => res.writeHead(503).end()); return false;
+    }
+    if (req.url === '/admin/ui/email-attempts') {
+      if (!valid) { res.writeHead(401).end(); return false; }
+      void listEmailAttempts(db).then(result => res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify(result))).catch(() => res.writeHead(503).end()); return false;
+    }
     if (req.url === '/admin/ui/settings') {
       if (!valid) { res.writeHead(401).end(); return false; }
       void getNotificationSettings(db).then(result => res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify(result))).catch(() => res.writeHead(503).end()); return false;
     }
     res.writeHead(404).end(); return false;
   }
-  if (req.method !== 'POST' || !['/admin/ui/health','/admin/ui/commerce','/admin/ui/project-create','/admin/ui/project-history','/admin/ui/notifications','/admin/ui/receipt-history','/admin/ui/operational','/admin/ui/distribution','/admin/ui/observed-metrics','/admin/ui/pages','/admin/ui/checkout-metrics','/admin/ui/protection','/admin/ui/incidents','/admin/ui/incident-status','/admin/ui/login','/admin/ui/logout','/admin/ui/settings','/admin/ui/preference','/admin/ui/cta-inventory','/admin/ui/cta-import','/admin/ui/cta-selection','/admin/ui/cta-commercial','/admin/ui/installation','/admin/ui/installation-enable','/admin/ui/installation-disable'].includes(req.url ?? '')) { res.writeHead(404).end(); return false; }
+  if (req.method !== 'POST' || !['/admin/ui/telemetry-origins','/admin/ui/health','/admin/ui/commerce','/admin/ui/project-create','/admin/ui/project-history','/admin/ui/notifications','/admin/ui/receipt-history','/admin/ui/original-requests','/admin/ui/operational','/admin/ui/distribution','/admin/ui/observed-metrics','/admin/ui/pages','/admin/ui/checkout-metrics','/admin/ui/protection','/admin/ui/incidents','/admin/ui/incident-status','/admin/ui/login','/admin/ui/logout','/admin/ui/settings','/admin/ui/smtp-test','/admin/ui/preference','/admin/ui/cta-inventory','/admin/ui/cta-import','/admin/ui/cta-selection','/admin/ui/cta-commercial','/admin/ui/installation','/admin/ui/installation-enable','/admin/ui/installation-disable'].includes(req.url ?? '')) { res.writeHead(404).end(); return false; }
   if (req.headers.origin !== origin || site !== 'same-origin' || req.headers['content-type'] !== 'application/json') { res.writeHead(403).end(); return false; }
   const expected = login ? cookie('admin_login_csrf') : valid ? session.csrf : undefined;
   if (!expected || !/^[a-f0-9]{64}$/.test(expected) || req.headers['x-csrf-token'] !== expected) { res.writeHead(403).end(); return false; }
@@ -77,13 +87,15 @@ export function handleAdminUi(req: IncomingMessage, res: ServerResponse, db: Poo
   req.on('end',()=>{
     if(rejected) return;
     let body:unknown; try { body=JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { res.writeHead(400).end(); return; }
-    if(req.url==='/admin/ui/receipt-history'){
+    if(req.url==='/admin/ui/receipt-history'||req.url==='/admin/ui/original-requests'){
       const value=body as Record<string,unknown>;
       if(!value||typeof value!=='object'||Array.isArray(value)||typeof value.project!=='string'||!/^[a-zA-Z0-9_-]{1,64}$/.test(value.project)){res.writeHead(400).end();return;}
-      const {project,...cursor}=value;
-      void receiptHistory(db,project,cursor).then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error:unknown)=>res.writeHead(error instanceof TypeError?400:503).end());return;
+      const {project,...input}=value;
+      const result=req.url==='/admin/ui/receipt-history'?receiptHistory(db,project,input):importOriginalRequest(db,project,input);
+      void result.then(data=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(data)))
+        .catch((error:unknown)=>res.writeHead(error instanceof DeletedProjectConflict?409:error instanceof TypeError?400:503).end());return;
     }
-    const operation=req.url === '/admin/ui/health' ? adminHealth(db,body) : req.url === '/admin/ui/commerce' ? commerceAdmin(db,body) : req.url === '/admin/ui/project-create' ? registerProject(db,body,req.headers['idempotency-key']) : req.url === '/admin/ui/project-history' ? registrationHistory(db,body) : req.url === '/admin/ui/notifications' ? notificationAdmin(db,body) : req.url === '/admin/ui/operational' ? operationalAdmin(db,body) : req.url === '/admin/ui/distribution' ? distributionAdmin(db,body) : req.url === '/admin/ui/observed-metrics' ? metricsAdmin(db,body) : req.url === '/admin/ui/pages' ? managePages(db,body) : req.url === '/admin/ui/checkout-metrics' ? checkoutSummary(db,body) : req.url === '/admin/ui/protection' ? protectionAdmin(db,body) : req.url === '/admin/ui/incidents' ? incidentList(db,body) : req.url === '/admin/ui/incident-status' ? classifyIncident(db,body) : req.url === '/admin/ui/settings' ? saveNotificationSettings(db,body) : req.url === '/admin/ui/preference' ? setNotificationPreference(db,body) : req.url === '/admin/ui/cta-inventory' ? inventory(db,body) : req.url === '/admin/ui/cta-import' ? importUiInventory(db,body) : req.url?.startsWith('/admin/ui/installation') ? installation(db,body,req.url) : req.url === '/admin/ui/cta-commercial' ? approveCommercial(db,body).then(()=>({state:'APPROVED'})) : selectObservation(db,body).then(()=>({state:'PENDING'}));
+    const operation=req.url === '/admin/ui/telemetry-origins' ? telemetryOriginAdmin(db,body) : req.url === '/admin/ui/health' ? adminHealth(db,body) : req.url === '/admin/ui/commerce' ? commerceAdmin(db,body) : req.url === '/admin/ui/project-create' ? registerProject(db,body,req.headers['idempotency-key']) : req.url === '/admin/ui/project-history' ? registrationHistory(db,body) : req.url === '/admin/ui/notifications' ? notificationAdmin(db,body) : req.url === '/admin/ui/operational' ? operationalAdmin(db,body) : req.url === '/admin/ui/distribution' ? distributionAdmin(db,body) : req.url === '/admin/ui/observed-metrics' ? metricsAdmin(db,body) : req.url === '/admin/ui/pages' ? managePages(db,body) : req.url === '/admin/ui/checkout-metrics' ? checkoutSummary(db,body) : req.url === '/admin/ui/protection' ? protectionAdmin(db,body) : req.url === '/admin/ui/incidents' ? incidentList(db,body) : req.url === '/admin/ui/incident-status' ? classifyIncident(db,body) : req.url === '/admin/ui/settings' ? saveNotificationSettings(db,body) : req.url === '/admin/ui/smtp-test' ? testNotificationSmtp(db,body) : req.url === '/admin/ui/preference' ? setNotificationPreference(db,body) : req.url === '/admin/ui/cta-inventory' ? inventory(db,body) : req.url === '/admin/ui/cta-import' ? importUiInventory(db,body) : req.url?.startsWith('/admin/ui/installation') ? installation(db,body,req.url) : req.url === '/admin/ui/cta-commercial' ? approveCommercial(db,body).then(()=>({state:'APPROVED'})) : selectObservation(db,body).then(()=>({state:'PENDING'}));
     void operation.then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error:unknown)=>{
       if (error instanceof DistributionBlocked) {
         res.writeHead(400,{'Content-Type':'application/json'}).end(JSON.stringify({code:error.code}));

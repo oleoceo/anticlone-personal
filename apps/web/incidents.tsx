@@ -2,7 +2,7 @@ import {useState} from 'react';
 import {Link, useLocation, useNavigate} from 'react-router-dom';
 import {AdminApi, pageList, type Project} from './admin-api';
 import {Back, Breadcrumbs, incidentPath, pagePath, projectIncidentsPath, projectPath, searchOf, sectionParams, useContextNavigation} from './navigation';
-import {DetailsData, formData, formatDate, useOperation, uuid, value, type SetGuard} from './operations';
+import {DetailsData, formData, formatDate, InputError, useOperation, uuid, value, type SetGuard} from './operations';
 import {ProtectionScreen} from './protection';
 import type {Incident, ProtectionAction} from './protection-contracts';
 import {Failure, Heading, Loading, useQuery} from './ui';
@@ -163,6 +163,7 @@ function IncidentDetail({incident, project, api, pid, actionUrl, search, refresh
         degradation: incident.degradation, notification: incident.notification, project_cta_context: incident.project_cta_context,
         browser_claims: incident.browser_claims}}/>
     </section>
+    {pid && <PageEvidence api={api} project={project.id} page={pid} setGuard={setGuard} refresh={refresh} />}
     {incident.triage_version !== null && <section className="panel">
       <h2>Alterar situação</h2>
       <form onSubmit={event => {
@@ -190,28 +191,76 @@ function IncidentDetail({incident, project, api, pid, actionUrl, search, refresh
   </>;
 }
 
+export function PageEvidence({api, project, page, setGuard, refresh}: {
+  api: AdminApi; project: string; page: string; setGuard: SetGuard; refresh?: () => void;
+}) {
+  const [id, setId] = useState(() => crypto.randomUUID());
+  const [refreshCount, setRefreshCount] = useState(0);
+  const operation = useOperation(setGuard);
+  return <details className="panel">
+    <summary>Evidência de acesso à LP original</summary>
+    {operation.notice()}
+    <p>Registre metadados de um log próprio ou autorizado. Informe apenas o tipo de recurso, a fonte e, se disponível, o horário declarado no log.</p>
+    <form onSubmit={event => {
+      const form = event.currentTarget;
+      const fields = formData(event);
+      const time = value(fields, 'accessed');
+      const accessed = time ? new Date(time) : null;
+      if (accessed && !Number.isFinite(accessed.getTime())) {
+        operation.setError(new InputError('Confira a data e a hora informadas.'));
+        return;
+      }
+      const source = value(fields, 'source');
+      const resource = value(fields, 'resource');
+      operation.review('Registrar evidência de acesso', <p>{resource} · {accessed ? formatDate(accessed.toISOString()) : 'Horário desconhecido'}</p>, async () => {
+        const result = await api.request<{state: string}>('original-requests', {project, page, id, source, resource,
+          authorized: fields.has('authorized'), ...(accessed ? {accessed_at: accessed.toISOString()} : {})});
+        form.reset();
+        setId(crypto.randomUUID());
+        setRefreshCount(current => current + 1);
+        refresh?.();
+        return result.state === 'ALREADY_IMPORTED' ? 'Esta evidência já está registrada.' : 'Evidência registrada como declaração administrativa.';
+      }, fields);
+    }}>
+      <label>Fonte do log<select name="source" required defaultValue="">
+        <option value="">Selecione</option><option value="owned_access_log">Log próprio</option><option value="authorized_provider_log">Log de provedor autorizado</option>
+      </select></label>
+      <label>Tipo de recurso<select name="resource" required defaultValue="">
+        <option value="">Selecione</option><option value="HTML">HTML</option><option value="SCRIPT">Script</option>
+        <option value="STYLE">Folha de estilos</option><option value="IMAGE">Imagem</option><option value="OTHER">Outro</option>
+      </select></label>
+      <label>Horário declarado no log, no fuso deste navegador<input name="accessed" type="datetime-local" step="1"/></label>
+      <label className="check"><input name="authorized" type="checkbox" required/>Tenho autorização para usar este log.</label>
+      <div><button disabled={operation.busy}>Revisar evidência</button></div>
+    </form>
+    {!refresh && <ReceiptHistory key={refreshCount} api={api} project={project} pid={page}/>}
+  </details>;
+}
+
 function ReceiptHistory({api, project, pid}: {api: AdminApi; project: string; pid?: string}) {
   type Page = {available: boolean; events: unknown[]; next_after: string | null};
   const [state, setState] = useState<Page>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>();
-  async function load() {
+  async function load(restart = false) {
     if (busy) return;
     setBusy(true);
     setError(undefined);
     try {
       const next = await api.request<Page>('receipt-history', {project, ...(pid && uuid.test(pid) ? {page: pid} : {}),
-        ...(state?.next_after ? {after: state.next_after} : {})});
-      setState({...next, events: [...(state?.events ?? []), ...next.events]});
+        ...(!restart && state?.next_after ? {after: state.next_after} : {})});
+      setState({...next, events: [...(restart ? [] : state?.events ?? []), ...next.events]});
     } catch (error) { setError(error); }
     finally { setBusy(false); }
   }
   return <details><summary>{pid ? 'Histórico de recibos da LP' : 'Histórico de recibos do projeto'}</summary>
     <p>Consulta dos recibos retidos nos últimos 7 dias.</p>
-    {error !== undefined && <Failure error={error} retry={() => void load()}/>}
+    {error !== undefined && <Failure error={error}/>}
     {state && (!state.available ? <p>Recibos indisponíveis.</p> : state.events.length ?
       <pre tabIndex={0}><code>{JSON.stringify(state.events, null, 2)}</code></pre> : <p>Nenhum recibo no recorte.</p>)}
-    {(!state || state.next_after) && <button type="button" disabled={busy} onClick={() => void load()}>
-      {busy ? 'Consultando…' : state ? 'Carregar mais recibos' : 'Consultar histórico'}</button>}
+    <div className="action-links">
+      <button type="button" disabled={busy} onClick={() => void load(true)}>{busy ? 'Consultando…' : state ? 'Atualizar recibos' : 'Consultar histórico'}</button>
+      {state?.next_after && <button type="button" disabled={busy} onClick={() => void load()}>Carregar mais recibos</button>}
+    </div>
   </details>;
 }

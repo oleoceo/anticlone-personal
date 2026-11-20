@@ -17,8 +17,11 @@ import { handleAdminUi } from './admin-ui.js';
 import { configureHealth, healthHistory, healthSettings } from './health-alerts.js';
 import { disableInstallation, enableInstallation, installationDiagnostic, InstallationOriginConflict } from './installation.js';
 
+const sessionSeconds = 900;
+
 // Private loopback process, one owner, ephemeral sessions and rate limit.
-export function createAdminServer(passwordRecord: string, totpSecret: string, db: Pool, now: () => number = Date.now) {
+export function createAdminServer(passwordRecord: string, totpSecret: string, db: Pool, now: () => number = Date.now,
+  {webSessionWithoutTimeout = false}: {webSessionWithoutTimeout?: boolean} = {}) {
   if (!/^[A-Z2-7]{32}$/.test(totpSecret)) throw new Error('invalid TOTP configuration');
   const totp = new TOTP({ secret: Secret.fromBase32(totpSecret), algorithm: 'SHA1', digits: 6, period: 30 });
   const factorId = createHash('sha256').update(totpSecret).digest('hex');
@@ -242,10 +245,21 @@ export function createAdminServer(passwordRecord: string, totpSecret: string, db
       } catch { if (client) { try { await client.query('ROLLBACK'); } catch { /* fail closed */ } } res.writeHead(503).end(); return; }
       finally { client?.release(); }
       const token = randomBytes(32).toString('hex');
+      const browserSession = uiLogin && webSessionWithoutTimeout;
       // Only one active session; replacing it bounds storage and revokes previous tokens.
-      sessions.clear(); sessions.set(createHash('sha256').update(token).digest('hex'), { expiry: now() + 15 * 60_000, kind: uiLogin ? 'web' : 'bearer', csrf: randomBytes(32).toString('hex') });
-      if (uiLogin) { res.setHeader('Set-Cookie', [`admin_session=${token}; HttpOnly; SameSite=Strict; Path=/admin/ui/; Max-Age=900`, 'admin_login_csrf=; HttpOnly; SameSite=Strict; Path=/admin/ui/; Max-Age=0']); res.writeHead(204).end(); return; }
-      res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ token, expiresIn: 900 }));
+      sessions.clear();
+      sessions.set(createHash('sha256').update(token).digest('hex'), {
+        expiry: browserSession ? Infinity : now() + sessionSeconds * 1_000,
+        kind: uiLogin ? 'web' : 'bearer',
+        csrf: randomBytes(32).toString('hex'),
+      });
+      if (uiLogin) {
+        const maxAge = browserSession ? '' : `; Max-Age=${sessionSeconds}`;
+        res.setHeader('Set-Cookie', [`admin_session=${token}; HttpOnly; SameSite=Strict; Path=/admin/ui/${maxAge}`,
+          'admin_login_csrf=; HttpOnly; SameSite=Strict; Path=/admin/ui/; Max-Age=0']);
+        res.writeHead(204).end(); return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ token, expiresIn: sessionSeconds }));
     });
   });
   server.maxConnections=64;

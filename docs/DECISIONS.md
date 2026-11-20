@@ -37,6 +37,10 @@ Não adicionar decisões para preferências triviais; registrar somente trade-of
 
 | D15 | Drift operacional de ponto (review_required/review_after_observation ou suspension comercial) nao invalida a aprovacao inteira da pagina. A decisao filtra os pontos suspensos; snapshot aprovado continua imutavel e destino/oferta/marcador/mapeamento/referencia/versao/politica alterados continuam invalidando a configuracao. | Conclusao solicitada pelo proprietario: GS08 integrado scoped demonstrou o bloqueio global anterior. Migration aditiva 049 e snapshot runtime normalizam exclusivamente flags operacionais; publicacao/aprovacao administrativa continua recusando ponto pendente. tests/scoped-gateway.test.ts exercita tres CTAs, drift isolado, revisao e invalidacao por destino alterado. | IMPLEMENTADO EM LAB; revisao consolidada e regressao final pendentes |
 
+## Recuperação integrada do painel — decisão do proprietário
+
+A D16 registra o escopo da estabilização anterior à entrega do React. Na recuperação atual, o proprietário definiu o React V2.2 como entrada administrativa e o PR #82 como integração única. As decisões de proteção e os limites operacionais da matriz continuam aplicáveis. As provas e os limites estão em [Recuperação integrada no Dev](RECUPERACAO-INTEGRADA-DEV.md).
+
 ## Distribuição do runtime v1 — decisão do proprietário em 2026-11-10
 
 Um hostname público operacional inicial atende SCRIPT, TELEMETRY e STATIC_ASSETS; admin privado separado. Distribuição, instalação e aliases são versionados e persistidos por LP, sem rotação em consultas. Evolução para origens próprias por papel mantém revisões/rotas antigas até migração explícita. Não reconstruir módulos funcionais nem converter canários em mitigação. Contrato e mapa do código após PR #63 em [RUNTIME-DISTRIBUTION-CONTRACT.md](RUNTIME-DISTRIBUTION-CONTRACT.md); implementação aditiva 051 e testes de compatibilidade. Sem mudança de D05, ativação operacional, DNS, merge ou deploy.
@@ -124,3 +128,13 @@ somente400 vazio ou502 HTML sem JS, idêntico à página de outage real do mesmo
 direto404 vazio preservado. Não alterar SSL reuse, app, limites ou timeouts.
 Foco corrigido6/6 PASS,0 skips em75,9s; integração SHA25620686122.
 Resultado integral oficial final continua exigido no PR78.
+
+## Pool de telemetria administrada por revisão
+
+A pool amplia a decisão de distribuição do runtime por papel de 2026-11-10.
+A migração 068 adiciona o resultado da verificação. A seleção de um endpoint
+exige cadastro ativo, autorização privada e resposta operacional após DNS e
+HTTPS válidos. Uma seleção explícita em nova revisão usa o domínio nos três
+papéis para gerar o trecho HTML. A opção de manter os endereços conserva a
+distribuição por papel. Revisões e aliases permanecem imutáveis. A consulta da
+lista e o cadastro são locais. Somente a ação de verificação consulta a rede.

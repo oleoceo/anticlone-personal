@@ -7,7 +7,7 @@ import {Failure, Loading, useQuery} from './ui';
 
 type Environment = {
   database: 'READY' | 'UNAVAILABLE';
-  gateway: {state: string; checkedAt?: string};
+  gateway: {state: string; mode?: string; checkedAt?: string};
   publicationIssues: InstallationIssue[] | null;
   verifierIssue: string | null;
 };
@@ -25,6 +25,10 @@ const gatewayStates: Record<string, [string, string]> = {
   UNEXPECTED_RESPONSE: ['Resposta local inesperada', 'Confira se a porta e o perfil do gateway correspondem à sonda HTTP local.'],
   NOT_CONFIGURED: ['Gateway local sem sonda', 'Configure ADMIN_GATEWAY_HEALTH_PORT para o perfil HTTP direto. A cobertura pública permanece sem medição.'],
   INVALID_CONFIGURATION: ['Porta da sonda inválida', 'Informe uma porta TCP válida no ambiente privado do admin.'],
+};
+const gatewayModes: Record<string, string> = {
+  LAB: 'Laboratório', PILOT_OBSERVE: 'Somente observação',
+  OPERATIONAL: 'Operacional · ações exigem autorização por LP',
 };
 
 const events: Record<string,string> = {OPENED:'Episódio aberto', ATTEMPT:'Tentativa de envio', FAILED_UNCERTAIN:'Falha com resultado incerto',
@@ -49,6 +53,7 @@ export function HealthOperations({api, projects, setGuard}: {api: AdminApi; proj
             <p>{status.database==='READY' ? 'Respondendo' : 'Consulta indisponível. Confira a conexão privada do admin.'}</p>
           </section>
           <section className="operation-card"><h3>Gateway</h3><p><strong>{gateway?.[0]}</strong></p><p className="muted">{gateway?.[1]}</p>
+            {status.gateway.mode && <p>Perfil do gateway · {gatewayModes[status.gateway.mode]}</p>}
             {status.gateway.checkedAt && <small>{new Date(status.gateway.checkedAt).toLocaleString('pt-BR')}</small>}
           </section>
           <section className="operation-card"><h3>Publicação de endereços</h3>
@@ -74,9 +79,18 @@ export function HealthOperations({api, projects, setGuard}: {api: AdminApi; proj
       <div className="action-links"><Link {...nav.link('/visao-geral')}>Abrir diagnósticos na Visão Geral</Link>
         <Link {...nav.link('/configuracoes/notificacoes')}>Abrir revisão de alertas</Link></div>
     </section>
-    <details className="panel"><summary>Recuperação, retenção e operações avançadas</summary>
-      <p>Backup, restauração e retenção usam as ferramentas privadas. O <a href="/admin/ui/">painel anterior</a> mantém os fluxos avançados legados.</p>
-    </details>
+    <section className="panel">
+      <h2>Recuperação e retenção</h2>
+      <p>Use o terminal privado com as ferramentas PostgreSQL da mesma versão do servidor. O estado do último backup não está disponível nesta consulta.</p>
+      <details><summary>Procedimento de backup e restauração</summary>
+        <ol className="installation-guide">
+          <li>Configure <code>RECOVERY_DATABASE_URL</code> no ambiente privado e execute <code>npm run recovery -- backup PASTA_PRIVADA</code>.</li>
+          <li>Confira o manifesto, aponte <code>RECOVERY_DATABASE_URL</code> para o banco vazio separado <code>anticlone_restore_ensaio</code> e execute <code>npm run recovery -- restore PASTA_PRIVADA anticlone_restore_ensaio</code>.</li>
+          <li>Confronte as contagens, a integridade e a inicialização dos serviços conforme <code>docs/POSTGRES-RECOVERY.md</code>.</li>
+        </ol>
+        <p>Para expiração de arquivos, use a prévia de <code>npm run retention</code> conforme <code>docs/OPERATIONAL-CORE-CLOSURE.md</code>.</p>
+      </details>
+    </section>
   </>;
 }
 

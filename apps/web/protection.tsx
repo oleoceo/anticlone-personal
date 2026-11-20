@@ -18,7 +18,7 @@ export function scopedProtection(protection: Protection, lp: PageProtection) {
 }
 
 export function ProtectionScreen({api, project, page, incident, action, setGuard}: {
-  api: AdminApi; project: Project; page: Page; incident: Incident; action: ProtectionAction; setGuard: SetGuard;
+  api: AdminApi; project: Project; page: Page; incident?: Incident; action: ProtectionAction; setGuard: SetGuard;
 }) {
   const pageAction = action === 'redirecionar';
   const data = useProtection(api, project.id, page.id);
@@ -26,12 +26,13 @@ export function ProtectionScreen({api, project, page, incident, action, setGuard
     project: project.id, page: page.id, action: 'inspect',
   }, signal));
   const operation = useOperation(setGuard);
-  const controls = {...operation, busy: operation.busy || data.pr.pending || data.lp.pending || authorization.pending};
+  const controls = {...operation, busy: operation.busy || data.pr.pending || data.lp.pending || authorization.pending ||
+    data.pr.error !== undefined || data.lp.error !== undefined || authorization.error !== undefined};
   function refresh() { data.refresh(); authorization.revalidate(); }
 
   return <>
-    <Heading title={pageAction ? 'Redirecionar página' : 'Substituir checkout/CTA'} description={project.name + ' · ' + page.name + ' · ' + incident.host}
-      actions={<button type="button" disabled={controls.busy} onClick={refresh}>Atualizar situação</button>}/>
+    <Heading title={pageAction ? 'Redirecionar página' : 'Substituir checkout/CTA'} description={[project.name, page.name, incident?.host].filter(Boolean).join(' · ')}
+      actions={<button type="button" disabled={operation.busy} onClick={refresh}>Atualizar situação</button>}/>
     <ol className="steps protection-steps" aria-label="Etapas de proteção">
       <li><span>1</span>Publicar política</li><li><span>2</span>Aprovar na LP</li><li><span>3</span>Autorizar contexto</li>
     </ol>
@@ -41,9 +42,11 @@ export function ProtectionScreen({api, project, page, incident, action, setGuard
     {data.pr.data && data.lp.data ? <>
       <ProtectionSummary protection={data.pr.data} state={data.lp.data} authorization={authorization.data}
         fresh={!data.pr.pending && !data.lp.pending && !authorization.pending && data.pr.error === undefined &&
-          data.lp.error === undefined && authorization.error === undefined} pageAction={pageAction} incidentHost={incident.host}/>
+          data.lp.error === undefined && authorization.error === undefined} pageAction={pageAction} incidentHost={incident?.host}/>
       <PolicyEditor api={api} project={project} page={page} protection={data.pr.data} pageState={data.lp.data}
         pageAction={pageAction} operation={controls} refresh={refresh}/>
+      {!incident && pageAction && <ProjectPolicyVersion api={api} project={project} protection={data.pr.data}
+        operation={controls} refresh={refresh}/>}
       {!pageAction && <CtaWorkspace api={api} project={project.id} page={page} protection={scopedProtection(data.pr.data, data.lp.data)}
         refresh={refresh} setGuard={setGuard}/>}
       <Approval api={api} project={project.id} page={page} state={data.lp.data} operation={controls} refresh={refresh}/>
@@ -57,7 +60,7 @@ export function ProtectionScreen({api, project, page, incident, action, setGuard
 type Operation = ReturnType<typeof useOperation>;
 
 function ProtectionSummary({protection, state, authorization, fresh, pageAction, incidentHost}: {
-  protection: Protection; state: PageProtection; authorization?: Operational; fresh: boolean; pageAction: boolean; incidentHost: string;
+  protection: Protection; state: PageProtection; authorization?: Operational; fresh: boolean; pageAction: boolean; incidentHost?: string;
 }) {
   const scoped = scopedProtection(protection, state);
   const surfaces = scoped.ctaSurfaces.filter(policy => state.urls.some(url => url.pathname === policy.pathname));
@@ -74,7 +77,7 @@ function ProtectionSummary({protection, state, authorization, fresh, pageAction,
   if (fresh && authorization) {
     if (!recorded) operational = 'Sem autorização registrada.';
     else if (!recorded.enabled) operational = 'Autorização suspensa.';
-    else if (new URL(recorded.copy_origin).hostname !== incidentHost.toLowerCase()) operational = 'A autorização foi registrada para outro domínio.';
+    else if (incidentHost && new URL(recorded.copy_origin).hostname !== incidentHost.toLowerCase()) operational = 'A autorização foi registrada para outro domínio.';
     else if (!state.page.enabled) operational = 'A LP está desabilitada no cadastro consultado.';
     else if (!matchesApproval) operational = 'A autorização registrada pertence a uma aprovação anterior.';
     else operational = 'Autorização corresponde à aprovação consultada. A execução da proteção não é confirmada por esta consulta.';
@@ -82,7 +85,8 @@ function ProtectionSummary({protection, state, authorization, fresh, pageAction,
   return <section className="panel operation-section" aria-labelledby="protection-summary">
     <h2 id="protection-summary">Estado e escopo da proteção</h2>
     <dl className="review">
-      <dt>Versão publicada no projeto</dt><dd>{published || 'Nenhuma versão publicada para esta seleção'}</dd>
+      <dt>{pageAction ? 'Versão de entrada selecionada no projeto' : 'Versões publicadas para esta LP'}</dt>
+      <dd>{published || 'Nenhuma versão publicada para esta seleção'}</dd>
       <dt>Versões vinculadas à aprovação atual da LP</dt><dd>{state.approvalId ?
         <>{bindings || 'Nenhum vínculo retornado'} · aprovação {state.approvalId}</> : 'Sem aprovação atual para a configuração da LP'}</dd>
       <dt>Origem e caminho da autorização registrada</dt><dd>{recorded ?
@@ -91,6 +95,35 @@ function ProtectionSummary({protection, state, authorization, fresh, pageAction,
     </dl>
     <p>Políticas são publicadas no projeto e podem ser compartilhadas por outras LPs conforme seus vínculos. A aprovação e a autorização se aplicam à LP selecionada.</p>
   </section>;
+}
+
+function ProjectPolicyVersion({api, project, protection, operation, refresh}: {
+  api: AdminApi; project: Project; protection: Protection; operation: Operation; refresh: () => void;
+}) {
+  const versions = protection.versions.filter(policy => policy.version !== protection.page?.version);
+  if (!versions.length) return null;
+  return <details className="panel operation-section">
+    <summary>Selecionar versão de entrada do projeto</summary>
+    <p>Define a versão usada pelo gateway legado. As aprovações por LP seguem suas próprias revisões.</p>
+    <form onSubmit={event => {
+      const fields = formData(event);
+      const selected = versions.find(policy => policy.version === Number(fields.get('version')));
+      if (!selected) return;
+      operation.review('Selecionar versão de entrada', <p>{project.name} · v{selected.version} · {selected.approved_destination}</p>, async () => {
+        const result = await api.request<{version: number}>('protection', {project: project.id,
+          action: 'page-activate', data: {version: selected.version}});
+        refresh();
+        return 'Versão de entrada selecionada no projeto: v' + result.version + '.';
+      }, fields);
+    }}>
+      <label>Versão publicada<select name="version" required defaultValue="" key={protection.page?.version}>
+        <option value="">Selecione</option>{versions.map(policy => <option key={policy.version} value={policy.version}>
+          v{policy.version} · {policy.enabled ? 'Habilitada' : 'Desabilitada'} · {policy.approved_destination}
+        </option>)}
+      </select></label>
+      <button type="submit" disabled={operation.busy}>Revisar versão de entrada</button>
+    </form>
+  </details>;
 }
 
 function CheckoutPoints({protection, state, surfaces}: {protection: Protection; state: PageProtection; surfaces: string[]}) {
@@ -290,7 +323,7 @@ function Approval({api, project, page, state, operation, refresh}: {
 }
 
 function Authorization({api, project, page, incident, state, pageState, operation, refresh}: {
-  api: AdminApi; project: string; page: Page; incident: Incident; state: Operational; pageState: PageProtection;
+  api: AdminApi; project: string; page: Page; incident?: Incident; state: Operational; pageState: PageProtection;
   operation: Operation; refresh: () => void;
 }) {
   const approvalVisible = pageState.approvalId !== null && pageState.urls.length === 1 && !pageState.page.url_review_required &&
@@ -314,7 +347,7 @@ function Authorization({api, project, page, incident, state, pageState, operatio
       const copyPathname = value(fields, 'pathname');
       let observedHost = '';
       try { observedHost = new URL(copyOrigin).hostname.toLowerCase(); } catch { /* Server validates the origin. */ }
-      if (observedHost !== incident.host.toLowerCase()) {
+      if (incident && observedHost !== incident.host.toLowerCase()) {
         operation.setError(new InputError('Informe a origem HTTPS do domínio deste incidente.'));
         return;
       }

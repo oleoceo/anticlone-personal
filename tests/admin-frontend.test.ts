@@ -1,16 +1,20 @@
 import assert from 'node:assert/strict';
+import {execFileSync, spawn} from 'node:child_process';
 import {createHmac, randomUUID, scryptSync} from 'node:crypto';
 import {once} from 'node:events';
-import {mkdir, readdir, readFile} from 'node:fs/promises';
-import {request} from 'node:http';
+import {mkdir, mkdtemp, readdir, readFile, rm} from 'node:fs/promises';
+import {createServer, request} from 'node:http';
+import {createServer as createTlsServer} from 'node:https';
 import type {AddressInfo} from 'node:net';
+import {tmpdir} from 'node:os';
+import {setTimeout as delay} from 'node:timers/promises';
 import {test, type TestContext} from 'node:test';
 import {TOTP, Secret} from 'otpauth';
 import {Pool} from 'pg';
 import {chromium, type Page} from 'playwright';
 import {createAdminServer} from '../apps/admin-auth.js';
 import {join} from 'node:path';
-import {commerceAdmin, commerceSigningInput, provisionCommerceSender, receiveCommerce} from '../apps/commerce.js';
+import {commerceAdmin, commerceSigningInput, commerceWebhook, provisionCommerceSender, receiveCommerce} from '../apps/commerce.js';
 import {observe} from '../apps/detection.js';
 import {managePages} from '../apps/protected-pages.js';
 import {recordObservedFact} from '../apps/observed-metrics.js';
@@ -21,7 +25,7 @@ const password = 'frontend lab only';
 const endpoint = 'https://runtime.frontend.test';
 const action = (page: Page, name: string) => page.getByRole('button', {name, exact: true});
 
-async function fixture(test: TestContext) {
+async function fixture(test: TestContext, browserArgs?: string[], webSessionWithoutTimeout = false) {
   assert.ok(process.env.TEST_DATABASE_URL);
   const root = new Pool({connectionString: process.env.TEST_DATABASE_URL});
   const schema = 'frontend_' + randomUUID().replaceAll('-', '');
@@ -55,18 +59,18 @@ async function fixture(test: TestContext) {
   const totp = new TOTP({secret: Secret.fromBase32(secret)});
   const salt = Buffer.alloc(16, 43);
   const record = 'scrypt$' + salt.toString('hex') + '$' + scryptSync(password, salt, 64).toString('hex');
-  const server = createAdminServer(record, secret, db, () => clock).listen(0, '127.0.0.1');
+  const server = createAdminServer(record, secret, db, () => clock, {webSessionWithoutTimeout}).listen(0, '127.0.0.1');
   await once(server, 'listening');
   test.after(() => new Promise<void>((resolve, reject) => {
     server.close(error => error ? reject(error) : resolve());
     server.closeAllConnections();
   }));
   const origin = 'http://127.0.0.1:' + (server.address() as AddressInfo).port;
-  const browser = await chromium.launch();
+  const browser = await chromium.launch({args: browserArgs});
   test.after(() => browser.close());
 
   return {
-    db, origin, browser, server,
+    db, schema, origin, browser, server,
     code: () => totp.generate({timestamp: clock}),
     advance: (milliseconds: number) => { clock += milliseconds; },
   };
@@ -155,6 +159,22 @@ for (const width of [1440, 390]) {
     await action(page, 'Confirmar').click();
     await page.getByText('Revisão 1', {exact: true}).waitFor();
     assert.match(await page.getByRole('region', {name: 'Trecho HTML'}).locator('code').innerText(), /runtime\.frontend\.test\/r\/v2\//);
+    const technology = page.getByLabel('Tecnologia');
+    await technology.selectOption('React / Vite');
+    await page.getByText(/Adicione o CSS aos estilos globais/).waitFor();
+    await technology.selectOption('WordPress');
+    await page.getByText(/Aplique a classe anticlone-canary a um bloco/).waitFor();
+    await technology.selectOption('HTML');
+    assert.equal(await page.getByRole('link', {name:'Abrir página oficial em nova aba'}).getAttribute('href'),
+      'https://offer.frontend.test/inicio');
+    const diagnose = page.getByRole('link', {name:'Ir para o diagnóstico'});
+    await diagnose.focus();
+    await diagnose.press('Enter');
+    assert.equal(new URL(page.url()).hash, '#install-check');
+    assert.equal(await page.evaluate(() => document.activeElement?.id), 'install-check');
+    await page.goBack();
+    assert.equal(page.url(), installation);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     await page.getByText('Recursos, revisões e rotação', {exact: true}).click();
     assert.equal(await page.locator('.resources li').count(), 12);
     await action(page, 'Publicar nova revisão').click();
@@ -521,6 +541,38 @@ test('new and legacy consoles share the same MFA, session lifetime and private r
   assert.equal((await context.cookies()).some(cookie => cookie.name === 'admin_session'), false);
 });
 
+test('private Dev web session remains active after 15 minutes and still supports revocation', {timeout: 60_000}, async t => {
+  const lab = await fixture(t, undefined, true);
+  const context = await lab.browser.newContext();
+  const page = await context.newPage();
+  await page.goto(lab.origin + ui + '/visao-geral');
+  assert.equal(await login(page, lab.code()), 204);
+  const overview = page.getByRole('heading', {name: 'Visão Geral', exact: true});
+  await overview.waitFor();
+  const session = (await context.cookies()).find(cookie => cookie.name === 'admin_session');
+  assert.ok(session?.httpOnly);
+  assert.equal(session.sameSite, 'Strict');
+  assert.equal(session.expires, -1, 'browser-session cookie without a fixed Max-Age');
+
+  lab.advance(8 * 60 * 60_000);
+  await page.reload();
+  await overview.waitFor();
+  await action(page, 'Sair da sessão').click();
+  await action(page, 'Sair').click();
+  await page.getByRole('heading', {name: 'Entre no seu espaço'}).waitFor();
+  assert.equal((await fetch(lab.origin + '/admin/ui/projects', {headers: {
+    'sec-fetch-site': 'same-origin', cookie: 'admin_session=' + session.value,
+  }})).status, 401);
+
+  const bearer = await fetch(lab.origin + '/admin/login', {method: 'POST',
+    headers: {'content-type': 'application/json'}, body: JSON.stringify({password, code: lab.code()})});
+  assert.equal(bearer.status, 200);
+  const {token, expiresIn} = await bearer.json();
+  assert.equal(expiresIn, 900);
+  lab.advance(900_000);
+  assert.equal((await fetch(lab.origin + '/admin/session', {headers: {authorization: 'Bearer ' + token}})).status, 401);
+});
+
 for (const width of [1440, 390]) {
   test('incident to PAGE_REDIRECT, REPLACE_CONVERSION, estimate and scoped commerce at ' + width + ' px',
     {timeout: 120_000}, async t => {
@@ -789,6 +841,8 @@ for (const width of [1440, 390]) {
     await recordObservedFact(lab.db, project.id, {page: lp.page, event: randomUUID(), session: 'ca'.repeat(16),
       action: 'CTA_CLICK_OBSERVED', traffic: 'DIRECT_UNKNOWN', version: null, evidence: 'BROWSER_UNVERIFIED'});
     await lab.db.query("INSERT INTO estimate_assumptions(project_id,version,ticket_minor,conversion_basis_points,currency) VALUES($1,1,12000,500,'BRL')", [project.id]);
+    await recordObservedFact(lab.db, project.id, {page: lp.page, event: randomUUID(), session: 'ca'.repeat(16),
+      action: 'SESSION_OBSERVED', traffic: 'DIRECT_UNKNOWN', version: null, evidence: 'BROWSER_UNVERIFIED'});
     const checkoutEnv = process.env.COMMERCE_ENCRYPTION_KEY;
     process.env.COMMERCE_ENCRYPTION_KEY = 'cd'.repeat(32);
     t.after(() => {
@@ -826,6 +880,24 @@ for (const width of [1440, 390]) {
     await page.getByText('Pronta para publicar', {exact:true}).waitFor();
     await page.getByText('0 alertas no recorte de revisão', {exact:true}).waitFor();
     await capture('01-visao-geral');
+    await page.getByRole('combobox', {name:'Métrica', exact:true}).selectOption('CTA_CLICK_OBSERVED');
+    await page.getByLabel('Origem declarada').selectOption('DIRECT_UNKNOWN');
+    const chart = page.getByRole('img', {name:/Cliques de CTA por dia em UTC/});
+    assert.equal(await chart.locator('circle[data-count="1"]').count(), 1);
+    await capture('13-grafico', 'Atividade observada');
+    await action(page, 'Tabela').click();
+    await page.getByRole('region', {name:'Atividade observada'}).getByRole('table').getByRole('cell', {name: '1', exact: true}).waitFor();
+    const finance = page.getByRole('region', {name:'Detalhamento das estimativas'});
+    await finance.getByText('R$ 120,00 · 5% · v1', {exact:true}).waitFor();
+    await finance.getByText('Estimativa R$ 6,00', {exact:true}).waitFor();
+    const traffic = page.getByRole('region', {name:'Origem do tráfego'});
+    assert.equal(await traffic.getByRole('meter', {name:'Direto ou desconhecido'}).getAttribute('value'), '1');
+    for (const viewport of [360, 768, 1024, 1920]) {
+      await page.setViewportSize({width: viewport, height: 844});
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'reflow at ' + viewport);
+    }
+    await page.setViewportSize({width, height: width < 760 ? 844 : 1000});
+    await capture('10-atividade', 'Atividade observada');
     await capture('02-instalacoes-alertas', 'Instalações e alertas');
     await page.getByRole('link', {name:'Administrar oferta'}).click();
     await action(page, 'Pausar projeto').click();
@@ -846,6 +918,8 @@ for (const width of [1440, 390]) {
     await action(page, 'Revisar exclusão').click();
     await action(page, 'Confirmar').click();
     await page.getByText('Excluído', {exact:true}).waitFor();
+    await page.getByText('Consultar bloqueios da purga física', {exact:true}).click();
+    await page.getByText('project_lifecycle_audit', {exact:false}).first().waitFor();
     const restore = page.locator('details').filter({has: page.getByText('Restaurar projeto', {exact:true})});
     if (!await restore.getByLabel('Justificativa').isVisible()) await restore.getByText('Restaurar projeto', {exact:true}).click();
     await restore.getByLabel('Justificativa').fill('Restaurar cadastro de laboratório');
@@ -900,6 +974,7 @@ for (const width of [1440, 390]) {
     await capture('05-notificacoes', 'Notificações e SMTP');
     await action(page, 'Desativar solicitação').click();
     await action(page, 'Confirmar').click();
+    await page.getByText('Solicitação desativada.',{exact:true}).waitFor();
     await page.getByLabel('Projeto dos alertas').selectOption(project.id);
     const alert = (await lab.db.query('SELECT id::text FROM alert_outbox')).rows[0].id;
     await page.getByText(/^CLONE · /).click();
@@ -915,15 +990,17 @@ for (const width of [1440, 390]) {
 
     await page.getByRole('link', {name:'Integrações', exact:true}).click();
     await page.getByText('Criar ou versionar modelo', {exact:true}).click();
+    const editor = page.getByRole('combobox', {name:'Editor do modelo', exact:true});
+    await editor.selectOption('json');
+    await page.getByLabel('Configuração do modelo (JSON)').waitFor();
+    await editor.selectOption('guided');
     await page.getByLabel('Identificador do modelo').fill('Modelo-Horizonte');
-    await page.getByLabel('Configuração do modelo (JSON)').fill(JSON.stringify({
-      auth:'HMAC_SHA256_TIMESTAMP', fields:{event:'event',order:'order',amount:'amount',currency:'currency',
-        status:'status',occurred:'occurred',product:'product'}, statuses:{paid:'PAID'}, money:{unit:'DECIMAL',exponent:2},
-    }));
+    await page.getByLabel('Caminho · Produto', {exact:true}).fill('product');
     await page.getByLabel('Amostra sintética (JSON)').fill(JSON.stringify({
       event:'e1', order:'o1', amount:'19.99', currency:'BRL', status:'paid', occurred:new Date().toISOString(), product:'p1',
     }));
     assert.equal(await page.getByLabel('Modelo para editar').isDisabled(), true);
+    assert.equal(await editor.isDisabled(), true);
     await action(page, 'Testar modelo').click();
     await action(page, 'Confirmar').click();
     await page.getByText('Resultado sanitizado', {exact:true}).waitFor();
@@ -944,6 +1021,65 @@ for (const width of [1440, 390]) {
     await action(page, 'Desativar conta').click();
     await action(page, 'Confirmar').click();
     await page.getByText('Checkout-Horizonte · Inativa', {exact:true}).waitFor();
+    const modelRow = (await lab.db.query('SELECT id, name, config FROM commerce_models WHERE version=1')).rows[0];
+    const account = (await lab.db.query('SELECT id FROM commerce_connections')).rows[0].id as string;
+    const sample = {event:'e2', order:'o2', amount:'19.99', currency:'BRL', status:'paid', occurred:new Date().toISOString(), product:'p2'};
+    await commerceAdmin(lab.db, {action:'model', id:modelRow.id, name:modelRow.name, config:modelRow.config, sample,
+      expected_version:1, reviewed:true});
+    await action(page, 'Atualizar catálogo').click();
+    await page.getByText('Migração de formato', {exact:true}).click();
+    async function prepareMigration() {
+      await page.getByLabel('Nova versão do modelo').selectOption('2');
+      await page.getByLabel('Amostra do formato atual (JSON)').fill(JSON.stringify(sample));
+      await page.getByLabel('Amostra do novo formato (JSON)').fill(JSON.stringify(sample));
+      await action(page, 'Revisar preparação').click();
+      await action(page, 'Confirmar').click();
+      await page.getByText('Aguarda teste autenticado para esta versão.', {exact:false}).waitFor();
+      assert.equal(await action(page, 'Confirmar migração').isDisabled(), true);
+    }
+    await prepareMigration();
+    await action(page, 'Cancelar migração').click();
+    await action(page, 'Confirmar').click();
+    await page.getByText('Migração cancelada.', {exact:true}).waitFor();
+    await prepareMigration();
+    const key = await provisionCommerceSender(lab.db, account, process.env);
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const raw = Buffer.from(JSON.stringify(sample));
+    const format = {version:2,test:true};
+    const signature = createHmac('sha256', Buffer.from(key, 'hex')).update(commerceSigningInput(timestamp, raw, format)).digest('hex');
+    const handle = commerceWebhook(lab.db);
+    const receiver = createServer((req, res) => { if (!handle(req, res)) res.writeHead(404).end(); }).listen(0, '127.0.0.1');
+    await once(receiver, 'listening');
+    t.after(() => new Promise<void>(resolve => { receiver.close(() => resolve()); receiver.closeAllConnections(); }));
+    const webhook = await fetch('http://127.0.0.1:' + (receiver.address() as AddressInfo).port + '/commerce-webhook/' + account, {
+      method: 'POST', body: raw, headers: {'Content-Type': 'application/json', 'X-Checkout-Timestamp': timestamp,
+        'X-Checkout-Signature': signature, 'X-Checkout-Model-Version': String(format.version), 'X-Checkout-Test': '1'},
+    });
+    assert.equal(webhook.status, 200);
+    assert.equal((await webhook.json()).recorded, false);
+    await action(page, 'Atualizar catálogo').click();
+    await action(page, 'Confirmar migração').click();
+    await action(page, 'Confirmar').click();
+    await page.getByText('Migração confirmada.', {exact:true}).waitFor();
+    assert.equal((await lab.db.query('SELECT model_version FROM commerce_connections WHERE id=$1',[account])).rows[0].model_version, 2);
+    await capture('11-migracao-formato');
+
+    assert.equal((await page.goto(lab.origin + ui + '/projetos/' + project.id + '/checkouts'))?.status(), 200);
+    await page.getByText('Vincular checkout', {exact:true}).click();
+    await page.getByLabel('Conta de checkout').selectOption(account);
+    await page.getByLabel('Produto', {exact:true}).fill('checkout-sem-lp');
+    await page.getByLabel('URL do checkout').fill(original + '/checkout');
+    await page.getByLabel('Preço de referência').fill('19,99');
+    await page.getByLabel('Moeda do checkout').selectOption('BRL');
+    await action(page, 'Revisar vínculo comercial').click();
+    await action(page, 'Confirmar').click();
+    await page.getByText('Vínculo salvo. Versão 1.', {exact:true}).waitFor();
+    assert.deepEqual((await lab.db.query('SELECT page_id,product FROM commerce_bindings WHERE project_id=$1',[project.id])).rows,
+      [{page_id:null, product:'checkout-sem-lp'}]);
+    await page.getByText('Vendas do receptor HMAC legado', {exact:true}).click();
+    await page.getByText('Nenhuma venda registrada neste receptor.', {exact:true}).waitFor();
+    await capture('12-checkout-projeto');
+    await page.getByRole('navigation',{name:'Navegação principal'}).filter({visible:true}).getByRole('link',{name:'Configurações'}).click();
     await page.getByRole('link', {name:'Saúde e operações', exact:true}).click();
     await page.getByRole('heading', {name:'Saúde do ambiente'}).waitFor();
     await page.getByText('Gateway local sem sonda',{exact:true}).waitFor();
@@ -952,10 +1088,271 @@ for (const width of [1440, 390]) {
     await page.getByText('Habilite a coleta da origem principal',{exact:false}).waitFor();
     await page.getByText('Histórico de saúde',{exact:true}).click();
     await page.getByText('Sem ocorrências registradas para este projeto.',{exact:true}).waitFor();
-    await page.getByText('Recuperação, retenção e operações avançadas',{exact:true}).click();
-    assert.equal(await page.getByRole('link', {name:'painel anterior',exact:true}).getAttribute('href'), '/admin/ui/');
+    await page.getByText('Procedimento de backup e restauração',{exact:true}).click();
+    await page.getByText('docs/POSTGRES-RECOVERY.md', {exact: true}).waitFor();
     await capture('09-operacoes');
     assert.deepEqual(errors, []);
     assert.deepEqual(foreign, []);
   });
 }
+
+test('React provisions an original LP and copy, then real gateway applies scoped redirect and independent CTAs',
+  {timeout: 90_000}, async t => {
+    const lab = await fixture(t, ['--no-proxy-server', '--host-resolver-rules=MAP *.integration.test 127.0.0.1']);
+    const directory = await mkdtemp(join(tmpdir(), 'anticlone-react-dev-'));
+    t.after(() => rm(directory, {recursive: true, force: true}));
+    execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
+      '-keyout', join(directory, 'key'), '-out', join(directory, 'cert'), '-subj', '/CN=integration.test'], {stdio: 'ignore'});
+
+    const reservation = createServer().listen(0, '127.0.0.1');
+    await once(reservation, 'listening');
+    const backendPort = (reservation.address() as AddressInfo).port;
+    await new Promise<void>(resolve => reservation.close(() => resolve()));
+
+    const oldProbe = process.env.ADMIN_GATEWAY_HEALTH_PORT;
+    process.env.ADMIN_GATEWAY_HEALTH_PORT = String(backendPort);
+    t.after(() => {
+      if (oldProbe === undefined) delete process.env.ADMIN_GATEWAY_HEALTH_PORT;
+      else process.env.ADMIN_GATEWAY_HEALTH_PORT = oldProbe;
+    });
+
+    let html = '', css = '';
+    const tls = createTlsServer({key: await readFile(join(directory, 'key')), cert: await readFile(join(directory, 'cert'))}, (req, res) => {
+      const host = req.headers.host?.split(':')[0];
+      if (host === 'gateway.integration.test') {
+        const upstream = request({hostname: '127.0.0.1', port: backendPort, path: req.url, method: req.method,
+          headers: req.headers}, result => { res.writeHead(result.statusCode ?? 502, result.headers); result.pipe(res); });
+        upstream.on('error', () => res.writeHead(502).end());
+        req.pipe(upstream);
+        return;
+      }
+      if (!['original.integration.test', 'copia.integration.test'].includes(host ?? '') || req.method !== 'GET') {
+        res.writeHead(404).end();
+        return;
+      }
+      const body = req.url === '/lp' ? `<style>${css}</style>
+        <main class="anticlone-canary" data-anticlone-surface="landing">
+          <h1>${host === 'original.integration.test' ? 'LP original' : 'Cópia controlada'}</h1>
+          <a data-anticlone-point="checkout01" href="/checkout-nativo">Comprar</a>
+          <a data-anticlone-point="contato01" href="/contato-nativo">Contato</a>
+        </main>${html}` : '<h1>Destino controlado</h1>';
+      res.writeHead(200, {'content-type': 'text/html; charset=utf-8'}).end(body);
+    }).listen(0, '127.0.0.1');
+    await once(tls, 'listening');
+    t.after(() => new Promise<void>(resolve => { tls.close(() => resolve()); tls.closeAllConnections(); }));
+    const sitePort = (tls.address() as AddressInfo).port;
+    const original = 'https://original.integration.test:' + sitePort;
+    const copy = 'https://copia.integration.test:' + sitePort;
+    const gatewayOrigin = 'https://gateway.integration.test:' + sitePort;
+    const candidates = [{marker: 'checkout01', native: '/checkout-nativo', target: '/checkout-aprovado'},
+      {marker: 'contato01', native: '/contato-nativo', target: '/contato-aprovado'}];
+    const captureSite = createServer((_req, res) => res.writeHead(200, {'content-type': 'text/html'}).end(
+      '<main data-anticlone-surface="landing">' + candidates.map(point =>
+        '<a data-anticlone-point="' + point.marker + '" href="' + copy + point.native + '">' + point.marker + '</a>').join('') + '</main>' + html,
+    )).listen(0, '127.0.0.1');
+    await once(captureSite, 'listening');
+    t.after(() => new Promise<void>(resolve => { captureSite.close(() => resolve()); captureSite.closeAllConnections(); }));
+    const captureOrigin = 'http://127.0.0.1:' + (captureSite.address() as AddressInfo).port;
+    process.env.RUNTIME_PUBLIC_ORIGIN = gatewayOrigin;
+    const gateway = spawn(process.execPath, ['dist/apps/server.js'], {env: {
+      DATABASE_URL: process.env.TEST_DATABASE_URL, PGOPTIONS: '-c search_path=' + lab.schema,
+      PORT: String(backendPort), GATEWAY_MODE: 'OPERATIONAL', SMTP_PORT: '1',
+    }, stdio: ['ignore', 'ignore', 'pipe']});
+    let gatewayOutput = '';
+    gateway.stderr.on('data', chunk => { gatewayOutput += String(chunk); });
+    const closed = once(gateway, 'exit');
+    t.after(async () => { gateway.kill(); await closed; });
+    async function until(check: () => Promise<boolean>, label: string) {
+      for (let attempt = 0; attempt < 80; attempt++) {
+        if (await check()) return;
+        await delay(100);
+      }
+      assert.fail(label + '\n' + gatewayOutput);
+    }
+    await until(async () => {
+      const response = await fetch('http://127.0.0.1:' + backendPort + '/healthz').catch(() => undefined);
+      return response?.ok === true && (await response.json()).mode === 'OPERATIONAL';
+    }, 'gateway Dev em loopback');
+
+    const context = await lab.browser.newContext({viewport: {width: 1440, height: 900}, ignoreHTTPSErrors: true});
+    const allowed = new Set([lab.origin, original, copy, gatewayOrigin, captureOrigin]);
+    await context.route('**/*', route => allowed.has(new URL(route.request().url()).origin) ? route.continue() : route.abort());
+    await context.grantPermissions(['local-network-access'], {origin: copy});
+    await context.grantPermissions(['local-network-access'], {origin: original});
+    await context.grantPermissions(['local-network-access'], {origin: captureOrigin});
+    const panel = await context.newPage();
+    const captureRoot = process.env.TEST_FRONTEND_INTEGRATED_CAPTURES;
+    async function capture(page: Page, name: string) {
+      if (!captureRoot) return;
+      await mkdir(captureRoot, {recursive: true});
+      await page.screenshot({path: join(captureRoot, name + '.png'), animations: 'disabled'});
+      const viewport = page.viewportSize();
+      if (viewport) {
+        await page.setViewportSize({width:390,height:844});
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'mobile reflow: ' + name);
+        await page.screenshot({path: join(captureRoot, name + '-mobile.png'), animations: 'disabled'});
+        await page.setViewportSize(viewport);
+      }
+    }
+    const confirm = async (button: string, result: string | RegExp) => {
+      await action(panel, button).click();
+      await action(panel, 'Confirmar').click();
+      await panel.getByText(result, {exact: true}).waitFor();
+    };
+    await panel.goto(lab.origin + ui);
+    await capture(panel, '01-login');
+    assert.equal(await login(panel, lab.code()), 204);
+    await panel.getByRole('heading', {name: 'Meus Projetos'}).waitFor();
+    await capture(panel, '02-projetos');
+    await offer(panel, 'Oferta Dev integrada', original);
+    await capture(panel, '03-cadastro-lp');
+    await firstPage(panel, 'Página de vendas', original + '/lp');
+    await action(panel, 'Cadastrar oferta e página').click();
+    await panel.getByRole('heading', {name: 'Instalar a proteção'}).waitFor();
+    const installation = panel.url();
+    const ids = (await lab.db.query('SELECT project_id AS project, id AS page FROM protected_pages')).rows[0];
+    assert.ok(ids?.project && ids.page);
+    await confirm('Publicar endereços de instalação', 'Revisão 1');
+    html = await panel.getByRole('region', {name: 'Trecho HTML'}).locator('code').innerText();
+    css = await panel.getByRole('region', {name: 'Trecho CSS'}).locator('code').innerText();
+    await capture(panel, '04-instalacao-publicada');
+
+    const visit = await context.newPage();
+    await visit.goto(original + '/lp');
+    await visit.getByRole('heading', {name: 'LP original'}).waitFor();
+    await until(async () => (await lab.db.query('SELECT count(*)::int n FROM page_installation_signals')).rows[0].n >= 2,
+      'Core e Fallback da LP original');
+    assert.equal((await lab.db.query('SELECT count(*)::int n FROM incidents')).rows[0].n, 0);
+    await visit.goto(copy + '/lp');
+    await visit.getByRole('heading', {name: 'Cópia controlada'}).waitFor();
+    await until(async () => (await lab.db.query('SELECT count(*)::int n FROM observation_source_days WHERE host=$1',
+      ['copia.integration.test'])).rows[0].n >= 2, 'detecção pelo gateway');
+    await visit.reload();
+    assert.equal((await lab.db.query('SELECT count(*)::int n FROM incidents')).rows[0].n, 1);
+    await capture(visit, '05-copia-controlada');
+
+    await panel.getByRole('navigation', {name: 'Navegação principal'}).filter({visible: true}).getByRole('link', {name: 'Incidentes'}).click();
+    // The copied LP has receipts, so it appears under the contextual LP filter.
+    await panel.getByRole('link', {name: 'Investigar copia.integration.test'}).click();
+    await panel.getByRole('heading', {name: 'copia.integration.test', exact: true}).waitFor();
+    await panel.getByLabel('Página protegida').selectOption(ids.page);
+    await panel.getByLabel('Nova situação').selectOption('investigating');
+    await panel.getByLabel('Justificativa').fill('Cópia controlada do ensaio Dev');
+    await confirm('Revisar mudança', 'Situação atualizada.');
+    const history = panel.locator('details').filter({has: panel.getByText('Histórico de recibos da LP', {exact: true})});
+    await history.getByText('Histórico de recibos da LP', {exact: true}).click();
+    await action(panel, 'Consultar histórico').click();
+    await history.getByText('gateway', {exact:false}).waitFor();
+    await panel.getByText('Evidência de acesso à LP original', {exact: true}).click();
+    await panel.getByLabel('Fonte do log').selectOption('owned_access_log');
+    await panel.getByLabel('Tipo de recurso').selectOption('HTML');
+    await panel.getByLabel('Tenho autorização para usar este log.').check();
+    await confirm('Revisar evidência', 'Evidência registrada como declaração administrativa.');
+    await action(panel, 'Atualizar recibos').click();
+    await history.getByText('administrator_import', {exact:false}).waitFor();
+    assert.equal((await lab.db.query("SELECT count(*)::int n FROM investigation_receipts WHERE kind='original_request'")).rows[0].n, 1);
+    await capture(panel, '06-investigacao');
+
+    await panel.getByRole('link', {name: 'Redirecionar página', exact: true}).click();
+    await panel.getByLabel('Destino da página').fill(original + '/segura');
+    await panel.getByLabel('Direto ou desconhecido').selectOption('100');
+    await panel.getByLabel('Habilitar nesta versão').check();
+    await confirm('Revisar publicação', 'Política publicada. Versão 1.');
+    await panel.getByLabel('Versão de redirecionamento').selectOption('1');
+    await confirm('Revisar aprovação', /^Aprovação registrada\./);
+    async function authorize(revision: number) {
+      await panel.getByLabel('Origem HTTPS observada').fill(copy);
+      await panel.getByLabel('Caminho exato da cópia').fill('/lp');
+      await panel.getByLabel('Conferi o contexto', {exact: false}).check();
+      await confirm('Revisar autorização', 'Autorização registrada. Revisão ' + revision + '.');
+    }
+    await authorize(1);
+    // This is an effect assertion. GS06 separately measures the real deadline.
+    const redirected = await context.newPage();
+    const browserTime = Date.now();
+    await redirected.clock.install({time: browserTime - 60_000});
+    await redirected.clock.pauseAt(browserTime);
+    await redirected.goto(copy + '/lp');
+    await redirected.waitForURL(original + '/segura');
+    await redirected.close();
+
+    await action(panel, '← Voltar para investigação').click();
+    await panel.getByRole('link', {name: 'Abrir Página de vendas na oferta'}).click();
+    await panel.getByRole('link', {name: 'Políticas de proteção'}).click();
+    assert.equal((await panel.reload())?.status(), 200);
+    await panel.getByLabel('Direto ou desconhecido').selectOption('0');
+    await confirm('Revisar publicação', 'Política publicada. Versão 2.');
+    await panel.getByText('Selecionar versão de entrada do projeto', {exact: true}).click();
+    await panel.getByLabel('Versão publicada').selectOption('1');
+    await confirm('Revisar versão de entrada', 'Versão de entrada selecionada no projeto: v1.');
+    assert.equal((await lab.db.query('SELECT version FROM active_protection_policies WHERE project_id=$1', [ids.project])).rows[0].version, 1);
+    await panel.getByLabel('Versão de redirecionamento').selectOption('2');
+    await confirm('Revisar aprovação', /^Aprovação registrada\./);
+
+    await panel.getByRole('link', {name: 'Substituir CTAs'}).click();
+    await panel.getByLabel('Superfície de CTA').fill('landing');
+    await panel.getByLabel('Habilitar nesta versão').check();
+    await panel.getByLabel('Direto ou desconhecido').selectOption('100');
+    await confirm('Revisar publicação', 'Política publicada. Versão 1.');
+    await panel.getByText('Cadastrar destino aprovado', {exact: true}).click();
+    for (const point of candidates) {
+      await panel.getByLabel('Identificador da oferta').fill(point.marker);
+      await panel.getByLabel('URL do destino do CTA').fill(original + point.target);
+      await confirm('Revisar destino', 'Destino cadastrado.');
+    }
+    await panel.getByText('Importar captura existente', {exact: true}).click();
+    await panel.getByText('Capturar página local de teste', {exact:true}).click();
+    await panel.getByLabel('URL da página local').fill(copy + '/lp');
+    await action(panel, 'Abrir página local').click();
+    await panel.getByText('Informe uma URL de laboratório válida no caminho indicado.', {exact:true}).waitFor();
+    await panel.getByLabel('URL da página local').fill(captureOrigin + '/lp');
+    await action(panel, 'Abrir página local').click();
+    await panel.frameLocator('iframe[title="Página local para captura de CTA"]').getByRole('link', {name:'checkout01'}).waitFor();
+    panel.once('dialog', dialog => { void dialog.accept(); });
+    await action(panel, 'Capturar superfície').click();
+    await panel.getByText('2 candidato(s) carregado(s).', {exact:false}).waitFor();
+    assert.equal((await lab.db.query('SELECT count(*)::int n FROM cta_captures')).rows[0].n, 0);
+    await confirm('Revisar captura', 'Captura importada.');
+    for (const point of candidates) {
+      const card = panel.getByRole('article').filter({has: panel.getByRole('heading', {name: point.marker, exact: true})});
+      await card.getByLabel('Destino aprovado para ' + point.marker).selectOption({label: point.marker + ' · ' + original + point.target});
+      await card.getByRole('button', {name: 'Revisar mapeamento'}).click();
+      await action(panel, 'Confirmar').click();
+      await panel.getByText('Mapeamento salvo.', {exact: true}).waitFor();
+    }
+    await panel.getByLabel('landing · versão 1').check();
+    await confirm('Revisar aprovação', /^Aprovação registrada\./);
+    await authorize(2);
+    await capture(panel, '07-politica-cta');
+    for (const point of candidates) {
+      const decision = visit.waitForResponse(response => response.url().startsWith(gatewayOrigin + '/r/v2/') && response.url().endsWith('/g'));
+      await visit.goto(copy + '/lp');
+      assert.equal((await (await decision).json()).action, 'REPLACE_CONVERSION');
+      const cta = visit.locator('[data-anticlone-point="' + point.marker + '"]');
+      await cta.click();
+      await visit.waitForURL(original + point.target);
+    }
+    assert.equal((await lab.db.query('SELECT count(*)::int n FROM cta_mappings')).rows[0].n, 2);
+    await action(panel, 'Suspender autorização').click();
+    await action(panel, 'Confirmar').click();
+    await panel.getByRole('status').getByText('Autorização suspensa.', {exact: true}).waitFor();
+    await visit.goto(copy + '/lp');
+    await visit.getByRole('link', {name: 'Comprar'}).click();
+    await visit.waitForURL(copy + '/checkout-nativo');
+
+    await panel.goto(installation);
+    await panel.getByText('Revisão 1', {exact: true}).waitFor();
+    await panel.getByText('Configurar coleta da origem principal', {exact: true}).click();
+    await confirm('Habilitar coleta', 'Coleta do projeto habilitada.');
+    await panel.getByRole('navigation', {name: 'Navegação principal'}).filter({visible: true}).getByRole('link', {name: 'Configurações'}).click();
+    await panel.getByRole('link', {name: 'Saúde e operações', exact: true}).click();
+    await panel.getByText('Gateway local respondeu', {exact: true}).waitFor();
+    await panel.getByText('Perfil do gateway · Operacional · ações exigem autorização por LP',{exact:true}).waitFor();
+    await panel.getByLabel('Projeto', {exact: true}).selectOption(ids.project);
+    await panel.getByLabel('Acompanhar inatividade de sinais').check();
+    await panel.getByLabel('Habilitar alertas operacionais').check();
+    await panel.getByLabel('Intervalo de inatividade em segundos').fill('60');
+    await confirm('Revisar configuração de saúde', 'Configuração de saúde salva.');
+    assert.equal((await lab.db.query('SELECT inactivity_seconds FROM installation_health_settings')).rows[0].inactivity_seconds, 60);
+    await capture(panel, '08-saude-ligada');
+  });

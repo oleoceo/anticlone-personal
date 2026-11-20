@@ -1,14 +1,16 @@
 import {useEffect, useRef, useState, type FormEvent} from 'react';
 import {createRoot} from 'react-dom/client';
 import {DraftGuard, uuid} from './operations';
-import {Conversions} from './conversions';
-import {IncidentProjects, Incidents} from './incidents';
+import {CommerceBindings, Conversions} from './conversions';
+import {IncidentProjects, Incidents, PageEvidence} from './incidents';
 import {createBrowserRouter, Link, RouterProvider, useBlocker, useLocation, useNavigate} from 'react-router-dom';
 import {AdminApi, type Page, type Project, type ProjectState, pageList} from './admin-api';
 import {base, Back, Breadcrumbs, type Crumb, installPath, newPagePath, offerPath, pagePath,
-  projectPath, projectsPath, readRoute, useContextNavigation, useRestoreScroll, conversionsPath, incidentsPath, projectIncidentsPath, overviewPath, settingsPath} from './navigation';
+  projectPath, projectsPath, protectionPath, readRoute, useContextNavigation, useRestoreScroll, conversionsPath, incidentsPath, projectIncidentsPath, overviewPath, settingsPath} from './navigation';
 import {emptyFields, OfferForm} from './offer-form';
 import {Overview} from './overview';
+import {ProtectionScreen} from './protection';
+import type {ProtectionAction} from './protection-contracts';
 import {Settings} from './settings';
 import {LifecycleControls} from './lifecycle';
 import {Installation} from './installation';
@@ -146,15 +148,7 @@ function Workspace({api, projects, project, pageId, installation, setGuard}: {
     void navigate(link.to, {state: link.state});
   }
 
-  return <>
-    <Breadcrumbs items={crumbs}/>
-    {!installation && <Back to={pageId ? projectHref : projectsPath}>
-      {pageId ? 'Voltar para ' + project.name : 'Voltar para Meus Projetos'}</Back>}
-    {!installation && <Heading title={page?.name ?? project.name} description={page ? project.name : 'Oferta, páginas e instalação.'}
-      actions={<div className="action-links">
-        <Link className="button" {...nav.link(projectIncidentsPath(project.id), pageId ? '?lp=' + pageId : '')}>Incidentes da oferta</Link>
-        <Link className="button" {...nav.link(newPagePath(project.id))}>Adicionar página / variação</Link></div>}/>}
-    <div className="filters selectors">
+  const selectors = <div className="filters selectors">
       <label>Oferta / projeto<select value={project.id} onChange={event => {
         const next = event.target.value;
         const remembered = nav.rememberedPage(next);
@@ -167,13 +161,25 @@ function Workspace({api, projects, project, pageId, installation, setGuard}: {
         <option value="">Selecione a página</option>
         {pages?.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
       </select></label>
-    </div>
+    </div>;
+
+  return <>
+    <Breadcrumbs items={crumbs}/>
+    {!installation && pageId && <Back to={projectHref}>Voltar para {project.name}</Back>}
+    {!installation && <Heading title={page?.name ?? project.name} description={page ? project.name : undefined}
+      actions={<div className="action-links">
+        <Link className="button" {...nav.link(projectIncidentsPath(project.id), pageId ? '?lp=' + pageId : '')}>Incidentes da oferta</Link>
+        {!pageId && <Link className="button" {...nav.link(projectHref + '/checkouts')}>Checkouts do projeto</Link>}
+        <Link className="button primary" {...nav.link(newPagePath(project.id))}>Adicionar página / variação</Link></div>}/>}
+    {pageId && (!installation || !page) && selectors}
+    {!pageId && <details className="workspace-switch"><summary>Trocar de projeto ou LP</summary>{selectors}</details>}
+    <div className={pageId ? 'workspace-stack' : 'workspace-stack project-workspace'}>
     {list.error !== undefined ? <Failure error={list.error} retry={list.retry}/> : !pages ? <Loading/> :
       pageId && !page ? <section className="panel"><h2>Página indisponível</h2>
         <p>Selecione outra página deste projeto ou volte para a oferta.</p>
         <Back to={projectHref}>Voltar para {project.name}</Back>
       </section> :
-      page && installation ? <Installation key={page.id} api={api} project={project.id} page={page} setGuard={setGuard}/> :
+      page && installation ? <Installation key={page.id} api={api} project={project.id} page={page} context={selectors} setGuard={setGuard}/> :
       page ? <section className="panel">
         <div className="panel-heading"><h2>Oferta e instalação</h2>
           <PageState page={page}/></div>
@@ -186,11 +192,11 @@ function Workspace({api, projects, project, pageId, installation, setGuard}: {
             {status.data.diagnostic && ' · ' + (labels[status.data.diagnostic.status] ?? status.data.diagnostic.status)}
           </p>}
         <div className="action-links"><Link className="button primary" {...nav.link(installPath(project.id, page.id))}>Instalar e conferir</Link>
-          <Link className="button" {...nav.link(conversionsPath(project.id, page.id))}>Conversões</Link></div>
+          <Link className="button" {...nav.link(conversionsPath(project.id, page.id))}>Conversões</Link>
+          <Link className="button" {...nav.link(protectionPath(project.id, page.id))}>Políticas de proteção</Link></div>
       </section> : <section className="panel">
         <h2>Páginas da oferta</h2>
-        {!pages.length ? <div><p className="empty">Cadastre a primeira página para publicar os endereços de instalação.</p>
-          <Link className="button primary" {...nav.link(newPagePath(project.id))}>Cadastrar primeira LP</Link></div> :
+        {!pages.length ? <p className="empty">Cadastre a primeira página para publicar os endereços de instalação.</p> :
           <ul className="plain page-list">{pages.map(item => <li key={item.id}>
             <div><strong>{item.name}</strong> <PageState page={item}/>{item.urls.map(url =>
               <small key={url.origin + url.pathname}>{url.origin + url.pathname}</small>)}</div>
@@ -199,19 +205,33 @@ function Workspace({api, projects, project, pageId, installation, setGuard}: {
       </section>}
     {!installation && (!pageId || page) && <DraftGuard key={page?.id ?? project.id} setGuard={setGuard}>
       <LifecycleControls api={api} project={project} page={page} afterChange={()=>{list.revalidate(); status.revalidate();}} setGuard={setGuard}/>
+      {page && page.enabled && page.lifecycle_state === 'ACTIVE' && <PageEvidence api={api} project={project.id} page={page.id} setGuard={setGuard}/>}
     </DraftGuard>}
+    </div>
   </>;
 }
 
-function PageConversions({api, project, pageId, subview, setGuard}: {
-  api: AdminApi; project: Project; pageId: string; subview?: string; setGuard: (guard: Guard) => void;
+function PageOperations({api, project, pageId, subview, action, setGuard}: {
+  api: AdminApi; project: Project; pageId: string; subview?: string; action?: ProtectionAction; setGuard: (guard: Guard) => void;
 }) {
+  const nav = useContextNavigation();
   const list = useQuery(project.id, signal => pageList(api, project.id, signal));
   const page = list.data?.pages.find(page => page.id === pageId);
   if (list.error !== undefined) return <Failure error={list.error} retry={list.retry}/>;
   if (!list.data) return <Loading/>;
-  return page ? <Conversions key={page.id + ':' + (subview ?? '')} api={api} project={project} page={page} subview={subview} setGuard={setGuard}/> :
-    <><Heading title="Página indisponível"/><Back to={projectPath(project.id)}>Voltar para {project.name}</Back></>;
+  if (!page) return <><Heading title="Página indisponível"/><Back to={projectPath(project.id)}>Voltar para {project.name}</Back></>;
+  if (!action) return <Conversions key={page.id + ':' + (subview ?? '')} api={api} project={project} page={page} subview={subview} setGuard={setGuard}/>;
+  const path = protectionPath(project.id, page.id);
+  return <>
+    <Breadcrumbs items={[{label: 'Meus Projetos', path: projectsPath}, {label: project.name, path: projectPath(project.id)},
+      {label: page.name, path: pagePath(project.id, page.id)}, {label: 'Políticas de proteção'}]}/>
+    <Back to={pagePath(project.id, page.id)}>Voltar para {page.name}</Back>
+    <nav className="tabs" aria-label="Ações de proteção">
+      <Link aria-current={action === 'redirecionar' ? 'page' : undefined} {...nav.link(path)}>Redirecionar página</Link>
+      <Link aria-current={action === 'substituir-cta' ? 'page' : undefined} {...nav.link(path + '/substituir-cta')}>Substituir CTAs</Link>
+    </nav>
+    <ProtectionScreen api={api} project={project} page={page} action={action} setGuard={setGuard}/>
+  </>;
 }
 
 function Authenticated({api, logout, guard, fields, setFields, setGuard}: {
@@ -267,21 +287,28 @@ function Authenticated({api, logout, guard, fields, setFields, setGuard}: {
         projects.error !== undefined ? <Failure error={projects.error} retry={projects.retry}/> :
         !projects.data ? <Loading/> :
         route.kind === 'overview' ? <Overview api={api} projects={projects.data}/> :
-        route.kind === 'settings' ? <DraftGuard key={location.pathname} setGuard={setGuard}>
+        route.kind === 'settings' ? <DraftGuard key={location.pathname + location.search} setGuard={setGuard}>
           <Settings api={api} projects={projects.data} section={route.section} setGuard={setGuard}/>
         </DraftGuard> :
         route.kind === 'projects' ? <ProjectList api={api} projects={projects.data}/> :
         route.kind === 'incidents-home' ? <IncidentProjects projects={projects.data}/> :
         !project ? <><Heading title="Projeto indisponível"/><Back to={projectsPath}>Voltar para Meus Projetos</Back></> :
+        route.kind === 'project-checkouts' ? <DraftGuard key={project.id + ':checkouts'} setGuard={setGuard}>
+          <Breadcrumbs items={[{label: 'Meus Projetos', path: projectsPath}, {label: project.name, path: projectPath(project.id)}, {label: 'Checkouts'}]}/>
+          <Back to={projectPath(project.id)}>Voltar para {project.name}</Back>
+          <Heading title="Checkouts do projeto" description={project.name}/>
+          <CommerceBindings api={api} project={project.id} page={null} setGuard={setGuard}/>
+        </DraftGuard> :
         route.kind === 'new-page' ? <OfferForm key={project.id} api={api} project={project} fields={fields}
           setFields={setFields} setGuard={setGuard} finish={finish}/> :
         route.kind === 'incidents' || route.kind === 'incident' ?
           <DraftGuard key={location.pathname + location.search} setGuard={setGuard}>
             <Incidents api={api} project={project} id={route.incident} action={route.action} setGuard={setGuard}/>
           </DraftGuard> :
-        route.kind === 'conversions' ?
+        route.kind === 'conversions' || route.kind === 'protection' ?
           <DraftGuard key={location.pathname + location.search} setGuard={setGuard}>
-            <PageConversions api={api} project={project} pageId={route.page} subview={route.subview} setGuard={setGuard}/>
+            <PageOperations api={api} project={project} pageId={route.page} subview={'subview' in route ? route.subview : undefined}
+              action={route.action} setGuard={setGuard}/>
           </DraftGuard> :
         <Workspace api={api} project={project} projects={projects.data} pageId={route.page}
           installation={route.kind === 'installation'} setGuard={setGuard}/>}

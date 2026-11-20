@@ -1,5 +1,6 @@
 ﻿import { Pool } from 'pg';
 import { createAdminServer } from './admin-auth.js';
+import {retainSmtpTestAttempts} from './notification-email-log.js';
 import { cleanupCta } from './cta-inventory.js';
 const record = process.env.ADMIN_PASSWORD_RECORD, secret = process.env.ADMIN_TOTP_SECRET, database = process.env.DATABASE_URL;
 const port = Number(process.env.ADMIN_PORT ?? 3001);
@@ -7,9 +8,17 @@ if (!record || !secret || !database || !Number.isInteger(port) || port < 1 || po
 const db = new Pool({ connectionString: database });
 await db.query('CREATE TABLE IF NOT EXISTS admin_totp_replay (factor_id text PRIMARY KEY, last_counter bigint NOT NULL)');
   await db.query('CREATE TABLE IF NOT EXISTS admin_totp_codes (factor_id text NOT NULL, digest text NOT NULL, valid_until bigint NOT NULL, PRIMARY KEY (factor_id, digest))');
-const server = createAdminServer(record, secret, db);
+const server = createAdminServer(record, secret, db, Date.now,
+  {webSessionWithoutTimeout: process.env.ADMIN_WEB_SESSION_NO_TIMEOUT === '1'});
 await cleanupCta(db);
-const retention = setInterval(() => { void cleanupCta(db).catch(() => process.stderr.write('CTA retention cleanup failed\n')); }, 60 * 60_000);
+function retainSmtpLog() {
+  void retainSmtpTestAttempts(db).catch(() => process.stderr.write('SMTP test retention cleanup failed\n'));
+}
+retainSmtpLog();
+const retention = setInterval(() => {
+  void cleanupCta(db).catch(() => process.stderr.write('CTA retention cleanup failed\n'));
+  retainSmtpLog();
+}, 60 * 60_000);
 retention.unref();
 server.requestTimeout = 5000; server.headersTimeout = 6000;
 server.listen(port, '127.0.0.1');

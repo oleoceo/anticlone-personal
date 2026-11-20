@@ -249,6 +249,23 @@ test('provider TLS, durable attempts, browser clone dedup, retry/restart and aut
       let error='';sender.stderr.on('data',chunk=>{error+=String(chunk);});
       const [code]=await once(sender,'exit');assert.equal(code,0,error);assert.equal(tlsAuthenticated,true);
     } finally {await new Promise<void>(resolve=>starttls.close(()=>resolve()));}
+    const noAuth = new SMTPServer({secure:true,key:await readFile(key),cert:await readFile(cert),authOptional:true,
+      disabledCommands:['AUTH']});
+    noAuth.on('error',()=>{});
+    noAuth.listen(0,'127.0.0.1');await once(noAuth.server,'listening');
+    try {
+      const checker=spawn(process.execPath,['--input-type=module','-e',`
+        import {smtpProvider,verifyProviderConnection} from './dist/apps/smtp-provider.js';
+        try {
+          await verifyProviderConnection(smtpProvider(process.env));
+          process.exitCode=1;
+        } catch (error) {
+          if (error?.code !== 'EAUTH') throw error;
+        }
+      `],{env:{...env,SMTP_PORT:String((noAuth.server.address() as AddressInfo).port)},stdio:'ignore'});
+      const [code]=await once(checker,'exit');
+      assert.equal(code,0,'the TLS receiver without AUTH must reject authentication');
+    } finally {await new Promise<void>(resolve=>noAuth.close(()=>resolve()));}
     const delays:Array<ReturnType<typeof setTimeout>>=[];
     const later=(callback:()=>void)=>{delays.push(setTimeout(callback,2200));};
     let slowClosed=false;

@@ -62,6 +62,38 @@ autenticação, retry/reinício, original preservado, cópia em outro hostname,
 deduplicação, consulta autenticada, isolamento de projetos e prazo total em
 SMTP lento. Não usa contas externas nem comprova entrega externa.
 
+## Credenciais pelo React
+
+Com a migration 065 e `SMTP_PANEL_KEY` (32 bytes aleatórios em hexadecimal)
+instaladas no admin, gateway e worker, **Configurações → Notificações** aceita
+login e chave SMTP. O operador define o endpoint autorizado em
+`SMTP_PANEL_HOST`, `SMTP_PANEL_PORT` e `SMTP_PANEL_TLS`. A interface salva a
+chave com AES-256-GCM e retorna apenas o login e a existência da chave.
+O segredo de cifragem fica no ambiente privado e precisa acompanhar a
+recuperação separadamente do backup PostgreSQL.
+
+**Testar conexão SMTP** autentica sem enviar. **Enviar e-mail de teste**
+pede confirmação do destinatário salvo e reporta a aceitação SMTP.
+Salvar uma alteração desativa a preferência de alertas. O gateway e o
+worker leem a configuração por revisão durante a manutenção, e as
+tentativas continuam condicionadas à preferência ativa. Uma tentativa
+já admitida pode concluir. A configuração por ambiente continua
+disponível para instalações sem credenciais cadastradas pelo painel.
+
+## Logs de e-mail
+
+**Configurações → Notificações → Logs de e-mail** reúne até 100 tentativas
+dos últimos 30 dias. Inclui envios manuais e registros existentes dos alertas
+de cópia, CTA e saúde. A consulta exige sessão administrativa e permite
+filtrar por aceito pelo SMTP, falha ou resultado desconhecido.
+
+A migration 066 registra a tentativa manual antes de abrir a conexão. Uma
+interrupção sem resultado gravado aparece como desconhecida. Em falhas de teste
+o painel mostra a categoria segura e, se disponível, o código numérico SMTP.
+O histórico descarta credenciais, o texto do e-mail e a resposta bruta do
+provedor. A manutenção do admin remove tentativas manuais após 30 dias.
+Aceitação pelo SMTP indica que o servidor recebeu a mensagem para processamento.
+
 O alerta F26 do provedor inclui versões HTML e texto em português. A primeira
 detecção usa UTC. O risco é a última avaliação retida para o projeto e host
 nos últimos sete dias e o estado vem da triagem. A mensagem identifica

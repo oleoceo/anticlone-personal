@@ -1,19 +1,24 @@
 import {useState} from 'react';
 import {Link, useLocation, useNavigate} from 'react-router-dom';
 import {AdminApi, type Project, type ProjectState} from './admin-api';
-import {incidentPath, installPath, newPagePath, offerPath, projectPath, projectsPath, useContextNavigation} from './navigation';
+import {conversionsPath, incidentPath, installPath, newPagePath, offerPath, projectPath, projectsPath, settingsPath, useContextNavigation} from './navigation';
 import {commerceExponents, money} from './conversions';
+import {trafficLabels} from './operations';
 import {labels, Failure, Heading, Loading, useQuery} from './ui';
 import type {Incident} from './protection-contracts';
+import {healthPath, installationMessages, publicationLabel, type InstallationStatus} from './installation-status';
 
+type Observation = {project_id: string; action: string; traffic_class: string; events: number; day: string};
 type OverviewReport = {
-  observations: {action: string; events: number}[] | null;
+  observations: Observation[] | null;
   currencies: {currency: string; reported_sales: number; reported_amount_minor: string | null}[] | null;
   estimated_revenue: {currency: string; amount_minor_numerator: string; denominator: number}[] | null;
+  estimate_projects?: {project: string; currency: string; numerator: string}[];
+  estimate_assumptions?: {project: string; currency: string; ticket_minor: string; rate: number; version: string}[];
 };
 const reviewStates: Record<string, string> = {unverified: 'Não verificado', investigating: 'Em investigação',
   confirmed_copy: 'Cópia confirmada', false_positive: 'Falso positivo'};
-import {healthPath, installationMessages, publicationLabel, type InstallationStatus} from './installation-status';
+const dayMs = 86_400_000;
 
 function quantity(count: number, singular: string, plural: string) {
   return count + ' ' + (count === 1 ? singular : plural);
@@ -27,10 +32,11 @@ export function Overview({api, projects}: {api: AdminApi; projects: Project[]}) 
   const project = projects.find(item => item.id === filters.get('projeto'));
   const days = filters.get('dias') === '1' ? 1 : 7;
   const [until, setUntil] = useState(Date.now);
+  const from = until - days * dayMs;
   const key = project?.id ?? 'all';
   const report = useQuery(key + ':' + days + ':' + until, signal =>
-    api.request<OverviewReport>('commerce', {action: 'report', ...(project ? {project: project.id} : {}),
-      from: new Date(until - days * 86_400_000).toISOString(), until: new Date(until).toISOString()}, signal));
+    api.request<OverviewReport>('commerce', {action: 'report', activity: true, ...(project ? {project: project.id} : {}),
+      from: new Date(from).toISOString(), until: new Date(until).toISOString()}, signal));
   const scope = project ? [project] : projects;
   const inventory = useQuery(JSON.stringify(scope.map(item => item.id)), async signal => {
     const rows = [];
@@ -67,7 +73,13 @@ export function Overview({api, projects}: {api: AdminApi; projects: Project[]}) 
     row.state.pages.filter(item=>item.enabled && item.lifecycle_state==='ACTIVE').length : 0),0) : null;
   const incidentCount=inventory.data && rows.every(row=>row.incidents!==null) ?
     rows.reduce((sum,row)=>sum+(row.incidents?.length ?? 0),0) : null;
-  const clicks=observations?.filter(row=>row.action==='CTA_CLICK_OBSERVED').reduce((sum,row)=>sum+row.events,0);
+  const clicksByProject = new Map<string, number>();
+  for (const row of observations ?? []) if (row.action === 'CTA_CLICK_OBSERVED') {
+    clicksByProject.set(row.project_id, (clicksByProject.get(row.project_id) ?? 0) + row.events);
+  }
+  const clicks = observations?.reduce((sum, row) => sum + (row.action === 'CTA_CLICK_OBSERVED' ? row.events : 0), 0);
+  const estimates = new Map(report.data?.estimate_projects?.map(row => [row.project, row] as const));
+  const premises = new Map(report.data?.estimate_assumptions?.map(row => [row.project, row] as const));
   const count=(value: number|null|undefined, pending: boolean)=>value ?? (pending ? 'Consultando' : 'Indisponível');
   const needsPage=rows.filter(row=>row.state?.state==='ACTIVE' && row.state.pages.length===0);
   return <>
@@ -83,10 +95,6 @@ export function Overview({api, projects}: {api: AdminApi; projects: Project[]}) 
       <label>Projeto<select value={project?.id ?? ''} onChange={event => change('projeto', event.target.value)}>
         <option value="">Todos os projetos</option>{projects.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
       </select></label>
-      <label>LP para diagnóstico<select disabled={!project} value={page?.id ?? ''} onChange={event => change('lp', event.target.value)}>
-        <option value="">Selecione</option>{project && inventory.data?.[0]?.state?.pages.map(item =>
-          <option key={item.id} value={item.id}>{item.name}</option>)}
-      </select></label>
       <label>Período dos resultados<select value={days} onChange={event => change('dias', event.target.value)}>
         <option value="1">Últimas 24 horas</option><option value="7">Últimos 7 dias</option>
       </select></label>
@@ -97,15 +105,21 @@ export function Overview({api, projects}: {api: AdminApi; projects: Project[]}) 
       <div><dt>Incidentes no histórico retornado</dt><dd>{count(incidentCount,inventory.pending)}</dd></div>
       <div><dt>Cliques de CTA no período</dt><dd>{count(clicks,report.pending)}</dd></div>
     </dl>
+    <div className="dashboard-workspace"><Activity observations={report.pending ? undefined : observations} error={report.error} from={from} until={until}/>
     <section className="panel">
       <div className="panel-heading"><h2>Instalações e alertas</h2><Link {...nav.link(healthPath)}>Saúde e operações</Link></div>
       {needsPage.map(row=><div className="panel-heading" key={row.project.id}>
         <p>{row.project.name} ainda precisa da primeira LP.</p>
         <Link className="button" {...nav.link(newPagePath(row.project.id))}>Cadastrar LP</Link>
       </div>)}
-      {!project ? <p>Selecione um projeto e uma LP para consultar a instalação.</p> : <>
+      {project && <label>LP para diagnóstico<select value={page?.id ?? ''} onChange={event => change('lp', event.target.value)}>
+        <option value="">Selecione</option>{inventory.data?.[0]?.state?.pages.map(item =>
+          <option key={item.id} value={item.id}>{item.name}</option>)}
+      </select></label>}
+      {!project ? <p>Selecione um projeto nos filtros para consultar suas instalações e alertas.</p> : <>
         {alerts.error !== undefined ? <Failure error={alerts.error} retry={alerts.revalidate}/> : alerts.pending ? <Loading/> :
           <p>{alerts.data?.state === 'AVAILABLE' ? quantity(alerts.data.items.length, 'alerta', 'alertas') + ' no recorte de revisão' : 'Revisão de alertas indisponível'}</p>}
+        {!!alerts.data?.items.length && <Link {...nav.link(settingsPath + '/notificacoes', '?projeto=' + project.id)}>Revisar alertas deste projeto</Link>}
         {page ? <>
           {installation.error !== undefined ? <Failure error={installation.error} retry={installation.revalidate}/> :
             installation.pending ? <Loading/> : installation.data && <div>
@@ -113,10 +127,13 @@ export function Overview({api, projects}: {api: AdminApi; projects: Project[]}) 
                 labels[installation.data.diagnostic?.status ?? ''] ?? 'Sem diagnóstico de camadas'}</p>
               {installation.data.verification.issue && <p className="muted">{installationMessages[installation.data.verification.issue]}</p>}
             </div>}
-          <Link className="button" {...nav.link(installPath(project.id, page.id))}>Abrir diagnóstico de {page.name}</Link>
+          <div className="action-links"><Link className="button" {...nav.link(installPath(project.id, page.id))}>Abrir diagnóstico de {page.name}</Link>
+            <Link {...nav.link(conversionsPath(project.id, page.id) + '/estimativa', '?dias=' + days)}>Configurar premissas</Link></div>
         </> : <p>Selecione uma LP para consultar a instalação.</p>}
       </>}
-    </section>
+    </section></div>
+    <div className="operation-grid overview-panels">
+    {!report.pending && observations && <TrafficOrigins observations={observations}/>}
     <section className="panel">
       <h2>Resultados do período</h2>
       {report.error !== undefined ? <Failure error={report.error} retry={report.revalidate}/> :
@@ -134,6 +151,28 @@ export function Overview({api, projects}: {api: AdminApi; projects: Project[]}) 
         </dl>}
       <p className="muted">Estimativas usam as premissas atuais dos projetos que têm configuração e cliques no período. O total geral de vendas inclui eventos reportados sem vínculo de projeto.</p>
     </section>
+    </div>
+    {!report.pending && report.data && observations && scope.length > 0 && <section className="panel" aria-labelledby="finance-projects">
+      <h2 id="finance-projects">Estimativa por projeto</h2>
+      <div className="finance-table-wrap" tabIndex={0} role="region" aria-label="Detalhamento das estimativas">
+        <table className="activity-table finance-table"><thead><tr>
+          <th scope="col">Projeto</th><th scope="col">Cliques observados</th><th scope="col">Premissas</th><th scope="col">Receita potencial</th>
+        </tr></thead><tbody>{scope.map(item => {
+          const estimate = estimates.get(item.id);
+          const assumption = premises.get(item.id);
+          const count = clicksByProject.get(item.id) ?? 0;
+          const candidate = rows.find(row => row.project.id === item.id)?.state?.pages.find(lp => lp.enabled && lp.lifecycle_state === 'ACTIVE');
+          return <tr key={item.id}>
+            <th scope="row">{item.name}</th><td data-heading="Cliques observados">{count}</td>
+            <td data-heading="Premissas"><span>{assumption ? <>{money(assumption.ticket_minor, assumption.currency)} · {(assumption.rate / 100).toLocaleString('pt-BR', {maximumFractionDigits:2})}% · v{assumption.version}</> : 'Sem premissas'}</span>
+              {candidate && <small><Link {...nav.link(conversionsPath(item.id, candidate.id) + '/estimativa', '?dias=' + days)}>Configurar premissas de {item.name}</Link></small>}
+            </td>
+            <td data-heading="Receita potencial">{estimate ? <>Estimativa {money((BigInt(estimate.numerator) + 5000n) / 10000n, estimate.currency)}</> :
+              count ? 'Faltam premissas' : 'Sem cliques'}</td>
+          </tr>;
+        })}</tbody></table>
+      </div>
+    </section>}
     <section className="panel">
       <h2>Projetos e investigações</h2>
       <p className="muted">O histórico de incidentes segue o recorte retornado pelo servidor.</p>
@@ -154,4 +193,94 @@ export function Overview({api, projects}: {api: AdminApi; projects: Project[]}) 
         </li>)}</ul> : <p>Nenhum projeto cadastrado.</p>}
     </section>
   </>;
+}
+
+function TrafficOrigins({observations}: {observations: Observation[]}) {
+  const byClass = new Map<string, number>();
+  for (const row of observations) if (row.action === 'SESSION_OBSERVED') {
+    byClass.set(row.traffic_class, (byClass.get(row.traffic_class) ?? 0) + row.events);
+  }
+  const total = [...byClass.values()].reduce((sum, count) => sum + count, 0);
+  return <section className="panel" aria-labelledby="traffic-origins">
+    <h2 id="traffic-origins">Origem do tráfego</h2>
+    {total ? <dl className="traffic-breakdown">{Object.entries(trafficLabels).map(([id, label]) => {
+      const count = byClass.get(id) ?? 0;
+      return <div key={id}>
+        <dt>{label}</dt>
+        <dd><strong>{(count / total).toLocaleString('pt-BR', {style:'percent',maximumFractionDigits:1})}</strong>
+          <meter aria-label={label} min={0} max={total} value={count}/></dd>
+      </div>;
+    })}</dl> : <p>Sem sinais de sessão no período selecionado.</p>}
+    <p className="muted">Distribuição por origem declarada nos sinais de sessão do período.</p>
+  </section>;
+}
+
+const activityTypes = {
+  SESSION_OBSERVED: 'Sinais de sessão', CTA_CLICK_OBSERVED: 'Cliques de CTA',
+  PAGE_REDIRECT_ATTEMPT: 'Tentativas de redirecionamento', CHECKOUT_HANDOFF_ATTEMPT: 'Tentativas de encaminhamento ao checkout',
+} as const;
+
+function Activity({observations, error, from, until}: {observations?: Observation[] | null; error: unknown; from: number; until: number}) {
+  const [metric, setMetric] = useState<keyof typeof activityTypes>('SESSION_OBSERVED');
+  const [traffic, setTraffic] = useState('');
+  const [table, setTable] = useState(false);
+  const days = new Map<string, number>();
+  for (const row of observations ?? []) {
+    if (row.action !== metric || (traffic && traffic !== row.traffic_class)) continue;
+    days.set(row.day, (days.get(row.day) ?? 0) + row.events);
+  }
+  const total = [...days.values()].reduce((sum, count) => sum + count, 0);
+  const data: {day: string; count: number}[] = [];
+  for (let time = Math.floor(from / dayMs) * dayMs; time < until; time += dayMs) {
+    const day = new Date(time).toISOString().slice(0, 10);
+    data.push({day, count: days.get(day) ?? 0});
+  }
+  return <section className="panel" aria-labelledby="activity-heading">
+    <div className="panel-heading"><h2 id="activity-heading">Atividade observada</h2>
+      <div className="action-links" role="group" aria-label="Visualização da atividade">
+        <button type="button" aria-pressed={!table} onClick={() => setTable(false)}>Gráfico</button>
+        <button type="button" aria-pressed={table} onClick={() => setTable(true)}>Tabela</button>
+      </div></div>
+    <div className="filters activity-filters">
+      <label>Métrica<select value={metric} onChange={event => setMetric(event.target.value as typeof metric)}>
+        {Object.entries(activityTypes).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+      </select></label>
+      <label>Origem declarada<select value={traffic} onChange={event => setTraffic(event.target.value)}>
+        <option value="">Todas as origens</option>
+        {Object.entries(trafficLabels).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+      </select></label>
+    </div>
+    {error !== undefined ? <p className="muted">A atividade está indisponível.</p> : observations === undefined ? <Loading/> :
+      total === 0 ? <p className="empty">Sem registros para a métrica e a origem selecionadas.</p> : <>
+        <p><strong>{total.toLocaleString('pt-BR')}</strong> · {activityTypes[metric]}</p>
+        {table ? <table className="activity-table"><thead><tr><th scope="col">Dia (UTC)</th><th scope="col">Registros</th></tr></thead>
+          <tbody>{data.map(({day, count}) => <tr key={day}><th scope="row">{day}</th><td>{count.toLocaleString('pt-BR')}</td></tr>)}</tbody>
+        </table> : <ActivityChart data={data} label={activityTypes[metric]}/>}
+      </>}
+    <p className="muted">Horários em UTC. Sinais de navegador não identificam pessoas nem confirmam chegada ou venda.</p>
+  </section>;
+}
+
+function ActivityChart({data, label}: {data: {day: string; count: number}[]; label: string}) {
+  const max = Math.max(1, ...data.map(point => point.count));
+  const points = data.map((point, index) => ({
+    ...point,
+    x: data.length === 1 ? 360 : 50 + index * 648 / (data.length - 1),
+    y: 168 - 138 * point.count / max,
+  }));
+  const coordinates = points.map(point => point.x + ',' + point.y).join(' ');
+  const values = points.map(({day, count}) => day + ': ' + count).join('; ');
+  return <svg className="activity-chart" viewBox="0 0 720 202" role="img" aria-label={label + ' por dia em UTC. ' + values}>
+    <line x1="50" y1="30" x2="698" y2="30" className="activity-guide"/>
+    <line x1="50" y1="168" x2="698" y2="168" className="activity-guide"/>
+    <text x="40" y="35" textAnchor="end">{max.toLocaleString('pt-BR')}</text>
+    <text x="40" y="172" textAnchor="end">0</text>
+    <polygon points={`${points[0].x},168 ${coordinates} ${points.at(-1)!.x},168`} className="activity-fill"/>
+    <polyline points={coordinates} className="activity-line"/>
+    {points.map(({day, count, x, y}, index) => <g key={day}>
+      <circle cx={x} cy={y} r="4.5" className="activity-point" data-count={count}><title>{day} · {count}</title></circle>
+      {(points.length <= 4 || index % 2 === 0 || index === points.length - 1) &&
+        <text x={x} y="193" textAnchor="middle">{day.slice(8)}/{day.slice(5, 7)}</text>}
+    </g>)}
+  </svg>;
 }

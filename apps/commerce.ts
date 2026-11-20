@@ -178,8 +178,9 @@ export function commerceWebhook(db:Pool,env:NodeJS.ProcessEnv=process.env){
 }
 
 async function commerceReport(db:Pool,d:Record<string,unknown>){
- only(d,['project','page','offer','checkout','provider','from','until','traffic','protection']);
+ only(d,['project','page','offer','checkout','provider','from','until','traffic','protection','activity']);
  if(typeof d.from!=='string'||typeof d.until!=='string'||!Number.isFinite(Date.parse(d.from))||!Number.isFinite(Date.parse(d.until))||Date.parse(d.until)<=Date.parse(d.from)||Date.parse(d.until)-Date.parse(d.from)>366*86400000)throw new TypeError('invalid report period');
+ if(d.activity!==undefined&&(d.activity!==true||Date.parse(d.until)-Date.parse(d.from)>7*86400000))throw new TypeError('invalid activity period');
  const project=d.project?identifier(d.project):null,page=d.page?uuid(d.page):null,offer=d.offer?identifier(d.offer):null,checkout=d.checkout?identifier(d.checkout):null,provider=d.provider?uuid(d.provider):null;
  const traffic=d.traffic?String(d.traffic):null,protection=d.protection?String(d.protection):null;
  if(traffic&&!['PAID_ATTRIBUTED','ORGANIC','REFERRAL','DIRECT_UNKNOWN'].includes(traffic)||protection&&!['PAGE_REDIRECT','REPLACE_CONVERSION'].includes(protection))throw new TypeError('invalid observation filter');
@@ -201,16 +202,31 @@ async function commerceReport(db:Pool,d:Record<string,unknown>){
  FROM commerce_orders o JOIN commerce_connections c ON c.id=o.connection_id JOIN commerce_models m ON(m.id,m.version)=(c.model_id,o.model_version) LEFT JOIN commerce_bindings b ON (b.id,b.version)=(o.binding_id,o.binding_version)
  WHERE ($1::text IS NULL OR b.project_id=$1) AND ($2::uuid IS NULL OR b.page_id=$2) AND ($3::text IS NULL OR b.offer=$3) AND ($4::text IS NULL OR b.checkout=$4) AND ($5::uuid IS NULL OR c.model_id=$5) AND ((o.paid_at >= $6 AND o.paid_at < $7) OR (o.adjusted_at >= $6 AND o.adjusted_at < $7) OR (o.reversed_at >= $6 AND o.reversed_at < $7) OR (o.occurred_at >= $6 AND o.occurred_at < $7)) GROUP BY o.currency ORDER BY o.currency`,[project,page,offer,checkout,provider,d.from,d.until,currencyExponents])).rows;
  if(currencies)for(const row of currencies){row.monetary_integrity=row.monetary_integrity_unverified_orders?'UNVERIFIED_HISTORICAL_CONTRACT':'VALIDATED_CURRENCY_EXPONENT';if(row.monetary_integrity_unverified_orders)for(const key of ['reported_amount_minor','net_amount_minor','reported_balance_minor','reversal_amount_minor','cancelled_payment_uncertain_minor'])row[key]=null;}
- const observations=offer||checkout||provider?null:(await db.query(`SELECT project_id,page_id,traffic_class,action,evidence,count(*)::int events,count(DISTINCT session_id)::int sessions FROM observed_action_facts WHERE ($1::text IS NULL OR project_id=$1) AND ($2::uuid IS NULL OR page_id=$2) AND received_at >= $3 AND received_at < $4 AND received_at>=clock_timestamp()-interval '7 days' AND ($5::text IS NULL OR traffic_class=$5) AND ($6::text IS NULL OR ($6='PAGE_REDIRECT' AND action='PAGE_REDIRECT_ATTEMPT') OR ($6='REPLACE_CONVERSION' AND action='CTA_CLICK_OBSERVED')) GROUP BY project_id,page_id,traffic_class,action,evidence ORDER BY project_id,page_id,action`,[project,page,d.from,d.until,traffic,protection])).rows;
+ const activityDay=d.activity===true?", (received_at AT TIME ZONE 'UTC')::date::text AS day":'';
+ const observations=offer||checkout||provider?null:(await db.query(`SELECT project_id,page_id,traffic_class,action,evidence,count(*)::int events,count(DISTINCT session_id)::int sessions${activityDay} FROM observed_action_facts WHERE ($1::text IS NULL OR project_id=$1) AND ($2::uuid IS NULL OR page_id=$2) AND received_at >= $3 AND received_at < $4 AND received_at>=clock_timestamp()-interval '7 days' AND ($5::text IS NULL OR traffic_class=$5) AND ($6::text IS NULL OR ($6='PAGE_REDIRECT' AND action='PAGE_REDIRECT_ATTEMPT') OR ($6='REPLACE_CONVERSION' AND action='CTA_CLICK_OBSERVED')) GROUP BY project_id,page_id,traffic_class,action,evidence${activityDay?', day':''} ORDER BY project_id,page_id,action`,[project,page,d.from,d.until,traffic,protection])).rows;
  const installed=(await db.query("SELECT to_regclass('observed_decision_receipts') IS NOT NULL installed")).rows[0].installed;
  const prepared_decisions=!installed||offer||checkout||provider?null:(await db.query(`SELECT project_id,page_id,traffic_class,action,policy_version,count(*)::int decisions FROM observed_decision_receipts WHERE ($1::text IS NULL OR project_id=$1) AND ($2::uuid IS NULL OR page_id=$2) AND prepared_at >= $3 AND prepared_at < $4 AND prepared_at>=clock_timestamp()-interval '7 days' AND ($5::text IS NULL OR traffic_class=$5) AND ($6::text IS NULL OR action=$6) GROUP BY project_id,page_id,traffic_class,action,policy_version`,[project,page,d.from,d.until,traffic,protection])).rows;
  const estimates:Record<string,bigint>={};
+ const estimateProjects:{project:string; clicks:number; currency:string; numerator:string}[]=[];
+ const estimateAssumptions:{project:string; currency:string; ticket_minor:string; rate:number; version:string}[]=[];
  if(observations){const clicks=new Map<string,number>();for(const row of observations)if(row.action==='CTA_CLICK_OBSERVED')clicks.set(row.project_id,(clicks.get(row.project_id)??0)+row.events);
-  if(clicks.size){const assumptions=(await db.query('SELECT DISTINCT ON(project_id) project_id,ticket_minor,conversion_basis_points,currency FROM estimate_assumptions WHERE project_id=ANY($1::text[]) ORDER BY project_id,version DESC',[[...clicks.keys()]])).rows;
-   for(const row of assumptions)estimates[row.currency]=(estimates[row.currency]??0n)+BigInt(clicks.get(row.project_id)!)*BigInt(row.ticket_minor)*BigInt(row.conversion_basis_points);
+  if(clicks.size||d.activity===true){const assumptions=(await db.query(`SELECT DISTINCT ON(project_id)
+    project_id,ticket_minor,conversion_basis_points,currency,version FROM estimate_assumptions
+    WHERE ($1::text IS NULL OR project_id=$1) AND ($2::text[] IS NULL OR project_id=ANY($2))
+    ORDER BY project_id,version DESC`,[project,d.activity===true?null:[...clicks.keys()]])).rows;
+   for(const row of assumptions){
+    const count=clicks.get(row.project_id)??0;
+    const numerator=count?BigInt(count)*BigInt(row.ticket_minor)*BigInt(row.conversion_basis_points):null;
+    if(numerator!==null){
+     estimates[row.currency]=(estimates[row.currency]??0n)+numerator;
+     if(d.activity===true)estimateProjects.push({project:row.project_id,clicks:count,currency:row.currency,numerator:numerator.toString()});
+    }
+    if(d.activity===true)estimateAssumptions.push({project:row.project_id,currency:row.currency,ticket_minor:row.ticket_minor,
+     rate:row.conversion_basis_points,version:String(row.version)});
+   }
   }
  }
- return {financial_basis:'REPORTED_EVENTS_NOT_SETTLEMENT',settled_revenue:null,currencies,observations,prepared_decisions,attribution:'UNVERIFIED',attributed_sales:0,attributed_revenue:[],confirmed_arrivals:null,estimated_revenue:observations?Object.entries(estimates).map(([currency,n])=>({label:'ESTIMATE',currency,amount_minor_numerator:n.toString(),denominator:10000})):null,observation_retention_days:7,limitations:['Orders cannot be filtered by traffic/protection without verified attribution.','Offer/checkout/provider observation segmentation unavailable (null).','Legacy project HMAC report remains separate; do not add overlapping sources.','Full-order terminal adjustments only; partial refunds require an adapter.','Sales use earliest authenticated PAID occurrence; adjustments use earliest terminal occurrence, independently of arrival order.']};
+ return {financial_basis:'REPORTED_EVENTS_NOT_SETTLEMENT',settled_revenue:null,currencies,observations,prepared_decisions,attribution:'UNVERIFIED',attributed_sales:0,attributed_revenue:[],confirmed_arrivals:null,estimated_revenue:observations?Object.entries(estimates).map(([currency,n])=>({label:'ESTIMATE',currency,amount_minor_numerator:n.toString(),denominator:10000})):null,...(d.activity===true?{estimate_projects:estimateProjects,estimate_assumptions:estimateAssumptions}:{}),observation_retention_days:7,limitations:['Orders cannot be filtered by traffic/protection without verified attribution.','Offer/checkout/provider observation segmentation unavailable (null).','Legacy project HMAC report remains separate; do not add overlapping sources.','Full-order terminal adjustments only; partial refunds require an adapter.','Sales use earliest authenticated PAID occurrence; adjustments use earliest terminal occurrence, independently of arrival order.']};
 }
 
 // Server-side operator channel only. Never exposed by admin HTTP or logs.

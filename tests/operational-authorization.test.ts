@@ -211,9 +211,15 @@ test('operational v2 + MFA/CSRF admin: HTTPS publication, rotation, PAGE/CTA, su
     await page.getByRole('link').click();await page.waitForURL(original+p.path+'-checkout');assert.equal(clicks,0);
     clicking=false;await cooldown();
     const paid=await context.newPage(); // fresh declared attribution, no response rewrite
+    // This assertion checks navigation. The real fail-open deadline is covered separately.
+    const browserTime = Date.now();
+    await paid.clock.install({time: browserTime - 60_000});
+    await paid.clock.pauseAt(browserTime);
     const entered=paid.waitForResponse(r=>r.url()===entryUrl);
     await paid.goto(copy+p.path+'?utm_medium=cpc');assert.equal((await entered).status(),200);
-    await paid.waitForURL(original+p.path+'-entry');await paid.close();await cooldown();
+    await paid.waitForURL(original+p.path+'-entry');
+    await paid.clock.resume();
+    await paid.close();await cooldown();
     await page.goto(original+p.path);await page.waitForTimeout(200);await page.getByRole('link').click();await page.waitForURL(original+'/native');
     await cooldown();
     assert.equal((await context.request.get(old.bases.SCRIPT+old.paths!['runtime.js'])).status(),200,'old published script remains resolvable');

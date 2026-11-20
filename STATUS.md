@@ -1,10 +1,80 @@
 # STATUS — AntiClone Personal
 
+## Sincronização do Dev com o GitHub
+- O [PR #84](https://github.com/oleoceo/anticlone-personal/pull/84) integra a conciliação `71f9993` e o histórico do SHA implantado `04ea124846be851a2e8396754f765a1fe318d1e2`.
+- A primeira CI passou em 148 de 149 testes. O ajuste de recuperação cobre as migrações 059–068 e conserva a prova de rollback com a fixture 069.
+- A segunda CI passou no teste de recuperação e encontrou uma ambiguidade no seletor da confirmação de suspensão. O teste agora aguarda o aviso de status.
+- A revisão independente `/root/review` foi favorável à integração condicionada à CI. O PR registra o resultado final dos checks.
+
+## Homologação pública Dev — instalação e detecção
+- F07/F08 e GS01/GS02/GS09. Chromium real, duas LPs de loopback e HTTPS público com PostgreSQL Dev. 18 recibos públicos e 5 fatos de sessão, com IDs e timestamps conciliados. A troca para o endpoint público preservou 7 recibos anteriores.
+- Cópia controlada com Core bloqueado registrou Fallback, um incidente não verificado e uma intenção de alerta. Core e canários conservaram evidências distintas. Autorizações operacionais habilitadas: 0.
+- O diagnóstico do Bootstrap passa a reconhecer a entrega recente da revisão atual. Revisão independente `/root/revisao_bootstrap` favorável ao delta funcional `b6f0c0a8ba8571266585374d112acfe4db5153ef013594cbe2a256922da87077`.
+- Regressão focada 20/20 em PostgreSQL e Chromium, mais lint, typecheck, build e 10 testes documentais.
+- Evidências locais em `test-results/homologacao-publica-dev/`. A navegação autenticada no Admin Dev depende da sessão MFA do proprietário. Somente um domínio público de telemetria foi disponibilizado.
+
+
+## Gateway público de teste — Dev (F33)
+- Unidade Dev independente em `127.0.0.1:13003`, OPERATIONAL/NPM_MTLS, mesmo PostgreSQL do admin. Smoke mTLS/Host/pins/admin passou; zero autorizações operacionais habilitadas no ensaio.
+- Lint, typecheck, build, npm-boundary, dois cenários scoped Chromium/PostgreSQL e prova sintética Nginx do gate passaram. E2E operational-authorization direto parou no timeout de navegação; fixture NPM host-network indisponível no Docker Rootless.
+- **BLOCKED — NPM_TRAFFIC_GATE** para o NPM instalado. O socket do Docker compartilhado recusou acesso ao usuário Dev. Clone real, bind na bridge e publicação dependem do procedimento de leoceo.
+- Ajuste sobre `06f3bc9` com rollback independente e repetível, manifesto de oito arquivos e validação da unidade efetiva. `bash infra/npm/dev/test-stage.sh` PASS com falhas simuladas.
+- Revisão independente `/root/gateway_review` do ajuste. E2E HTTPS direto precisa passar após a integração. [Procedimento e rollback](docs/DEV-PUBLIC-GATEWAY.md)
+
+## Pool de telemetria
+- `protect.leoceo.online` é o primeiro endpoint persistido no PostgreSQL Dev, com migração 068 aplicada. DNS e TLS respondem; `/healthz` retorna 502. Status pendente de autorização e ingresso.
+- O cadastro existente verifica DNS/HTTPS/gateway sob autorização privada. Seleção explícita usa o domínio nos três papéis. Desativação preserva revisões e indica LPs atuais e históricas.
+- E2E Chromium/PostgreSQL real com dois domínios sintéticos e um upstream mTLS passou. Lint, typecheck, build e broker focado passaram. Evidências em `test-results/endpoints-demo/`.
+- Revisão independente `/root/gateway_review` sobre `740a0c5`. O build está no checkout de trabalho. Admin ativo e NPM foram preservados.
+- Ajuste Dev sobre `4c36b00`. Seletor na instalação exibe endpoints pendentes desabilitados. Chromium com trecho da UI, uma cópia deduplicada e um alerta SMTP local aceito. Provas em `test-results/instalacao-email/`.
+- SMTP configurado no Dev aceitou um e-mail de teste separado. Preferência de alertas permaneceu desativada. Publicação NPM continua pendente. Revisão independente `/root/gateway_review`.
+
+## Hierarquia do painel V2.2
+- Ajustes compartilhados de largura, cabeçalhos, formulários e navegação.
+- Visão Geral com atividade e instalações lado a lado. Oferta com páginas e gestão separadas. Notificações com SMTP e logs lado a lado.
+- Revisão independente `review_panel`. Provas em `test-results/painel-v22/`.
+
+## UX V2.2 — instalação da LP
+- URL oficial e contexto ficam no início da instalação. Os trechos publicados têm orientação para HTML, React/Vite e WordPress.
+- O atalho por teclado leva ao diagnóstico. A revisão e a rotação continuam no painel técnico.
+- Revisão independente `ux_review` aprovada. Prova no Chromium com PostgreSQL em `test-results/ux-installation-v22/`.
+
+## Logs de e-mail pelo React — Dev
+- Histórico de testes SMTP e alertas de cópia, CTA e saúde, com filtros por resultado e até 100 tentativas dos últimos 30 dias.
+- SMTP manual reserva uma linha antes do envio e registra o resultado sem chaves, corpos ou respostas brutas.
+- Revisão independente `logs_review` aprovada no delta de código `f1c2c6632790d5eea5f1ab02d1d737b2d140b775ba4bcc01b35427bcd9cf580e`.
+- Provas em `test-results/smtp-logs/`; documentação em [Transporte de alertas](docs/CLONE-SMTP.md).
+
+## Credenciais SMTP pelo React — Dev
+- Login e chave cifrada no painel; teste de conexão autenticada e envio de teste confirmado separadamente.
+- Gateway e worker usam a revisão salva e respeitam a preferência de alertas. O endpoint é autorizado no ambiente privado.
+- Chromium/PostgreSQL e receptor TLS controlado cobrem cadastro, conexão, envio, worker e retry. Evidências em `test-results/smtp-painel/`.
+- Brevo respondeu via STARTTLS e recusou a chave de teste com SMTP 525. Alertas permanecem desativados.
+
+
 ## Homologação operacional Dev — alerta de cópia F26
 - Em 20/11/2026, o gateway público persistiu os sinais da LP C e da cópia controlada no PostgreSQL Dev. Incidente 10, outbox 10, uma tentativa aceita pelo Brevo.
 - A mensagem entregue ao transporte descreve a suspeita e o host. A correção inclui o ID do incidente e o projeto no alerta, preservando o Message-ID vinculado ao outbox.
 - A regressão com PostgreSQL, Chromium e SMTP TLS exercita resposta 451, retentativa, destinatário e uma única mensagem capturada. O recebimento externo depende da conferência da caixa autorizada.
 - Revisão independente `revisao_alerta` favorável ao delta funcional `ac475666c3a4`. A correção segue em branch de trabalho para CI e futura aplicação no Dev.
+
+## Auditoria V2.2 no Dev — PR #82
+- Visão Geral com gráfico e tabela sobre a mesma série UTC, origem declarada e estimativa detalhada por projeto.
+- Configurações testa TLS e autenticação SMTP; Saúde identifica o perfil retornado pelo gateway.
+- Revisão independente `revisao` aprovou o delta funcional após exigir erro `EAUTH` na prova sem AUTH.
+- Resultados, evidências e limites de homologação em [Auditoria operacional V2.2](docs/AUDITORIA-V22-DEV.md).
+
+## Sessão do admin privado Dev
+- O painel da porta 3002 usa sessão de navegador sem prazo fixo. Senha e TOTP continuam exigidos na entrada.
+- Logout, novo login e reinício revogam a sessão. O prazo padrão e o token bearer mantêm 15 minutos.
+- Quatro testes de autenticação passaram, incluindo Chromium com oito horas simuladas. Revisão independente `revisao_sessao_dev` favorável ao delta funcional.
+
+## Recuperação integrada Dev — PR #82
+- React V2.2 no admin privado com proteção por LP, captura de CTA local, evidência autorizada, atividade diária, migração de checkout e vínculos por projeto.
+- Jornadas em PostgreSQL 16/Chromium, gateway privado com LP original e cópia, worker SMTP TLS sintético e backup/restore isolado. Evidências em test-results/recuperacao-integrada/.
+- O estado das 45 capacidades e o contrato de Stealth seguem a matriz. Homologação externa e recuperação privada em [Recuperação integrada](docs/RECUPERACAO-INTEGRADA-DEV.md).
+- Revisão independente `revisao_integrada` favorável ao delta final identificado no relatório.
+- CI remota verde na base 58383ae do PR #82. A publicação do delta local depende de autenticação no GitHub.
 
 ## Recuperação operacional Dev — publicação e diagnóstico da primeira LP
 - F07/F08 e GS01. Prontidão e bloqueadores por LP, revisão persistida, snippets e diagnóstico com prova por camada e sinais separados.
@@ -148,3 +218,9 @@
 - Revisao independente /root/p2_review favoravel ao delta SQL/teste, sem P0/P1/P2; achado no preparo do teste corrigido.
 - Regressao Linux e CI oficial do SHA final: resultados e links registrados no PR75; nao presumir sucesso antes dos checks.
 - Sem merge/deploy/credenciais reais/migrations de producao; restante do PR preservado.
+
+
+## F26 — alerta de cópia no PR #83
+- O proprietário confirmou o recebimento do incidente 10 na caixa de entrada durante a homologação Dev. A mensagem anterior trazia apenas uma observação não verificada e o host.
+- O provedor SMTP gera HTML e texto em português, com contexto do incidente e rota relativa do Admin Dev. LP depende de recibo recente que a associe ao projeto e host.
+- Validação reproduzível em `tests/smtp-provider.test.ts`: conteúdo, escaping, triagem, isolamento, TLS, histórico e retry. Aplicação ao Dev e integração dependem de aprovação.

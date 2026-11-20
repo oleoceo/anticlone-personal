@@ -2,7 +2,7 @@ import {useState} from 'react';
 import {Link, useLocation, useNavigate} from 'react-router-dom';
 import {AdminApi, type Page, type Project} from './admin-api';
 import {CtaWorkspace} from './cta-workspace';
-import {Back, Breadcrumbs, conversionsPath, pagePath, projectPath, projectsPath, useContextNavigation} from './navigation';
+import {Back, Breadcrumbs, conversionsPath, overviewPath, pagePath, projectPath, projectsPath, protectionPath, settingsPath, useContextNavigation} from './navigation';
 import {InputError, formData, formatDate, useOperation, value, type SetGuard} from './operations';
 import {scopedProtection, useProtection} from './protection';
 import {Failure, Heading, Loading, useQuery} from './ui';
@@ -99,6 +99,7 @@ export function Conversions({api, project, page, subview, setGuard}: {
             <h2 id="estimate-result">Resultado da estimativa</h2>
             <p className="muted">{page.name} · {days === '1' ? 'Últimas 24 horas' : 'Últimos 7 dias'}</p>
             {observed.pending ? <Loading>Atualizando estimativa…</Loading> : <Results data={observed.data} showAssumptions/>}
+            <Link className="button" {...nav.link(overviewPath, '?' + new URLSearchParams({projeto: project.id, lp: page.id, dias: days}))}>Ver na Visão Geral</Link>
           </section>
         </div> : <Loading/> : <>
         <section className="panel">
@@ -124,6 +125,7 @@ export function Conversions({api, project, page, subview, setGuard}: {
         {data.lp.error !== undefined && <Failure error={data.lp.error} retry={data.lp.revalidate}/>}
         {data.pr.data && data.lp.data && <CtaWorkspace api={api} project={project.id} page={page}
           protection={scopedProtection(data.pr.data, data.lp.data)} refresh={data.refresh} setGuard={setGuard}/>}
+        <Link className="button" {...nav.link(protectionPath(project.id, page.id) + '/substituir-cta')}>Configurar política de CTA</Link>
       </>}
   </>;
 }
@@ -185,15 +187,17 @@ function Estimate({api, project, assumptions, refresh, setGuard}: {
   </section>;
 }
 
-function CommerceBindings({api, project, page, setGuard}: {api: AdminApi; project: string; page: string; setGuard: SetGuard}) {
-  const catalog = useQuery(project + ':' + page, signal => api.request<Catalog>('commerce', {action: 'list'}, signal));
+export function CommerceBindings({api, project, page, setGuard}: {api: AdminApi; project: string; page: string | null; setGuard: SetGuard}) {
+  const nav = useContextNavigation();
+  const catalog = useQuery(project + ':' + (page ?? ''), signal => api.request<Catalog>('commerce', {action: 'list'}, signal));
   const operation = useOperation(setGuard);
+  const controls = {...operation, busy: operation.busy || catalog.pending || catalog.error !== undefined};
   const entries = catalog.data?.bindings.filter(item => item.project_id === project && item.page_id === page) ?? [];
   const inherited = catalog.data?.bindings.filter(item => item.project_id === project && item.page_id === null) ?? [];
-  return <section className="panel">
+  return <><section className="panel">
     <div className="panel-heading"><h2>Checkouts vinculados</h2><button type="button" disabled={operation.busy}
       onClick={catalog.revalidate}>Atualizar vínculos</button></div>
-    <p>Os vínculos identificam eventos comerciais da LP. Destinos de proteção seguem sua própria aprovação.</p>
+    <p>{page ? 'Os vínculos identificam eventos comerciais da LP.' : 'Os vínculos deste projeto sem LP associada registram eventos no escopo do projeto.'} Destinos de proteção seguem sua própria aprovação.</p>
     {operation.notice()}
     {catalog.error !== undefined && <Failure error={catalog.error} retry={catalog.revalidate}/>}
     {catalog.data ? <>
@@ -203,22 +207,37 @@ function CommerceBindings({api, project, page, setGuard}: {api: AdminApi; projec
           <strong>{connection?.account ?? 'Conta indisponível'} · {stateLabels[item.state] ?? item.state}</strong>
           <small>{item.url} · versão {item.version} · conta {stateLabels[connection?.state ?? ''] ?? 'indisponível'}</small>
           <details><summary>Editar vínculo</summary><BindingForm key={item.version} api={api} project={project} page={page}
-            catalog={catalog.data!} binding={item} operation={operation} refresh={catalog.revalidate}/></details>
+            catalog={catalog.data!} binding={item} operation={controls} refresh={catalog.revalidate}/></details>
         </li>;
-      })}</ul> : <p className="empty">Nenhum checkout vinculado a esta LP no catálogo retornado.</p>}
-      {inherited.length > 0 && <p className="muted">{inherited.length} vínculo(s) do projeto sem LP associada.</p>}
+      })}</ul> : <p className="empty">{page ? 'Nenhum checkout vinculado a esta LP no catálogo retornado.' : 'Nenhum checkout vinculado neste escopo no catálogo retornado.'}</p>}
+      {page && inherited.length > 0 && <Link {...nav.link(projectPath(project) + '/checkouts')}>{inherited.length} vínculo(s) do projeto sem LP associada</Link>}
       {catalog.data.connections.length > 0 ? <details><summary>Vincular checkout</summary>
         <BindingForm api={api} project={project} page={page} catalog={catalog.data}
-          operation={operation} refresh={catalog.revalidate}/>
-        </details> : <p>Cadastre uma conta de checkout em Integrações no painel anterior.</p>}
+          operation={controls} refresh={catalog.revalidate}/>
+        </details> : <p><Link {...nav.link(settingsPath + '/integracoes')}>Cadastrar conta de checkout em Integrações</Link></p>}
     </> : catalog.error === undefined && <Loading/>}
-  </section>;
+  </section>
+    {!page && <LegacySales api={api} project={project}/>}
+  </>;
+}
+
+function LegacySales({api, project}: {api: AdminApi; project: string}) {
+  const [open, setOpen] = useState(false);
+  const query = useQuery(open ? project : '', signal => api.request<Pick<Report, 'currencies'>>('checkout-metrics', {project}, signal));
+  return <details className="panel" onToggle={event => setOpen(event.currentTarget.open)}>
+    <summary>Vendas do receptor HMAC legado</summary>
+    <p>Histórico recebido pelo receptor anterior. Consulte este total separadamente para evitar dupla contagem de vendas.</p>
+    {query.error !== undefined ? <Failure error={query.error} retry={query.retry}/> : !query.data ? <Loading/> :
+      query.data.currencies?.length ? <ul className="plain evidence-list">{query.data.currencies.map(row => <li key={row.currency}>
+        {row.reported_sales} venda(s) · {money(row.reported_amount_minor, row.currency)}
+      </li>)}</ul> : <p>Nenhuma venda registrada neste receptor.</p>}
+  </details>;
 }
 
 const discriminators = {offer: 'Oferta', product: 'Produto', checkout: 'Checkout'};
 
 function BindingForm({api, project, page, catalog, binding, operation, refresh}: {
-  api: AdminApi; project: string; page: string; catalog: Catalog; binding?: Binding;
+  api: AdminApi; project: string; page: string | null; catalog: Catalog; binding?: Binding;
   operation: ReturnType<typeof useOperation>; refresh: () => void;
 }) {
   const [account, setAccount] = useState(binding?.connection_id ?? '');
@@ -248,7 +267,8 @@ function BindingForm({api, project, page, catalog, binding, operation, refresh}:
       <option value="">Selecione</option>{catalog.connections.map(row =>
         <option key={row.id} value={row.id}>{row.account} · {stateLabels[row.state] ?? row.state}</option>)}
     </select></label>
-    {model ? <>
+    {model ? <fieldset className="binding-fields" key={account}>
+      <legend>Dados do checkout</legend>
       {Object.entries(discriminators).filter(([key]) => model.config.fields[key]).map(([key, label]) =>
         <label key={key}>{label}<input name={key} required maxLength={128} readOnly={!!binding}
           defaultValue={binding?.[key as keyof typeof discriminators] ?? ''}/></label>)}
@@ -265,6 +285,6 @@ function BindingForm({api, project, page, catalog, binding, operation, refresh}:
         {['ACTIVE','INACTIVE','ARCHIVED'].map(state => <option key={state} value={state}>{stateLabels[state]}</option>)}
       </select></label>
       <button type="submit" disabled={operation.busy}>Revisar vínculo comercial</button>
-    </> : account && <p>Formato da conta indisponível no catálogo retornado.</p>}
+    </fieldset> : account && <p>Formato da conta indisponível no catálogo retornado.</p>}
   </form>;
 }
