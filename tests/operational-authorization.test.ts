@@ -217,7 +217,9 @@ test('operational v2 + MFA/CSRF admin: HTTPS publication, rotation, PAGE/CTA, su
     await paid.clock.pauseAt(browserTime);
     const entered=paid.waitForResponse(r=>r.url()===entryUrl);
     await paid.goto(copy+p.path+'?utm_medium=cpc');assert.equal((await entered).status(),200);
-    await paid.waitForURL(original+p.path+'-entry');await paid.close();await cooldown();
+    await paid.waitForURL(original+p.path+'-entry');
+    await paid.clock.resume();
+    await paid.close();await cooldown();
     await page.goto(original+p.path);await page.waitForTimeout(200);await page.getByRole('link').click();await page.waitForURL(original+'/native');
     await cooldown();
     assert.equal((await context.request.get(old.bases.SCRIPT+old.paths!['runtime.js'])).status(),200,'old published script remains resolvable');
