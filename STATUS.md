@@ -1,5 +1,10 @@
 # STATUS — AntiClone Personal
 
+## Sincronização do Dev com o GitHub
+- O [PR #84](https://github.com/oleoceo/anticlone-personal/pull/84) integra a conciliação `71f9993` e o histórico do SHA implantado `04ea124846be851a2e8396754f765a1fe318d1e2`.
+- A primeira CI passou em 148 de 149 testes. O ajuste de recuperação cobre as migrações 059–068 e conserva a prova de rollback com a fixture 069.
+- A revisão independente `/root/review` foi favorável à integração condicionada à CI. O PR registra o resultado final dos checks.
+
 ## Homologação pública Dev — instalação e detecção
 - F07/F08 e GS01/GS02/GS09. Chromium real, duas LPs de loopback e HTTPS público com PostgreSQL Dev. 18 recibos públicos e 5 fatos de sessão, com IDs e timestamps conciliados. A troca para o endpoint público preservou 7 recibos anteriores.
 - Cópia controlada com Core bloqueado registrou Fallback, um incidente não verificado e uma intenção de alerta. Core e canários conservaram evidências distintas. Autorizações operacionais habilitadas: 0.
