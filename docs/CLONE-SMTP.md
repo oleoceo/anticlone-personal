@@ -61,3 +61,12 @@ Cobre TLS implícito, STARTTLS, rejeição de certificado não confiável, falha
 autenticação, retry/reinício, original preservado, cópia em outro hostname,
 deduplicação, consulta autenticada, isolamento de projetos e prazo total em
 SMTP lento. Não usa contas externas nem comprova entrega externa.
+
+O alerta F26 do provedor inclui versões HTML e texto em português. A primeira
+detecção usa UTC. O risco é a última avaliação retida para o projeto e host
+nos últimos sete dias e o estado vem da triagem. A mensagem identifica
+separadamente a confiança e a origem dos sinais. O nome da LP aparece quando
+recibos retidos do mesmo projeto e host referenciam uma única LP. A ausência de
+recibos, inclusive quando a coleta ainda está em andamento, ou a existência de
+mais de uma LP deixa a associação em aberto. O caminho relativo do Admin Dev
+deve ser usado no endereço privado já conhecido, após autenticação.

@@ -1,5 +1,11 @@
 # STATUS — AntiClone Personal
 
+## Homologação operacional Dev — alerta de cópia F26
+- Em 20/11/2026, o gateway público persistiu os sinais da LP C e da cópia controlada no PostgreSQL Dev. Incidente 10, outbox 10, uma tentativa aceita pelo Brevo.
+- A mensagem entregue ao transporte descreve a suspeita e o host. A correção inclui o ID do incidente e o projeto no alerta, preservando o Message-ID vinculado ao outbox.
+- A regressão com PostgreSQL, Chromium e SMTP TLS exercita resposta 451, retentativa, destinatário e uma única mensagem capturada. O recebimento externo depende da conferência da caixa autorizada.
+- Revisão independente `revisao_alerta` favorável ao delta funcional `ac475666c3a4`. A correção segue em branch de trabalho para CI e futura aplicação no Dev.
+
 ## Recuperação operacional Dev — publicação e diagnóstico da primeira LP
 - F07/F08 e GS01. Prontidão e bloqueadores por LP, revisão persistida, snippets e diagnóstico com prova por camada e sinais separados.
 - React V2.2 preserva navegação e integra a configuração e o histórico de saúde à sessão privada. Gateway local usa sonda HTTP opt-in.
