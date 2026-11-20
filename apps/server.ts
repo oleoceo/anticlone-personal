@@ -5,7 +5,7 @@ import { observedSessionGateway } from './observed-session-gateway.js';
 import { withAttribution } from './attribution.js';
 import { authorizedHosts, collectInfrastructure, realResolver } from './infrastructure-dns.js';
 import http from 'node:http';
-import {npmServer} from './npm-transport.js';
+import {npmListenAddress,npmServer} from './npm-transport.js';
 import { randomUUID } from 'node:crypto';
 import { operationallyEligible } from './operational-eligibility.js';
 import { projectMaintenance } from './project-maintenance.js';
@@ -34,6 +34,13 @@ import { legacyOperationallyEligible } from './operational-eligibility.js';
 const boundary = gatewayBoundary(process.env);
 const connectionString = process.env.DATABASE_URL, project = process.env.PROJECT_ID;
 const smtpPort = Number(process.env.SMTP_PORT), port = Number(process.env.PORT ?? 3000);
+const npmTransport = process.env.GATEWAY_TRANSPORT === 'NPM_MTLS';
+const listenAddress = npmTransport ? npmListenAddress(process.env) : '127.0.0.1';
+const maintenanceOff = process.env.GATEWAY_BACKGROUND_MAINTENANCE === 'off';
+if (process.env.GATEWAY_BACKGROUND_MAINTENANCE !== undefined &&
+    (!maintenanceOff || !npmTransport || process.env.GATEWAY_MODE !== 'OPERATIONAL' || !process.env.NPM_LISTEN_ADDRESS)) {
+  throw Error('invalid gateway maintenance configuration');
+}
 const configuredSmtp = smtpProvider(process.env);
 let ctaDeliveryAfter=0;
 if (!connectionString || (project !== undefined && !/^[a-zA-Z0-9_-]{1,64}$/.test(project)) || !Number.isInteger(smtpPort) || smtpPort < 1 || smtpPort > 65535 || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('invalid local test configuration');
@@ -299,11 +306,11 @@ const handler: http.RequestListener = (req, res) => {
     });
   });
 };
-const server = process.env.GATEWAY_TRANSPORT==='NPM_MTLS'?npmServer(process.env,handler):http.createServer(handler);
+const server = npmTransport ? npmServer(process.env,handler) : http.createServer(handler);
 server.requestTimeout = 5000; server.headersTimeout = 6000;
 server.maxHeadersCount = 40;
 server.setTimeout(10_000, socket => socket.destroy());
-server.listen(port, process.env.GATEWAY_TRANSPORT==='NPM_MTLS'?'0.0.0.0':'127.0.0.1');
+server.listen(port, listenAddress);
 let busy = false;
 let installationCleanupAfter = 0;
 let healthCleanupAfter = 0;
@@ -383,10 +390,17 @@ async function infrastructureMaintenance() {
   } catch { process.stderr.write('infrastructure DNS maintenance failed\n'); }
   finally { dnsBusy = false; }
 }
-if (project) void infrastructureMaintenance();
-const dnsTimer = setInterval(() => { if (project) void infrastructureMaintenance(); },60_000);
-dnsTimer.unref();
-if (project) void maintenance();
-void maintainProjects();
-const timer = setInterval(() => { if (project) void maintenance(); void maintainProjects(); }, 1000);
+let timer: ReturnType<typeof setInterval> | undefined;
+let dnsTimer: ReturnType<typeof setInterval> | undefined;
+if (!maintenanceOff) {
+  if (project) {
+    void infrastructureMaintenance();
+    void maintenance();
+    dnsTimer = setInterval(() => { void infrastructureMaintenance(); }, 60_000);
+    dnsTimer.unref();
+  }
+  const sweep = () => { if (project) void maintenance(); void maintainProjects(); };
+  void maintainProjects();
+  timer = setInterval(sweep, 1000);
+}
 process.on('SIGTERM', () => { clearInterval(timer); clearInterval(dnsTimer); server.close(() => { void pool.end().finally(() => process.exit()); }); });

@@ -7,6 +7,14 @@
 - Regressão focada 20/20 em PostgreSQL e Chromium, mais lint, typecheck, build e 10 testes documentais.
 - Evidências locais em `test-results/homologacao-publica-dev/`. A navegação autenticada no Admin Dev depende da sessão MFA do proprietário. Somente um domínio público de telemetria foi disponibilizado.
 
+
+## Gateway público de teste — Dev (F33)
+- Unidade Dev independente em `127.0.0.1:13003`, OPERATIONAL/NPM_MTLS, mesmo PostgreSQL do admin. Smoke mTLS/Host/pins/admin passou; zero autorizações operacionais habilitadas no ensaio.
+- Lint, typecheck, build, npm-boundary, dois cenários scoped Chromium/PostgreSQL e prova sintética Nginx do gate passaram. E2E operational-authorization direto parou no timeout de navegação; fixture NPM host-network indisponível no Docker Rootless.
+- **BLOCKED — NPM_TRAFFIC_GATE** para o NPM instalado. O socket do Docker compartilhado recusou acesso ao usuário Dev. Clone real, bind na bridge e publicação dependem do procedimento de leoceo.
+- Ajuste sobre `06f3bc9` com rollback independente e repetível, manifesto de oito arquivos e validação da unidade efetiva. `bash infra/npm/dev/test-stage.sh` PASS com falhas simuladas.
+- Revisão independente `/root/gateway_review` do ajuste. E2E HTTPS direto precisa passar após a integração. [Procedimento e rollback](docs/DEV-PUBLIC-GATEWAY.md)
+
 ## Pool de telemetria
 - `protect.leoceo.online` é o primeiro endpoint persistido no PostgreSQL Dev, com migração 068 aplicada. DNS e TLS respondem; `/healthz` retorna 502. Status pendente de autorização e ingresso.
 - O cadastro existente verifica DNS/HTTPS/gateway sob autorização privada. Seleção explícita usa o domínio nos três papéis. Desativação preserva revisões e indica LPs atuais e históricas.
