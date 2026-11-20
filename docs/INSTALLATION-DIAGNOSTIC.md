@@ -12,7 +12,7 @@ Regressoes: `tests/installation-admin.test.ts` cobre autenticacao bearer/web, se
 
 ## Correção PR #64 — verificação permanece bloqueada
 
-Publicação, presença alegada e chegada por alias são distintos. Canários não atestam LP por Referer/alias; pathname completo também é forjável. Bootstrap permanece UNKNOWN. controlledVerification.status=NOT_VERIFIED, razão ISOLATED_VERIFIER_UNAVAILABLE; capacidades verificadas de observação/mitigação ficam UNKNOWN. Falta de sinais, CSP, adblock, offline/rede não comprovam adulteração.
+Publicação, presença alegada e chegada por alias são distintos. Canários não atestam LP por Referer/alias; pathname completo também é forjável. Nesse recorte do PR #64, Bootstrap permanecia UNKNOWN. controlledVerification.status=NOT_VERIFIED, razão ISOLATED_VERIFIER_UNAVAILABLE; capacidades verificadas de observação/mitigação ficam UNKNOWN. Falta de sinais, CSP, adblock, offline/rede não comprovam adulteração.
 
 BLOCKED: não existe serviço com isolamento de rede verificável, egress deny-by-default e bloqueio de SSRF/rebinding/rede privada/UDP/WebRTC. Reproduzir recusa segura em tests/runtime-distribution.test.ts: verify com loopback, metadata e destino não autorizado é rejeitado antes de conexão/navegador. Nenhum FULL/PARTIAL/UNSUPPORTED é produzido. Alternativa: laboratório sintético explícito do operador, sem persistir certificação de instalação. F08 exige comprovar aquela fronteira antes de navegar em URLs cadastradas.
 

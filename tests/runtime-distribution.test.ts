@@ -178,8 +178,11 @@ test('distribution v1: persistent revisions, admin HTML/CSS, real browser layers
     const signals=(await db.query('SELECT source FROM page_installation_signals WHERE page_id=$1 ORDER BY source',[pageId])).rows.map(row=>row.source);
     assert.deepEqual(signals,['core','fallback']);
     assert.ok((await db.query("SELECT last_activity_at FROM installation_last_signal WHERE project_id='one'")).rows[0].last_activity_at,'F45 retains origin-level alleged activity without certifying a LP');
+    const wait=async(check:()=>Promise<boolean>)=>{for(let index=0;index<100;index++){if(await check())return;await new Promise(resolve=>setTimeout(resolve,30));}throw Error('layer journal did not settle');};
+    const bootstrapStatus = async () => (await distributionAdmin(db,request,env)).diagnostic?.layers.find(layer=>layer.layer==='bootstrap')?.status;
+    await wait(async()=>await bootstrapStatus()==='ROUTE_OBSERVED');
     const state=await distributionAdmin(db,request,env);assert.equal(state.diagnostic?.status,'NOT_VERIFIED');
-    assert.equal(state.diagnostic?.layers.find(layer=>layer.layer==='bootstrap')?.status,'UNKNOWN');
+    assert.equal(state.diagnostic?.layers.find(layer=>layer.layer==='bootstrap')?.controlled,'NOT_TESTED');
     assert.equal(state.diagnostic?.controlledVerification.status,'NOT_VERIFIED');
     assert.equal(state.diagnostic?.capabilities.activeMitigation,'UNKNOWN');
     // Another LP on the same host cannot be inferred from an origin-only
@@ -197,6 +200,7 @@ test('distribution v1: persistent revisions, admin HTML/CSS, real browser layers
     const forged=await distributionAdmin(db,{project:'one',page:sibling,action:'inspect'},env);
     assert.equal(forged.diagnostic?.status,'NOT_VERIFIED','even an exact forged header proves no execution');
     assert.equal(forged.diagnostic?.confidence,'UNAUTHENTICATED_CLAIM');
+    assert.equal(forged.diagnostic?.layers.find(layer=>layer.layer==='bootstrap')?.status,'UNKNOWN');
     // Remove Bootstrap and Core: the independently installed Fallback still sends.
     await page.route('**/runtime.js',route=>route.abort());await page.route('**/core.js',route=>route.abort());
     const fallback=page.waitForResponse(response=>response.url()===first.bases.TELEMETRY+'observe/fallback'&&response.status()===204);
@@ -205,7 +209,6 @@ test('distribution v1: persistent revisions, admin HTML/CSS, real browser layers
     // The same independently installed layers feed the existing F44 journal.
     const copied=await browser.newPage();
     await copied.goto(clone);
-    const wait=async(check:()=>Promise<boolean>)=>{for(let index=0;index<100;index++){if(await check())return;await new Promise(resolve=>setTimeout(resolve,30));}throw Error('layer journal did not settle');};
     await wait(async()=>(await db.query("SELECT count(DISTINCT source)::int n FROM degradation_events WHERE project_id='one' AND origin=$1",[clone])).rows[0].n===4);
     await wait(async()=>(await db.query("SELECT count(DISTINCT source)::int n FROM investigation_receipts WHERE project_id='one' AND page_id=$1 AND claimed_host='localhost' AND alias IS NOT NULL",[pageId])).rows[0].n===4);
     const linked=(await db.query("SELECT DISTINCT installation_id,page_id FROM investigation_receipts WHERE project_id='one' AND claimed_host='localhost'")).rows;
@@ -238,6 +241,7 @@ test('distribution v1: persistent revisions, admin HTML/CSS, real browser layers
     // Explicit new role origins create v2; old bundles retain all v1 bases.
     const second=await distributionAdmin(db,{...request,action:'publish'},{...env,RUNTIME_TELEMETRY_ORIGIN:'https://signals.owner.test'});
     assert.equal(second.distribution?.version,2);
+    assert.equal(await bootstrapStatus(),'UNKNOWN','a receipt for the previous revision cannot count for the new alias');
     assert.deepEqual(await readDistribution(db,installation,1),first);
     const oldBundle=await (await fetch(first.bases.SCRIPT+'runtime.js')).text();
     assert.ok(oldBundle.includes(first.bases.TELEMETRY));assert.ok(!oldBundle.includes('https://signals.owner.test'));
@@ -259,6 +263,7 @@ test('distribution v1: persistent revisions, admin HTML/CSS, real browser layers
     await page.unroute('**/runtime.js');await page.unroute('**/core.js');
     const modernLayers=Promise.all(['e','f','m.gif','n.gif'].map(path=>page.waitForResponse(r=>r.url().endsWith('/'+path)&&r.ok())));
     await page.goto(origin);await modernLayers;
+    await wait(async()=>await bootstrapStatus()==='ROUTE_OBSERVED');
     const routed=await distributionAdmin(db,request,env);
     assert.equal(routed.aliasActivity?.length,2,'sources remain distinct even sharing a routing alias');
     for(const layer of ['html_canary','css_canary'])assert.equal(routed.diagnostic?.layers.find(l=>l.layer===layer)?.status,'ROUTE_OBSERVED');
@@ -269,6 +274,10 @@ test('distribution v1: persistent revisions, admin HTML/CSS, real browser layers
     await db.query(await readFile('infra/068_telemetry_origin_checks.sql','utf8'));
     const settings=adminBase+'/admin/ui/novo/configuracoes/integracoes';
     const installationPath=adminBase+'/admin/ui/novo/projetos/one/lps/'+pageId+'/instalacao';
+    await panel.goto(installationPath);
+    const bootstrapLayer=panel.locator('.layers li').filter({has:panel.getByText('Bootstrap',{exact:true})});
+    await bootstrapLayer.getByText('Acesso ao recurso observado',{exact:true}).waitFor();
+    await bootstrapLayer.getByText('Sem prova controlada atual',{exact:true}).waitFor();
     const previous=(await distributionAdmin(db,request,env)).distribution!;
     const split=await distributionAdmin(db,{project:'one',page:sibling,action:'publish'},
       {...env,RUNTIME_TELEMETRY_ORIGIN:pooledOrigin});

@@ -1,5 +1,12 @@
 # STATUS — AntiClone Personal
 
+## Homologação pública Dev — instalação e detecção
+- F07/F08 e GS01/GS02/GS09. Chromium real, duas LPs de loopback e HTTPS público com PostgreSQL Dev. 18 recibos públicos e 5 fatos de sessão, com IDs e timestamps conciliados. A troca para o endpoint público preservou 7 recibos anteriores.
+- Cópia controlada com Core bloqueado registrou Fallback, um incidente não verificado e uma intenção de alerta. Core e canários conservaram evidências distintas. Autorizações operacionais habilitadas: 0.
+- O diagnóstico do Bootstrap passa a reconhecer a entrega recente da revisão atual. Revisão independente `/root/revisao_bootstrap` favorável ao delta funcional `b6f0c0a8ba8571266585374d112acfe4db5153ef013594cbe2a256922da87077`.
+- Regressão focada 20/20 em PostgreSQL e Chromium, mais lint, typecheck, build e 10 testes documentais.
+- Evidências locais em `test-results/homologacao-publica-dev/`. A navegação autenticada no Admin Dev depende da sessão MFA do proprietário. Somente um domínio público de telemetria foi disponibilizado.
+
 ## Pool de telemetria
 - `protect.leoceo.online` é o primeiro endpoint persistido no PostgreSQL Dev, com migração 068 aplicada. DNS e TLS respondem; `/healthz` retorna 502. Status pendente de autorização e ingresso.
 - O cadastro existente verifica DNS/HTTPS/gateway sob autorização privada. Seleção explícita usa o domínio nos três papéis. Desativação preserva revisões e indica LPs atuais e históricas.

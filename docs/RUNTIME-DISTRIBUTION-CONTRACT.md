@@ -40,7 +40,7 @@ Evolução explícita: `RUNTIME_SCRIPT_ORIGIN`, `RUNTIME_TELEMETRY_ORIGIN`, `RUN
 
 `inspect` retorna os pré-requisitos de publicação, mudança de origens e rotação e o primeiro bloqueador da verificação. Falhas esperadas dos comandos usam códigos seguros em HTTP 400. A inspeção mantém o histórico e os snippets existentes mesmo quando a configuração privada impede novas publicações. Aptidão para gerar endereços é uma verificação de configuração e schema. A entrega dos recursos depende do gateway e da rota usada pela LP.
 
-O diagnóstico distingue ausência de prova recente, verificador sem configuração e tentativa inconclusiva. As cinco camadas exibem a medição controlada da revisão atual quando disponível e, separadamente, acessos por alias ou sinais declarados. Os acessos por alias se referem à revisão exibida. Os sinais declarados pertencem à LP. Os resultados da carga controlada obedecem ao [contrato F08](F08-CONTROLLED-VERIFIER.md).
+O diagnóstico distingue ausência de prova recente, verificador sem configuração e tentativa inconclusiva. As cinco camadas exibem a medição controlada da revisão atual quando disponível e, separadamente, acessos por alias ou sinais declarados. Os acessos por alias se referem à revisão exibida. A camada Bootstrap usa o recibo recente da entrega de `runtime.js` pelo alias de scripts da revisão atual, vinculado à LP e à instalação. A prova de execução continua na medição controlada. Os sinais declarados pertencem à LP. Os resultados da carga controlada obedecem ao [contrato F08](F08-CONTROLLED-VERIFIER.md).
 
 ## Provas reproduzíveis
 

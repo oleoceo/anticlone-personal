@@ -50,13 +50,14 @@ function verifierConfiguration(env: NodeJS.ProcessEnv) {
 }
 
 export async function installationPrerequisites(db: Pick<Pool,'query'>, env=process.env) {
-  const schema = (await db.query<{distribution: boolean; rotation: boolean; verifier: boolean; activity: boolean}>(`
+  const schema = (await db.query<{distribution: boolean; rotation: boolean; verifier: boolean; activity: boolean; receipts: boolean}>(`
     SELECT to_regclass('runtime_aliases') IS NOT NULL AND to_regclass('page_installation_signals') IS NOT NULL
       AND to_regclass('runtime_distributions') IS NOT NULL AS distribution,
       EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('runtime_distributions')
         AND attname='publication_reason' AND NOT attisdropped) AS rotation,
       to_regclass('controlled_installation_checks') IS NOT NULL AS verifier,
-      to_regclass('runtime_alias_activity') IS NOT NULL AS activity`)).rows[0];
+      to_regclass('runtime_alias_activity') IS NOT NULL AS activity,
+      to_regclass('investigation_receipts') IS NOT NULL AS receipts`)).rows[0];
   const {origins,issues} = configuredOrigins(env);
   const publicationIssues: {code: string; role?: Role}[] = schema.distribution
     ? issues : [{code:'DISTRIBUTION_SCHEMA_MISSING'}, ...issues];
@@ -189,6 +190,15 @@ async function readOrPublish(db: Pool, data: {project:string;page:string;action:
       SELECT DISTINCT s.source FROM runtime_alias_activity s JOIN runtime_aliases a USING(alias)
       WHERE a.installation_id=$1 AND a.version=$2 AND s.last_received_at>=now()-interval '7 days'`,
     [page.installation_id,distribution.version])).rows.map(row=>row.source) : []);
+    if (schema.receipts && distribution) {
+      const delivered = await client.query(`SELECT 1 FROM investigation_receipts r
+        JOIN runtime_aliases a USING (alias)
+        WHERE r.project_id=$1 AND r.page_id=$2 AND r.installation_id=$3 AND a.installation_id=r.installation_id
+          AND a.version=$4 AND a.role='SCRIPT' AND r.kind='runtime_receipt' AND r.source='distribution'
+          AND r.resource='runtime.js' AND r.last_received_at>=now()-interval '7 days' LIMIT 1`,
+      [data.project,data.page,page.installation_id,distribution.version]);
+      if (delivered.rowCount) currentRoutes.add('bootstrap');
+    }
     const controlled=schema.verifier?(await client.query(`SELECT c.result FROM controlled_installation_checks c JOIN protected_pages p ON p.id=c.page_id JOIN projects pr ON pr.id=p.project_id WHERE c.page_id=$1 AND c.project_id=$2 AND c.distribution_version=$3 AND c.url_generation=p.url_generation AND c.config_generation=p.config_generation AND p.enabled AND p.lifecycle_state='ACTIVE' AND p.deleted_at IS NULL AND pr.lifecycle_state='ACTIVE' AND pr.deleted_at IS NULL AND c.checked_at>now()-interval '7 days' ORDER BY c.checked_at DESC LIMIT 1`,[data.page,data.project,distribution?.version??0])).rows[0]?.result as ControlledCheck|undefined:undefined;
     await client.query('COMMIT');
     const measured=controlled && controlled.status!=='NOT_VERIFIED' ? controlled.layers : undefined;
