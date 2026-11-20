@@ -95,10 +95,6 @@ export function Overview({api, projects}: {api: AdminApi; projects: Project[]}) 
       <label>Projeto<select value={project?.id ?? ''} onChange={event => change('projeto', event.target.value)}>
         <option value="">Todos os projetos</option>{projects.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
       </select></label>
-      <label>LP para diagnóstico<select disabled={!project} value={page?.id ?? ''} onChange={event => change('lp', event.target.value)}>
-        <option value="">Selecione</option>{project && inventory.data?.[0]?.state?.pages.map(item =>
-          <option key={item.id} value={item.id}>{item.name}</option>)}
-      </select></label>
       <label>Período dos resultados<select value={days} onChange={event => change('dias', event.target.value)}>
         <option value="1">Últimas 24 horas</option><option value="7">Últimos 7 dias</option>
       </select></label>
@@ -109,15 +105,18 @@ export function Overview({api, projects}: {api: AdminApi; projects: Project[]}) 
       <div><dt>Incidentes no histórico retornado</dt><dd>{count(incidentCount,inventory.pending)}</dd></div>
       <div><dt>Cliques de CTA no período</dt><dd>{count(clicks,report.pending)}</dd></div>
     </dl>
-    <Activity observations={report.pending ? undefined : observations} error={report.error} from={from} until={until}/>
-    {!report.pending && observations && <TrafficOrigins observations={observations}/>}
-    <div className="operation-grid overview-panels"><section className="panel">
+    <div className="dashboard-workspace"><Activity observations={report.pending ? undefined : observations} error={report.error} from={from} until={until}/>
+    <section className="panel">
       <div className="panel-heading"><h2>Instalações e alertas</h2><Link {...nav.link(healthPath)}>Saúde e operações</Link></div>
       {needsPage.map(row=><div className="panel-heading" key={row.project.id}>
         <p>{row.project.name} ainda precisa da primeira LP.</p>
         <Link className="button" {...nav.link(newPagePath(row.project.id))}>Cadastrar LP</Link>
       </div>)}
-      {!project ? <p>Selecione um projeto e uma LP para consultar a instalação.</p> : <>
+      {project && <label>LP para diagnóstico<select value={page?.id ?? ''} onChange={event => change('lp', event.target.value)}>
+        <option value="">Selecione</option>{inventory.data?.[0]?.state?.pages.map(item =>
+          <option key={item.id} value={item.id}>{item.name}</option>)}
+      </select></label>}
+      {!project ? <p>Selecione um projeto nos filtros para consultar suas instalações e alertas.</p> : <>
         {alerts.error !== undefined ? <Failure error={alerts.error} retry={alerts.revalidate}/> : alerts.pending ? <Loading/> :
           <p>{alerts.data?.state === 'AVAILABLE' ? quantity(alerts.data.items.length, 'alerta', 'alertas') + ' no recorte de revisão' : 'Revisão de alertas indisponível'}</p>}
         {!!alerts.data?.items.length && <Link {...nav.link(settingsPath + '/notificacoes', '?projeto=' + project.id)}>Revisar alertas deste projeto</Link>}
@@ -132,7 +131,9 @@ export function Overview({api, projects}: {api: AdminApi; projects: Project[]}) 
             <Link {...nav.link(conversionsPath(project.id, page.id) + '/estimativa', '?dias=' + days)}>Configurar premissas</Link></div>
         </> : <p>Selecione uma LP para consultar a instalação.</p>}
       </>}
-    </section>
+    </section></div>
+    <div className="operation-grid overview-panels">
+    {!report.pending && observations && <TrafficOrigins observations={observations}/>}
     <section className="panel">
       <h2>Resultados do período</h2>
       {report.error !== undefined ? <Failure error={report.error} retry={report.revalidate}/> :

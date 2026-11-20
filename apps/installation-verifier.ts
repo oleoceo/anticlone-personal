@@ -12,6 +12,7 @@ export type VerificationResponse={status:number;headers:Record<string,string>;bo
 export type VerificationSpec={target:string;distribution:Distribution};
 export type ControlledCheck={status:'FULL'|'PARTIAL'|'UNSUPPORTED'|'NOT_VERIFIED';checkedAt:string;scope:'CONTROLLED_BROWSER_CURRENT_LOAD';reason:string;layers:Record<string,boolean>;blocked:number;activeMitigation:'NOT_TESTED'};
 type Broker=(value:VerificationRequest)=>Promise<VerificationResponse>;
+export class PublicDnsFailure extends Error {}
 
 function acceptableHttps(url: URL) {
   const host=url.hostname.replace(/^\[|\]$/g,'');
@@ -22,7 +23,8 @@ function acceptableHttps(url: URL) {
 // No redirects, cookies, authentication, proxy environment, automatic DNS
 // fallback, compression or unbounded response bodies. Addresses are pinned to
 // the validated DNS result and TLS still checks the original hostname.
-export function publicHttpsBroker(target?:string,signal?:AbortSignal):Broker {
+export function publicHttpsBroker(target?:string,signal?:AbortSignal,
+  options:{responseLimit?:number;returnHttpErrors?:boolean}={}):Broker {
   const pins=new Map<string,Promise<string>>();
   let total=0;
   return async value=>{
@@ -34,14 +36,20 @@ export function publicHttpsBroker(target?:string,signal?:AbortSignal):Broker {
       const addresses=await Promise.race([lookup(url.hostname,{all:true}),new Promise<never>((_accept,reject)=>{deadline=setTimeout(()=>reject(Error('DNS deadline')),1500);})]).finally(()=>clearTimeout(deadline));
       if(!addresses.length||addresses.length>16||addresses.some(a=>!publicAddress(a.address)))throw Error('nonpublic address denied');
       return addresses[0].address;
-    })());
+    })().catch(() => {throw new PublicDnsFailure('DNS resolution rejected');}));
     const address=await pins.get(url.hostname)!;
     return new Promise<VerificationResponse>((accept,reject)=>{
-      const req=request({hostname:address,port:443,servername:url.hostname,method:value.method,path:url.pathname+url.search,signal,
+      const req=request({hostname:address,port:443,servername:url.hostname,method:value.method,path:url.pathname+url.search,signal,agent:false,
         headers:{host:url.hostname,'accept-encoding':'identity','content-type':'text/plain','user-agent':'AntiClone controlled installation check',...(target?{origin:new URL(target).origin,referer:target}:{})},rejectUnauthorized:true},res=>{
         const chunks:Buffer[]=[];let size=0;
-        if((res.statusCode??500)>=300&&res.statusCode!==304 || res.headers['content-encoding']&&res.headers['content-encoding']!=='identity'){res.destroy();reject(Error('redirect or encoded response denied'));return;}
-        res.on('data',(chunk:Buffer)=>{size+=chunk.length;total+=chunk.length;if(size>512*1024||total>2*1024*1024){res.destroy();reject(Error('response budget'));}else chunks.push(chunk);});
+        if((res.statusCode??500)>=300&&res.statusCode!==304){
+          res.destroy();
+          if(options.returnHttpErrors)accept({status:res.statusCode??500,headers:{},body:Buffer.alloc(0)});
+          else reject(Error('HTTP response denied'));
+          return;
+        }
+        if(res.headers['content-encoding']&&res.headers['content-encoding']!=='identity'){res.destroy();reject(Error('encoded response denied'));return;}
+        res.on('data',(chunk:Buffer)=>{size+=chunk.length;total+=chunk.length;if(size>(options.responseLimit??512*1024)||total>2*1024*1024){res.destroy();reject(Error('response budget'));}else chunks.push(chunk);});
         res.on('error',reject);
         res.on('end',()=>accept({status:res.statusCode??500,headers:Object.fromEntries(['content-type','content-security-policy','referrer-policy','x-content-type-options','access-control-allow-origin','cross-origin-embedder-policy','cross-origin-opener-policy','cross-origin-resource-policy'].flatMap(name=>typeof res.headers[name]==='string'?[[name,res.headers[name] as string]]:[])),body:Buffer.concat(chunks)}));
       });

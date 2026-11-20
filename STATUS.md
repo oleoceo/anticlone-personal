@@ -1,5 +1,43 @@
 # STATUS — AntiClone Personal
 
+## Homologação pública Dev — instalação e detecção
+- F07/F08 e GS01/GS02/GS09. Chromium real, duas LPs de loopback e HTTPS público com PostgreSQL Dev. 18 recibos públicos e 5 fatos de sessão, com IDs e timestamps conciliados. A troca para o endpoint público preservou 7 recibos anteriores.
+- Cópia controlada com Core bloqueado registrou Fallback, um incidente não verificado e uma intenção de alerta. Core e canários conservaram evidências distintas. Autorizações operacionais habilitadas: 0.
+- O diagnóstico do Bootstrap passa a reconhecer a entrega recente da revisão atual. Revisão independente `/root/revisao_bootstrap` favorável ao delta funcional `b6f0c0a8ba8571266585374d112acfe4db5153ef013594cbe2a256922da87077`.
+- Regressão focada 20/20 em PostgreSQL e Chromium, mais lint, typecheck, build e 10 testes documentais.
+- Evidências locais em `test-results/homologacao-publica-dev/`. A navegação autenticada no Admin Dev depende da sessão MFA do proprietário. Somente um domínio público de telemetria foi disponibilizado.
+
+## Pool de telemetria
+- `protect.leoceo.online` é o primeiro endpoint persistido no PostgreSQL Dev, com migração 068 aplicada. DNS e TLS respondem; `/healthz` retorna 502. Status pendente de autorização e ingresso.
+- O cadastro existente verifica DNS/HTTPS/gateway sob autorização privada. Seleção explícita usa o domínio nos três papéis. Desativação preserva revisões e indica LPs atuais e históricas.
+- E2E Chromium/PostgreSQL real com dois domínios sintéticos e um upstream mTLS passou. Lint, typecheck, build e broker focado passaram. Evidências em `test-results/endpoints-demo/`.
+- Revisão independente `/root/gateway_review` sobre `740a0c5`. O build está no checkout de trabalho. Admin ativo e NPM foram preservados.
+- Ajuste Dev sobre `4c36b00`. Seletor na instalação exibe endpoints pendentes desabilitados. Chromium com trecho da UI, uma cópia deduplicada e um alerta SMTP local aceito. Provas em `test-results/instalacao-email/`.
+- SMTP configurado no Dev aceitou um e-mail de teste separado. Preferência de alertas permaneceu desativada. Publicação NPM continua pendente. Revisão independente `/root/gateway_review`.
+
+## Hierarquia do painel V2.2
+- Ajustes compartilhados de largura, cabeçalhos, formulários e navegação.
+- Visão Geral com atividade e instalações lado a lado. Oferta com páginas e gestão separadas. Notificações com SMTP e logs lado a lado.
+- Revisão independente `review_panel`. Provas em `test-results/painel-v22/`.
+
+## UX V2.2 — instalação da LP
+- URL oficial e contexto ficam no início da instalação. Os trechos publicados têm orientação para HTML, React/Vite e WordPress.
+- O atalho por teclado leva ao diagnóstico. A revisão e a rotação continuam no painel técnico.
+- Revisão independente `ux_review` aprovada. Prova no Chromium com PostgreSQL em `test-results/ux-installation-v22/`.
+
+## Logs de e-mail pelo React — Dev
+- Histórico de testes SMTP e alertas de cópia, CTA e saúde, com filtros por resultado e até 100 tentativas dos últimos 30 dias.
+- SMTP manual reserva uma linha antes do envio e registra o resultado sem chaves, corpos ou respostas brutas.
+- Revisão independente `logs_review` aprovada no delta de código `f1c2c6632790d5eea5f1ab02d1d737b2d140b775ba4bcc01b35427bcd9cf580e`.
+- Provas em `test-results/smtp-logs/`; documentação em [Transporte de alertas](docs/CLONE-SMTP.md).
+
+## Credenciais SMTP pelo React — Dev
+- Login e chave cifrada no painel; teste de conexão autenticada e envio de teste confirmado separadamente.
+- Gateway e worker usam a revisão salva e respeitam a preferência de alertas. O endpoint é autorizado no ambiente privado.
+- Chromium/PostgreSQL e receptor TLS controlado cobrem cadastro, conexão, envio, worker e retry. Evidências em `test-results/smtp-painel/`.
+- Brevo respondeu via STARTTLS e recusou a chave de teste com SMTP 525. Alertas permanecem desativados.
+
+
 ## Homologação operacional Dev — alerta de cópia F26
 - Em 20/11/2026, o gateway público persistiu os sinais da LP C e da cópia controlada no PostgreSQL Dev. Incidente 10, outbox 10, uma tentativa aceita pelo Brevo.
 - A mensagem entregue ao transporte descreve a suspeita e o host. A correção inclui o ID do incidente e o projeto no alerta, preservando o Message-ID vinculado ao outbox.

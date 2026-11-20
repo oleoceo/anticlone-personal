@@ -1,3 +1,4 @@
+import {TelemetryOrigins} from './telemetry-origins';
 import {useState} from 'react';
 import {Link, useSearchParams} from 'react-router-dom';
 import {AdminApi, type Project} from './admin-api';
@@ -9,7 +10,7 @@ import {HealthOperations} from './health';
 
 type Smtp = {version: number; provider: string | null; host: string | null; port: number | null;
   tls_mode: string | null; sender: string | null; recipient: string | null; status: string;
-  preference_requested: boolean; clone_transport: string};
+  preference_requested: boolean; clone_transport: string; smtp_login: string | null; smtp_key_saved: boolean; panel_smtp_available: boolean};
 const smtpState: Record<string, string> = {incomplete: 'Configuração incompleta', configured_disabled: 'Configuração salva · habilitação desativada',
   enablement_requested: 'Habilitação solicitada'};
 const transportState: Record<string, string> = {PRIVATE_ENVIRONMENT_NOT_CONFIGURED: 'Ambiente privado sem SMTP configurado',
@@ -30,7 +31,7 @@ export function Settings({api, projects, section, setGuard}: {api: AdminApi; pro
       {Object.entries(names).map(([part, label]) => <Link key={part}
         aria-current={part === (section ?? 'notificacoes') ? 'page' : undefined} {...nav.link(settingsPath + '/' + part)}>{label}</Link>)}
     </nav>
-    {section === 'integracoes' ? <CommerceSettings api={api} setGuard={setGuard}/> : section === 'operacoes' ?
+    {section === 'integracoes' ? <><TelemetryOrigins api={api} setGuard={setGuard}/><CommerceSettings api={api} setGuard={setGuard}/></> : section === 'operacoes' ?
       <HealthOperations api={api} projects={projects} setGuard={setGuard}/> : <>
         <NotificationSettings api={api} setGuard={setGuard}/>
         <NotificationQueue api={api} projects={projects} setGuard={setGuard}/>
@@ -40,16 +41,22 @@ export function Settings({api, projects, section, setGuard}: {api: AdminApi; pro
 
 function NotificationSettings({api, setGuard}: {api: AdminApi; setGuard: SetGuard}) {
   const query = useQuery('settings', signal => api.request<Smtp>('settings', undefined, signal));
+  const emailLog = useQuery('email-attempts', signal => api.request<EmailAttempt[]>('email-attempts', undefined, signal));
   const operation = useOperation(setGuard);
   const config = query.data;
   const [edited, setEdited] = useState(false);
-  function testConnection() {
+  function testConnection(send = false) {
     if (!config) return;
-    operation.review('Testar conexão SMTP', <p>O servidor vai verificar TLS e autenticação da configuração v{config.version}. O teste de conexão termina antes do envio de mensagens.</p>, async () => {
-      const result = await api.request<{state: string; checked_at?: string}>('smtp-test', {version: config.version});
+    operation.review(send ? 'Enviar e-mail de teste' : 'Testar conexão SMTP', <p>{send ?
+      'Enviar uma mensagem de teste para ' + config.recipient + '.' :
+      'Verificar TLS e autenticação da configuração v' + config.version + ' sem enviar mensagens.'}</p>, async () => {
+      const result = await api.request<{state: string; checked_at?: string}>('smtp-test', {version: config.version, ...(send ? {send: true} : {})})
+        .finally(() => { if (send) emailLog.revalidate(); });
       if (result.state === 'VERIFIED') return 'TLS e autenticação SMTP verificados · v' + config.version + ' · ' + formatDate(result.checked_at);
-      if (result.state === 'WAIT') throw new InputError('Aguarde um minuto entre testes de conexão SMTP.');
-      throw new InputError(transportState[result.state] ?? 'A conexão SMTP falhou. Confira o endereço, TLS e as credenciais no ambiente privado.');
+      if (result.state === 'ACCEPTED') return 'O servidor SMTP aceitou o e-mail de teste. Confira a caixa postal.';
+      if (result.state === 'AUTH_FAILED') throw new InputError('O servidor SMTP recusou a autenticação. Confira o login e a chave SMTP.');
+      if (result.state === 'WAIT') throw new InputError(send ? 'Aguarde um minuto entre envios de teste.' : 'Aguarde um minuto entre testes de conexão SMTP.');
+      throw new InputError(transportState[result.state] ?? 'A conexão SMTP falhou. Confira o endereço, TLS e as credenciais.');
     });
   }
   function preference(enabled: boolean) {
@@ -62,20 +69,22 @@ function NotificationSettings({api, setGuard}: {api: AdminApi; setGuard: SetGuar
         return enabled ? 'Habilitação solicitada.' : 'Solicitação desativada.';
       });
   }
-  return <section className="panel form-panel">
+  return <div className="notification-workspace"><section className="panel form-panel">
     <h2>Notificações e SMTP</h2>
     {operation.notice()}
     {query.error !== undefined ? <Failure error={query.error} retry={query.revalidate}/> : !config ? <Loading/> : <>
       <p><strong>{smtpState[config.status] ?? 'Situação indisponível'}</strong> · versão {config.version}</p>
       <p>{transportState[config.clone_transport] ?? 'Transporte privado indisponível'}</p>
-      <p className="muted">Credenciais ficam no ambiente privado. Configuração e aceitação SMTP não confirmam entrega na caixa postal.</p>
+      <p className="muted">A chave salva fica cifrada. A aceitação SMTP pode ser conferida separadamente da chegada à caixa postal.</p>
       <form key={config.version} onChange={() => setEdited(true)} onSubmit={event => {
         const fields = formData(event);
         const optional = (name: string) => value(fields, name) || null;
         const port = optional('port');
+        const login = optional('smtp_login');
+        const password = String(fields.get('smtp_password') ?? '');
         const body = {version: config.version, provider: optional('provider'), host: optional('host'),
           port: port === null ? null : Number(port), tls_mode: optional('tls_mode'), sender: optional('sender'),
-          recipient: optional('recipient')};
+          recipient: optional('recipient'), ...(login ? {smtp_login: login} : {}), ...(password ? {smtp_password: password} : {})};
         operation.review('Salvar configuração SMTP', <><p>{body.host ?? 'Host não informado'} · {body.port ?? 'Porta não informada'}</p>
           <p>{body.sender ?? 'Sem remetente'} → {body.recipient ?? 'Sem destinatário'}</p>
           <p>Alterar os dados desativa a solicitação de habilitação existente.</p></>, async () => {
@@ -95,19 +104,80 @@ function NotificationSettings({api, setGuard}: {api: AdminApi; setGuard: SetGuar
         <label>TLS<select name="tls_mode" defaultValue={config.tls_mode ?? ''}>
           <option value="">Selecione</option><option value="implicit">Implícito</option><option value="starttls">STARTTLS</option>
         </select></label>
+        {config.panel_smtp_available && <>
+          <label>Login SMTP<input name="smtp_login" autoComplete="off" defaultValue={config.smtp_login ?? ''} maxLength={512}/></label>
+          <label>Chave SMTP<input name="smtp_password" type="password" autoComplete="new-password" maxLength={2048}
+            placeholder={config.smtp_key_saved ? 'Chave salva · preencha para trocar' : undefined}/></label>
+        </>}
         <label>Remetente<input name="sender" type="email" maxLength={254} defaultValue={config.sender ?? ''}/></label>
         <label>Destinatário<input name="recipient" type="email" maxLength={254} defaultValue={config.recipient ?? ''}/></label>
         <button className="primary" type="submit" disabled={operation.busy || query.pending}>Revisar configuração SMTP</button>
       </form>
       <div className="action-links">
         <button type="button" disabled={query.pending || operation.busy || edited ||
-          !['AUTHORIZED_CONFIGURATION', 'DISABLED'].includes(config.clone_transport)} onClick={testConnection}>Testar conexão SMTP</button>
+          !['AUTHORIZED_CONFIGURATION', 'DISABLED'].includes(config.clone_transport)} onClick={() => testConnection()}>Testar conexão SMTP</button>
+        <button type="button" disabled={query.pending || operation.busy || edited ||
+          !['AUTHORIZED_CONFIGURATION', 'DISABLED'].includes(config.clone_transport)} onClick={() => testConnection(true)}>Enviar e-mail de teste</button>
         {!config.preference_requested ? <button type="button" disabled={query.pending || operation.busy ||
           edited || config.status === 'incomplete'} onClick={() => preference(true)}>Solicitar habilitação</button> :
           <button type="button" disabled={query.pending || operation.busy || edited} onClick={() => preference(false)}>Desativar solicitação</button>}
         <button type="button" disabled={query.pending || operation.busy} onClick={query.revalidate}>Reconsultar configuração</button>
       </div>
     </>}
+  </section>
+    <EmailLog query={emailLog}/>
+  </div>;
+}
+
+type EmailAttempt = {
+  kind: 'TEST' | 'CLONE' | 'CTA' | 'HEALTH';
+  item_id: string;
+  attempt: number;
+  transport: string;
+  project: string | null;
+  started_at: string;
+  finished_at: string | null;
+  outcome: 'ACCEPTED' | 'FAILED' | 'UNKNOWN';
+  failure_code: 'AUTH_FAILED' | 'SMTP_FAILED' | null;
+  smtp_status: number | null;
+  recovered_record: boolean;
+};
+
+const emailKinds = {TEST: 'E-mail de teste', CLONE: 'Alerta de cópia', CTA: 'Alerta de CTA', HEALTH: 'Alerta de saúde'};
+const emailOutcomes = {ACCEPTED: 'Aceito pelo SMTP', FAILED: 'Falha no envio', UNKNOWN: 'Resultado desconhecido'};
+const emailTransports: Record<string, string> = {SMTP_LOCAL: 'SMTP local', SMTP_PROVIDER: 'Provedor SMTP', brevo: 'Brevo', smtp: 'SMTP personalizado'};
+
+function EmailLog({query}: {query: ReturnType<typeof useQuery<EmailAttempt[]>>}) {
+  const [status, setStatus] = useState('');
+  const rows = query.data?.filter(attempt => !status || attempt.outcome === status);
+  return <section className="panel" aria-labelledby="email-log-heading">
+    <div className="panel-heading">
+      <h2 id="email-log-heading">Logs de e-mail</h2>
+      <button type="button" onClick={query.revalidate} disabled={query.pending}>Atualizar logs</button>
+    </div>
+    <p className="muted">Até 100 tentativas recentes dos últimos 30 dias. Aceitação indica que o SMTP recebeu a mensagem. Uma falha observada pode ocorrer sem confirmação do resultado final.</p>
+    <label>Status do e-mail<select value={status} onChange={event => setStatus(event.target.value)}>
+      <option value="">Todos</option>
+      {Object.entries(emailOutcomes).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+    </select></label>
+    {query.error !== undefined ? <Failure error={query.error} retry={query.revalidate}/> : !rows ? <Loading/> :
+      !rows.length ? <p className="empty">Nenhuma tentativa de envio neste recorte.</p> :
+        <div className="finance-table-wrap" role="region" aria-label="Histórico de envio de e-mails" tabIndex={0}>
+          <table className="activity-table finance-table">
+            <thead><tr><th scope="col">E-mail</th><th scope="col">Horário</th><th scope="col">Status</th><th scope="col">Detalhes</th></tr></thead>
+            <tbody>{rows.map(row => <tr key={row.kind + ':' + row.item_id + ':' + row.attempt}>
+              <th scope="row">{emailKinds[row.kind]} · #{row.item_id}</th>
+              <td data-heading="Horário"><time dateTime={row.started_at}>{formatDate(row.started_at)}</time></td>
+              <td data-heading="Status">{emailOutcomes[row.outcome]}</td>
+              <td data-heading="Detalhes">{emailTransports[row.transport] ?? row.transport} · tentativa {row.attempt}
+                {row.project && <small>Projeto {row.project}</small>}
+                {row.recovered_record && <small>Resultado recuperado do teste anterior</small>}
+                {row.failure_code && <small>{row.failure_code === 'AUTH_FAILED' ? 'Autenticação recusada' : 'O envio não foi confirmado pelo SMTP'}
+                  {row.smtp_status && ' · SMTP ' + row.smtp_status}</small>}
+              </td>
+            </tr>)}</tbody>
+          </table>
+        </div>}
   </section>;
 }
 

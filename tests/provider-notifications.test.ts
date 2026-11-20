@@ -48,7 +48,7 @@ test('CTA/health provider TLS + independent worker + audited backlog in Chromium
   const site=createServer((_req,res)=>res.writeHead(200,{'content-type':'text/html'}).end(`<h1>Owned original/copy</h1><a href="/native">Native checkout</a><script async src="http://127.0.0.1:${port}/runtime.js"></script>`)).listen(0,'127.0.0.1');await once(site,'listening');const address=site.address();assert.ok(address&&typeof address!=='string');
   const original='http://127.0.0.1:'+address.port,copy='http://localhost:'+address.port;
   const privateEnv={SMTP_PROVIDER:'smtp',SMTP_HOST:'localhost',SMTP_PORT:String(smtpAddress.port),SMTP_TLS:'implicit',SMTP_SENDER:'sender@example.test',SMTP_RECIPIENT:'owner@example.test',SMTP_USER:'synthetic-user',SMTP_PASSWORD:'synthetic-private-password'};
-  const env={...process.env,...privateEnv,NODE_EXTRA_CA_CERTS:join(dir,'cert'),DATABASE_URL:process.env.TEST_DATABASE_URL,PGOPTIONS:`-c search_path=${schema}`,PROJECT_ID:'one',PORT:String(port),ALLOWED_ORIGIN:original};
+  const env={...process.env,SMTP_PORT:'1',SMTP_PANEL_KEY:'a'.repeat(64),SMTP_PANEL_HOST:privateEnv.SMTP_HOST,SMTP_PANEL_PORT:privateEnv.SMTP_PORT,SMTP_PANEL_TLS:privateEnv.SMTP_TLS,NODE_EXTRA_CA_CERTS:join(dir,'cert'),DATABASE_URL:process.env.TEST_DATABASE_URL,PGOPTIONS:`-c search_path=${schema}`,PROJECT_ID:'one',PORT:String(port),ALLOWED_ORIGIN:original};
   let gateway:ChildProcess|undefined,worker:ChildProcess|undefined,browser:Awaited<ReturnType<typeof chromium.launch>>|undefined,admin:ChildProcess|undefined;
   const launch=(file:string,extra:Record<string,string>={})=>{const child=spawn(process.execPath,['dist/apps/'+file],{env:{...env,...extra},stdio:['ignore','ignore','pipe']});child.stderr!.on('data',chunk=>logs+=String(chunk));return child;};
   const startGateway=async()=>{gateway=launch('server.js');await until(async()=>{try{return(await fetch('http://127.0.0.1:'+port+'/healthz')).ok;}catch{return false;}},'real gateway ready');};
@@ -91,6 +91,14 @@ test('CTA/health provider TLS + independent worker + audited backlog in Chromium
     const logged=page.waitForResponse(r=>r.url().endsWith('/admin/ui/login'));await page.getByRole('button',{name:'Entrar',exact:true}).click();assert.equal((await logged).status(),204);
     assert.equal(await page.evaluate(async()=> (await fetch('/admin/ui/notifications',{method:'POST',headers:{'content-type':'application/json'},body:'{"action":"inspect","project":"one"}'})).status),403);
     mark('MFA CSRF');
+    await page.getByLabel('Login SMTP').fill(privateEnv.SMTP_USER);
+    await page.getByLabel('Chave SMTP').fill(privateEnv.SMTP_PASSWORD);
+    await page.getByRole('button',{name:'Revisar configuração SMTP'}).click();
+    await page.getByRole('button',{name:'Confirmar',exact:true}).click();
+    await page.getByText('Configuração SMTP salva.',{exact:true}).waitFor();
+    await page.waitForFunction(() => document.querySelector<HTMLInputElement>('[name=smtp_password]')?.value === '');
+    const secretRow = (await db.query('SELECT smtp_secret_encrypted FROM notification_settings')).rows[0];
+    assert.ok(secretRow.smtp_secret_encrypted && !secretRow.smtp_secret_encrypted.includes(privateEnv.SMTP_PASSWORD));
     rejectAuth=false;
     await page.getByRole('button',{name:'Testar conexão SMTP',exact:true}).click();
     await page.getByRole('button',{name:'Confirmar',exact:true}).click();
@@ -99,8 +107,38 @@ test('CTA/health provider TLS + independent worker + audited backlog in Chromium
     await page.getByRole('button',{name:'Testar conexão SMTP',exact:true}).click();
     await page.getByRole('button',{name:'Confirmar',exact:true}).click();
     await page.getByText('Aguarde um minuto entre testes de conexão SMTP.',{exact:true}).waitFor();
+    await page.getByRole('button',{name:'Enviar e-mail de teste',exact:true}).click();
+    await page.getByRole('button',{name:'Confirmar',exact:true}).click();
+    await page.getByText('O servidor SMTP aceitou o e-mail de teste.',{exact:false}).waitFor();
+    assert.equal(accepted.length,1,'the saved credential sends a real test message');
+    assert.ok(accepted.pop()?.includes(privateEnv.SMTP_RECIPIENT));
+    const emailLog=page.getByRole('region',{name:'Logs de e-mail',exact:true});
+    const testLog=emailLog.getByRole('row').filter({hasText:'E-mail de teste'});
+    await testLog.getByText('Aceito pelo SMTP',{exact:true}).waitFor();
+    await page.reload();
+    await testLog.getByText('Aceito pelo SMTP',{exact:true}).waitFor();
+    assert.ok(!((await emailLog.textContent())?.includes(privateEnv.SMTP_PASSWORD)));
+    assert.equal((await fetch(adminBase+'/admin/ui/email-attempts',{headers:{'sec-fetch-site':'same-origin'}})).status,401);
     rejectAuth=true;
-    mark('React verifies SMTP TLS/auth without sending');
+    // Exercise a fresh process so the manual endpoint's one-minute cooldown remains intact.
+    const failure=spawn(process.execPath,['--input-type=module','-e',`
+      import {Pool} from 'pg';
+      import {getNotificationSettings,testNotificationSmtp} from './dist/apps/notification-settings.js';
+      const db=new Pool({connectionString:process.env.DATABASE_URL});
+      try {
+        const {version}=await getNotificationSettings(db);
+        const outcome=await testNotificationSmtp(db,{version,send:true});
+        if(outcome.state!=='AUTH_FAILED')process.exitCode=1;
+      } finally {await db.end();}
+    `],{env,stdio:'ignore'});
+    assert.deepEqual(await once(failure,'exit'),[0,null]);
+    await page.getByRole('button',{name:'Atualizar logs',exact:true}).click();
+    await testLog.getByText('Autenticação recusada',{exact:false}).waitFor();
+    assert.equal((await db.query("SELECT count(*)::int n FROM smtp_test_attempts WHERE outcome='FAILED' AND failure_code='AUTH_FAILED'")).rows[0].n,1);
+
+
+    rejectAuth=true;
+    mark('React verifies SMTP TLS/auth and sends an explicitly requested test message');
     await page.goto(adminBase+'/admin/ui/');
     const form=page.locator('#backlog-form');await form.locator('[name=project]').fill('one');
     const submit=async(action:string)=>{const response=page.waitForResponse(r=>r.url().endsWith('/admin/ui/notifications'));await form.locator('button[value="'+action+'"]').click();return response;};
@@ -117,6 +155,12 @@ test('CTA/health provider TLS + independent worker + audited backlog in Chromium
     await until(async()=>(await db.query("SELECT count(*)::int n FROM cta_delivery_attempts WHERE outcome='FAILED'")).rows[0].n===1&&(await db.query("SELECT count(*)::int n FROM health_delivery_attempts WHERE outcome='FAILED'")).rows[0].n===1,'CTA/health failures durable');
     await stop(worker);worker=undefined;assert.equal(accepted.length,0);
     mark('provider failures persisted');
+    await page.goto(adminBase+'/admin/ui/novo/configuracoes/notificacoes');
+    await page.getByLabel('Status do e-mail').selectOption('FAILED');
+    const failedLogs=page.getByRole('region',{name:'Logs de e-mail',exact:true});
+    await failedLogs.getByRole('row').filter({hasText:'Alerta de CTA'}).getByText('Falha no envio',{exact:true}).waitFor();
+    assert.equal(await failedLogs.getByRole('cell',{name:'Aceito pelo SMTP',exact:true}).count(),0);
+
     rejectAuth=false;await db.query('UPDATE cta_alert_deliveries SET next_attempt=clock_timestamp()');await db.query('UPDATE health_delivery SET next_attempt=clock_timestamp()');startWorker();
     await until(async()=>(await db.query("SELECT count(*)::int n FROM cta_alert_deliveries WHERE result_kind='SMTP_PROVIDER_ACCEPTED'")).rows[0].n===1&&(await db.query('SELECT count(*)::int n FROM health_delivery WHERE sent_at IS NOT NULL')).rows[0].n===1,'retry accepted');
     assert.equal(accepted.length,2);assert.ok(accepted.some(m=>m.includes('gateway_local')));assert.ok(accepted.some(m=>/Message-ID: <anticlone-cta-/.test(m)));

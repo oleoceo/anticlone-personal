@@ -40,7 +40,7 @@ Evolução explícita: `RUNTIME_SCRIPT_ORIGIN`, `RUNTIME_TELEMETRY_ORIGIN`, `RUN
 
 `inspect` retorna os pré-requisitos de publicação, mudança de origens e rotação e o primeiro bloqueador da verificação. Falhas esperadas dos comandos usam códigos seguros em HTTP 400. A inspeção mantém o histórico e os snippets existentes mesmo quando a configuração privada impede novas publicações. Aptidão para gerar endereços é uma verificação de configuração e schema. A entrega dos recursos depende do gateway e da rota usada pela LP.
 
-O diagnóstico distingue ausência de prova recente, verificador sem configuração e tentativa inconclusiva. As cinco camadas exibem a medição controlada da revisão atual quando disponível e, separadamente, acessos por alias ou sinais declarados. Os acessos por alias se referem à revisão exibida. Os sinais declarados pertencem à LP. Os resultados da carga controlada obedecem ao [contrato F08](F08-CONTROLLED-VERIFIER.md).
+O diagnóstico distingue ausência de prova recente, verificador sem configuração e tentativa inconclusiva. As cinco camadas exibem a medição controlada da revisão atual quando disponível e, separadamente, acessos por alias ou sinais declarados. Os acessos por alias se referem à revisão exibida. A camada Bootstrap usa o recibo recente da entrega de `runtime.js` pelo alias de scripts da revisão atual, vinculado à LP e à instalação. A prova de execução continua na medição controlada. Os sinais declarados pertencem à LP. Os resultados da carga controlada obedecem ao [contrato F08](F08-CONTROLLED-VERIFIER.md).
 
 ## Provas reproduzíveis
 
@@ -79,3 +79,36 @@ O fluxo administrativo aceita importacao manual de candidatos revisados em orige
 Validacao corretiva final local do codigo 4691f4cc620c79b22b9621bbc0548ada5c3626e0: HTTPS_GATE_TEST=1 npm test, PostgreSQL/Chromium/Nginx reais, 105 PASS / 0 FAIL / 0 SKIP, 300496.943959 ms; lint/typecheck/build PASS e nove testes Python PASS. Log WSL /tmp/anticlone-pr64-corrective-suite-final.log; imagem local reconstruida em /tmp/anticlone-pr64-corrective-image-final.log. Revisao independente consolidada /root/pr64_corrective_review favoravel, sem P0/P1/P2 remanescentes; fingerprint SHA-256 dos 24 arquivos de codigo/runtime/infra/testes: bc3f656710ac908a1f82dd2843d78f6d4e1387b635b7cd0977f59296a05bc7ed (caminhos ordenados, caminho UTF8 + NUL + conteudo CRLF normalizado LF + NUL). O commit seguinte altera somente evidencias documentais; CI no SHA final permanece gate do mesmo PR #64. F08 BLOCKED impede declarar consolidacao integral.
 Bloqueio externo da CI em 2026-11-10: run 42829199298, SHA 53a42bee7693f47c2df31768550271f229b6079e, job validate-repo encerrou em 2 s sem steps/logs. Anotacao GitHub: The job was not started because recent account payments have failed or your spending limit needs to be increased. Reproduzir com gh run view 42829199298 --json jobs e gh api repos/oleoceo/anticlone-personal/check-runs/129874451747/annotations. Nao e falha de teste do codigo e nao existe CI verde para esta correcao. Intervencao de faturamento/limite depende do proprietario; nao alterar custos nem contornar o gate. Provas locais nao substituem a CI exigida. O PR permanece draft; consultar checks do SHA final apos normalizacao da conta.
 Decisao posterior do proprietario para o fechamento do PR #64: executar integralmente CI local gratuita no WSL/Linux como gate escolhido nesta revisao, mantendo Actions BLOCKED e PR Draft. O HEAD48a9541 passou105/0/0 em Node22 com workflow completo. Teste operacional ampliado une v2, painel MFA/CSRF, rotacao/autorizacao/suspensao, PAGE/CTA reais sem reescrita e falhas; apps/runtime/infra nao mudaram. Runner, resultado integral do novo HEAD e evidencias acessiveis descritos em LOCAL-CI.md. F08 permanece BLOCKED; nenhum status remoto verde e alegado.
+
+## Pool de origens de telemetria (067–068)
+
+Em Configurações → Integrações → Endpoints de telemetria, cadastre a origem
+HTTPS completa de cada domínio próprio. O cadastro usa `telemetry_origins` e
+começa pendente. Inclua na lista privada `RUNTIME_TELEMETRY_POOL_ORIGINS` do
+admin só origens que já tenham ingresso provisionado, separadas por vírgulas.
+O hostname administrativo e portas públicas alternativas ficam fora da seleção.
+
+Use **Verificar endpoint** para consultar DNS público, validar TLS para o
+hostname e conferir `GET /healthz` do gateway em modo `OPERATIONAL`. O admin
+reutiliza o transporte HTTPS limitado do verificador. Ele fixa um IP público
+resolvido, valida o certificado para o hostname e recusa redirecionamento.
+O cadastro e a consulta da lista são locais. A data exibida é a da última
+verificação executada. Revalide após mudanças de DNS, TLS ou ingresso.
+
+Na instalação da LP, selecione um endpoint operacional e publique uma revisão.
+A seleção explícita usa o domínio para os scripts, sinais e canários, inclusive
+no HTML para o `index.html`. Manter a revisão atual conserva a distribuição
+por papel, incluindo instalações anteriores à migração 068. Desativar impede
+novas publicações com o endpoint. A lista mostra LPs com revisões atuais ou
+anteriores naquele domínio. Uma revisão antiga pode continuar instalada no
+site, mesmo após publicar outra. Mantenha o ingresso enquanto houver trechos
+em uso.
+
+No Dev, `https://protect.leoceo.online` depende da homologação do Proxy Host 13
+no `NPM_TRAFFIC_GATE`. Para cada domínio adicional, provisione o seu hostname
+e certificado público no NPM e aplique os mesmos limites e rotas de distribuição.
+Cada vhost valida o seu Host externo e usa o mesmo upstream mTLS privado,
+com `proxy_ssl_name` e `Host` upstream fixos no hostname canônico
+`PUBLIC_GATEWAY_HOST` da instância. O certificado interno, os pins, a instância
+e o PostgreSQL Dev são compartilhados pelo fluxo. A conclusão do gate e o
+teste no hostname real continuam necessários para cada ingresso.
