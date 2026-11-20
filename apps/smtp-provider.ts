@@ -22,8 +22,14 @@ export async function providerAuthorized(db: Pick<PoolClient,'query'>, config:Sm
   return !!row?.requested && (['provider','host','port','tls_mode','sender','recipient'] as const).every(key=>row[key]===config[key]);
 }
 
-export async function sendProviderAlert(config:SmtpProvider, id:string, host:string): Promise<void> {
-  return sendProviderNotice(config,id,'AntiClone: unverified clone signal',`Project observation requires review. Unverified browser claim for host: ${host}`);
+export async function sendProviderAlert(config: SmtpProvider, alert: {
+  outboxId: string; incidentId: string; project: string; host: string;
+}): Promise<void> {
+  return sendProviderNotice(config, alert.outboxId, `AntiClone: unverified clone signal (incident #${alert.incidentId})`, [
+    `Incident #${alert.incidentId} requires review.`,
+    `Project ID: ${alert.project}`,
+    `Unverified browser claim for host: ${alert.host}`,
+  ].join('\n'));
 }
 
 export async function sendProviderNotice(config:SmtpProvider,id:string,subject:string,text:string):Promise<void>{

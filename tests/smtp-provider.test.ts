@@ -52,13 +52,23 @@ test('provider TLS, durable attempts, browser clone dedup, retry/restart and aut
   const options=`-c search_path=${schema}`;
   const db=new Pool({connectionString:process.env.TEST_DATABASE_URL,options});
   let rejectAuth=true;
+  let deferRecipient=false;
+  let deferredRecipients=0;
   const messages:string[]=[];
   const smtp=new SMTPServer({secure:true,key:await readFile(key),cert:await readFile(cert),
     onAuth(auth,_session,callback){
       if(rejectAuth || auth.username!==privateEnv.SMTP_USER || auth.password!==privateEnv.SMTP_PASSWORD) {callback(new Error('synthetic authentication rejection'));return;}
       callback(null,{user:auth.username});
     },onMailFrom(address,_session,callback){assert.equal(address.address,privateEnv.SMTP_SENDER);callback();},
-    onRcptTo(address,_session,callback){assert.equal(address.address,privateEnv.SMTP_RECIPIENT);callback();},
+    onRcptTo(address,_session,callback){
+      assert.equal(address.address,privateEnv.SMTP_RECIPIENT);
+      if(deferRecipient){
+        deferredRecipients++;
+        callback(Object.assign(new Error('temporary recipient failure'),{responseCode:451}));
+        return;
+      }
+      callback();
+    },
     onData(stream,_session,callback){let text='';stream.on('data',chunk=>{text+=String(chunk);});stream.on('end',()=>{messages.push(text);callback();});}});
   smtp.on('error',()=>{}); // Expected TLS rejection is verified below.
   smtp.listen(0,'127.0.0.1');await once(smtp.server,'listening');
@@ -79,8 +89,9 @@ test('provider TLS, durable attempts, browser clone dedup, retry/restart and aut
     await db.query('INSERT INTO projects VALUES($1,$1,$2)', ['one',original]);
     await db.query("INSERT INTO projects VALUES('two','Other project','http://other.test')");
     await db.query(`UPDATE notification_settings SET provider=$1,host=$2,port=$3,tls_mode=$4,sender=$5,recipient=$6,requested=true`,[config.provider,config.host,config.port,config.tls_mode,config.sender,config.recipient]);
+    await db.query("SELECT setval(pg_get_serial_sequence('alert_outbox','id'),50)");
     // TLS certificate validation cannot be disabled by configuration.
-    await assert.rejects(sendProviderAlert(config,'1','copy.test'));
+    await assert.rejects(sendProviderAlert(config,{outboxId:'1',incidentId:'2',project:'one',host:'copy.test'}));
     assert.equal(messages.length,0);
     child=start();
     await until(async()=>{try{return(await fetch(`http://127.0.0.1:${apiPort}/runtime.js`)).ok;}catch{return false;}},'gateway startup');
@@ -106,10 +117,27 @@ test('provider TLS, durable attempts, browser clone dedup, retry/restart and aut
     assert.equal((await db.query('SELECT * FROM clone_delivery_attempts')).rowCount,1);
     await db.query('UPDATE notification_settings SET requested=true');
     rejectAuth=false;
+    deferRecipient=true;
+    await db.query('UPDATE alert_outbox SET next_attempt=clock_timestamp()');
+    child=start();
+    await until(async()=>(await db.query("SELECT * FROM clone_delivery_attempts WHERE outcome='FAILED'")).rowCount===2,'temporary SMTP rejection persisted');
+    assert.equal(deferredRecipients,1);
+    assert.equal(messages.length,0);
+    const deferred=(await investigation(db,'one'))[0];
+    assert.equal(deferred.notification.outbox.state,'PENDING');
+    assert.equal(deferred.notification.outbox.attempts,2);
+    await stop(child);child=undefined;
+    deferRecipient=false;
     await db.query('UPDATE alert_outbox SET next_attempt=clock_timestamp()');
     child=start();
     await until(async()=>(await db.query('SELECT * FROM alert_outbox WHERE sent_at IS NOT NULL')).rowCount===1,'retry accepted after restart');
     assert.equal(messages.length,1);
+    const {rows:[identity]}=await db.query('SELECT i.id AS incident_id, a.id AS outbox_id FROM incidents i JOIN alert_outbox a ON a.incident_id=i.id');
+    assert.notEqual(identity.incident_id,identity.outbox_id);
+    assert.ok(messages[0].includes(`incident #${identity.incident_id})`));
+    assert.ok(messages[0].includes('Project ID: one'));
+    assert.ok(messages[0].includes('Unverified browser claim for host: localhost'));
+    assert.ok(messages[0].includes(`Message-ID: <anticlone-${identity.outbox_id}@example.test>`));
     await page.reload();
     await stop(child);child=start();
     await until(async()=>{try{return(await fetch(`http://127.0.0.1:${apiPort}/runtime.js`)).ok;}catch{return false;}},'second restart');
@@ -118,7 +146,7 @@ test('provider TLS, durable attempts, browser clone dedup, retry/restart and aut
     assert.equal((await db.query('SELECT * FROM incidents')).rowCount,1);
     const delivered=(await investigation(db,'one'))[0];
     assert.equal(delivered.notification.outbox.state,'ACCEPTED_BY_TRANSPORT');
-    assert.deepEqual(delivered.notification.history.map((item:{outcome:string})=>item.outcome),['FAILED','ACCEPTED']);
+    assert.deepEqual(delivered.notification.history.map((item:{outcome:string})=>item.outcome),['FAILED','FAILED','ACCEPTED']);
     assert.equal((await investigation(db,'two')).length,0);
     await db.query('CREATE TABLE admin_totp_replay (factor_id text PRIMARY KEY,last_counter bigint NOT NULL)');
     await db.query('CREATE TABLE admin_totp_codes (factor_id text NOT NULL,digest text NOT NULL,valid_until bigint NOT NULL,PRIMARY KEY(factor_id,digest))');
@@ -148,7 +176,7 @@ test('provider TLS, durable attempts, browser clone dedup, retry/restart and aut
       onData(stream,_session,callback){stream.resume();stream.on('end',()=>callback());}});
     starttls.listen(0,'127.0.0.1');await once(starttls.server,'listening');
     try {
-      const sender=spawn(process.execPath,['--input-type=module','-e',"import {smtpProvider,sendProviderAlert} from './dist/apps/smtp-provider.js'; await sendProviderAlert(smtpProvider(process.env),'99','controlled.test');"],
+      const sender=spawn(process.execPath,['--input-type=module','-e',"import {smtpProvider,sendProviderAlert} from './dist/apps/smtp-provider.js'; await sendProviderAlert(smtpProvider(process.env),{outboxId:'99',incidentId:'100',project:'one',host:'controlled.test'});"],
         {env:{...env,SMTP_TLS:'starttls',SMTP_PORT:String((starttls.server.address() as AddressInfo).port)},stdio:'pipe'});
       let error='';sender.stderr.on('data',chunk=>{error+=String(chunk);});
       const [code]=await once(sender,'exit');assert.equal(code,0,error);assert.equal(tlsAuthenticated,true);
@@ -167,7 +195,7 @@ test('provider TLS, durable attempts, browser clone dedup, retry/restart and aut
     slow.listen(0,'127.0.0.1');await once(slow.server,'listening');
     try {
       const started=Date.now();
-      const sender=spawn(process.execPath,['--input-type=module','-e',"import {smtpProvider,sendProviderAlert} from './dist/apps/smtp-provider.js'; await sendProviderAlert(smtpProvider(process.env),'100','controlled.test');"],
+      const sender=spawn(process.execPath,['--input-type=module','-e',"import {smtpProvider,sendProviderAlert} from './dist/apps/smtp-provider.js'; await sendProviderAlert(smtpProvider(process.env),{outboxId:'100',incidentId:'101',project:'one',host:'controlled.test'});"],
         {env:{...env,SMTP_PORT:String((slow.server.address() as AddressInfo).port)},stdio:'pipe'});
       let error='';sender.stderr.on('data',chunk=>{error+=String(chunk);});
       const [code]=await once(sender,'exit');assert.notEqual(code,0);assert.match(error,/SMTP total deadline/);
