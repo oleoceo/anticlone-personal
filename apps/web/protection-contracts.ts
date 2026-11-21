@@ -42,7 +42,7 @@ export type Incident = {
   status_audit: {available: boolean; events: {id: string; previous_status: string; new_status: string; justification: string; recorded_at: string}[]};
   timeline: {available: boolean; events: {id: string; event_type: string; source: string; recorded_at: string; summary: unknown}[]};
   infrastructure: {available: boolean; dns: unknown[]};
-  notification: unknown;
+  notification?: {available: boolean; outbox: null | {attempts: number; state: string; sent_at: string | null}};
   degradation: unknown;
   project_cta_context: unknown;
 };
