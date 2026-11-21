@@ -22,6 +22,24 @@ type Collection = {
   installation: null | {enabled: boolean; origin: string; originMatches: boolean};
   signals: {source: string; lastObservedAt: string}[];
 };
+const placements = {
+  'HTML': {
+    head: 'Cole os dois scripts no arquivo da LP, antes de </head>.',
+    body: 'Cole a imagem antes de </body> e acrescente a classe a um elemento visível que já exista.',
+    css: 'Cole a regra na folha de estilos carregada pela LP. Se usar CSS no próprio HTML, coloque a regra entre <style> e </style> no HEAD.',
+  },
+  'React/Vite': {
+    head: 'Cole os dois scripts no <head> do index.html do Vite.',
+    body: 'Cole a imagem antes de </body> no index.html. Aplique a classe com className no componente que renderiza o elemento visível.',
+    css: 'Cole a regra em um CSS global importado pela aplicação, como o arquivo de estilos do ponto de entrada.',
+  },
+  'WordPress': {
+    head: 'Use o recurso de inserção de código do tema ou um plugin com regras por página. Insira os dois scripts no cabeçalho HTML da LP.',
+    body: 'Na LP, cole a imagem em um bloco HTML personalizado. Em um bloco visível, abra Avançado → Classe(s) CSS adicional(is) e digite anticlone-canary sem o ponto.',
+    css: 'Cole a regra no CSS adicional do tema ou na folha de estilos do tema filho.',
+  },
+};
+type Technology = keyof typeof placements;
 type Action = 'publish' | 'rotate' | 'verify' | 'enable' | 'disable';
 const actionText: Record<Action, {name: string; description: string}> = {
   publish: {name: 'Publicar endereços de instalação', description: 'O servidor gera os endereços da página usando as origens operacionais configuradas no ambiente privado.'},
@@ -63,6 +81,7 @@ export function Installation({api, project, page, setGuard}: {
   api: AdminApi; project: string; page: Page; setGuard: (guard: 'clean' | 'saving') => void;
 }) {
   const nav = useContextNavigation();
+  const [technology, setTechnology] = useState<Technology>('HTML');
   const scope = {project, page: page.id};
   const query = useQuery(page.id, signal => api.request<Distribution>('distribution', {action: 'inspect', ...scope}, signal));
   const collection = useQuery(project, signal => api.request<Collection>('installation', {project}, signal));
@@ -76,6 +95,10 @@ export function Installation({api, project, page, setGuard}: {
   const collected = collectionResult ?? collection.data;
   const published = data?.distribution;
   const diagnostic = data?.diagnostic;
+  const guide = placements[technology];
+  const snippetLines = data?.snippets?.html.split('\n');
+  const head = snippetLines?.filter(line => line.startsWith('<script ')).join('\n');
+  const body = snippetLines?.find(line => line.startsWith('<img '));
 
   async function execute(action: Action) {
     setConfirmation(undefined);
@@ -94,7 +117,7 @@ export function Installation({api, project, page, setGuard}: {
         setNotice(action === 'verify' && status.verificationAttempt
           ? (labels[status.verificationAttempt.status] ?? status.verificationAttempt.status) + ' · ' +
             (installationMessages[status.verificationAttempt.reason] ?? 'Confira o diagnóstico abaixo.')
-          : 'Endereços de instalação publicados.');
+          : action === 'verify' ? 'Diagnóstico atualizado.' : 'Endereços de instalação publicados.');
       }
     } catch (problem) {
       setError(problem);
@@ -139,17 +162,27 @@ export function Installation({api, project, page, setGuard}: {
         <button className="primary" type="button" disabled={busy || !page.enabled}
           onClick={() => setConfirmation('publish')}>Publicar endereços de instalação</button>
       </>}
-      {data?.snippets && <>
-        <div className="snippets">
-          <Snippet key={'html:' + published?.version} code={data.snippets.html} language="HTML"/>
-          <Snippet key={'css:' + published?.version} code={data.snippets.css} language="CSS"/>
-        </div>
-        <ol className="installation-guide"><li>Insira o HTML na página oficial. O Core é carregado pelo Bootstrap.</li>
-          <li>Inclua o CSS nos estilos da página e aplique <code>anticlone-canary</code> a um elemento existente.</li>
-          <li>Publique no seu site, abra a URL oficial e atualize o diagnóstico abaixo.</li></ol>
-      </>}
+      {published && head && body && data.snippets && <div className="installation-steps">
+        <label>Tecnologia do site <select value={technology}
+          onChange={event => setTechnology(event.target.value as Technology)}>
+          {(Object.keys(placements) as Technology[]).map(option => <option key={option}>{option}</option>)}
+        </select></label>
+        <p>Use os trechos da revisão {published.version} na página oficial.</p>
+        <p>{guide.head} O Bootstrap carrega o Core automaticamente. O Fallback é instalado como script independente.
+          A telemetria é enviada internamente pelos scripts.</p>
+        <Snippet key={'head:' + published.version} code={head} language="HEAD"/>
+        <p>{guide.body}</p>
+        <Snippet key={'body:' + published.version} code={body} language="BODY"/>
+        {technology !== 'WordPress' && <p>Exemplo no elemento existente <code>{technology === 'React/Vite'
+          ? '<main className="conteudo anticlone-canary">…</main>'
+          : '<main class="conteudo anticlone-canary">…</main>'}</code></p>}
+        <p>{guide.css}</p>
+        <Snippet key={'css:' + published.version} code={data.snippets.css} language="CSS"/>
+        <p>Publique as alterações no seu site, abra a URL oficial e confira o diagnóstico abaixo.</p>
+      </div>}
       {published && <details>
-        <summary>Recursos, revisões e rotação</summary>
+        <summary>Diagnóstico avançado e histórico de revisões</summary>
+        <p>Os endereços abaixo servem para diagnóstico. Para instalar, copie os trechos de HEAD, BODY e CSS.</p>
         <dl className="review resources">
           {(Object.keys(resources) as Role[]).map(role => <div key={role}>
             <dt>{roleLabels[role]}</dt><dd>
@@ -170,7 +203,7 @@ export function Installation({api, project, page, setGuard}: {
       </details>}
     </section>
     <section className="panel">
-      <div className="panel-heading"><h2>Conferir situação</h2>
+      <div className="panel-heading"><h2>Diagnóstico da instalação</h2>
         {diagnostic && <span className="badge">{labels[diagnostic.status] ?? diagnostic.status}</span>}
       </div>
       {diagnostic && <>
@@ -181,6 +214,9 @@ export function Installation({api, project, page, setGuard}: {
           {date(diagnostic.controlledVerification.checkedAt)} · {installationMessages[diagnostic.controlledVerification.reason]}</p>}
         {data.verification.ready && !diagnostic.controlledVerification.checkedAt && <p className="muted">
           {installationMessages.NO_CURRENT_VERIFICATION}</p>}
+        <p>{diagnostic.layers.every(layer => layer.status === 'UNKNOWN')
+          ? 'Sem sinais recentes para esta LP.'
+          : 'Sinais recentes recebidos para esta LP.'} Os sinais passivos refletem acessos registrados.</p>
         <ul className="layers">{diagnostic.layers.map(layer => <li key={layer.layer}>
           <strong>{layerLabels[layer.layer] ?? layer.layer}</strong>
           <small>{layer.controlled === 'OBSERVED' ? 'Comprovado na carga verificada' :
