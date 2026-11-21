@@ -25,7 +25,7 @@ const password = 'frontend lab only';
 const endpoint = 'https://runtime.frontend.test';
 const action = (page: Page, name: string) => page.getByRole('button', {name, exact: true});
 
-async function fixture(test: TestContext, browserArgs?: string[], webSessionWithoutTimeout = false) {
+async function fixture(test: TestContext, browserArgs?: string[]) {
   assert.ok(process.env.TEST_DATABASE_URL);
   const root = new Pool({connectionString: process.env.TEST_DATABASE_URL});
   const schema = 'frontend_' + randomUUID().replaceAll('-', '');
@@ -59,7 +59,7 @@ async function fixture(test: TestContext, browserArgs?: string[], webSessionWith
   const totp = new TOTP({secret: Secret.fromBase32(secret)});
   const salt = Buffer.alloc(16, 43);
   const record = 'scrypt$' + salt.toString('hex') + '$' + scryptSync(password, salt, 64).toString('hex');
-  const server = createAdminServer(record, secret, db, () => clock, {webSessionWithoutTimeout}).listen(0, '127.0.0.1');
+  const server = createAdminServer(record, secret, db, () => clock).listen(0, '127.0.0.1');
   await once(server, 'listening');
   test.after(() => new Promise<void>((resolve, reject) => {
     server.close(error => error ? reject(error) : resolve());
@@ -461,7 +461,7 @@ test('new and legacy consoles share the same MFA, session lifetime and private r
   assert.ok(session?.httpOnly);
   assert.equal(session.sameSite, 'Strict');
   assert.equal(session.path, '/admin/ui/');
-  assert.ok(session.expires > Date.now() / 1000 + 850);
+  assert.equal(session.expires, -1);
 
   const block = await fetch(lab.origin + ui, {headers: {origin: 'https://outside.test', 'sec-fetch-site': 'cross-site'}});
   assert.equal(block.status, 403);
@@ -482,20 +482,17 @@ test('new and legacy consoles share the same MFA, session lifetime and private r
   })).status, 403);
 
   await modern.getByRole('link', {name: 'Proteger oferta'}).click();
-  await modern.getByLabel('Nome da oferta').fill('Rascunho na expiração');
-  lab.advance(15 * 60_000 - 1);
+  await modern.getByLabel('Nome da oferta').fill('Rascunho da oferta');
+  lab.advance(8 * 60 * 60_000);
   const stillActive = await fetch(lab.origin + '/admin/ui/projects', {headers: {
     'sec-fetch-site': 'same-origin', cookie: 'admin_session=' + session.value,
   }});
   assert.equal(stillActive.status, 200);
-  lab.advance(1);
+  const bootstrap = modern.waitForResponse(response => response.url().endsWith('/admin/ui/bootstrap'));
   await modern.bringToFront();
   await modern.evaluate(() => window.dispatchEvent(new Event('focus')));
-  await modern.getByText('Sua sessão terminou. Entre novamente para continuar.').waitFor();
-  await legacy.reload();
-  await legacy.getByLabel('Código TOTP').waitFor();
-  assert.equal(await login(modern, lab.code()), 204);
-  assert.equal(await modern.getByLabel('Nome da oferta').inputValue(), 'Rascunho na expiração');
+  assert.equal((await (await bootstrap).json()).authenticated, true);
+  assert.equal(await modern.getByLabel('Nome da oferta').inputValue(), 'Rascunho da oferta');
   await legacy.reload();
   await legacy.getByText('Configuração incompleta', {exact: true}).waitFor();
 
@@ -541,8 +538,8 @@ test('new and legacy consoles share the same MFA, session lifetime and private r
   assert.equal((await context.cookies()).some(cookie => cookie.name === 'admin_session'), false);
 });
 
-test('private Dev web session remains active after 15 minutes and still supports revocation', {timeout: 60_000}, async t => {
-  const lab = await fixture(t, undefined, true);
+test('private web session remains active after 15 minutes and still supports revocation', {timeout: 60_000}, async t => {
+  const lab = await fixture(t);
   const context = await lab.browser.newContext();
   const page = await context.newPage();
   await page.goto(lab.origin + ui + '/visao-geral');
