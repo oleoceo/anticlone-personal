@@ -86,7 +86,7 @@ export async function readDistribution(db:Pool|PoolClient,installation:string,ve
 export function distributionSnippets(distribution:Distribution) {
   const {bases}=distribution;
   const path=(name:string)=>distribution.paths?.[name]??name;
-  return {html:`<script async src="${bases.SCRIPT}${path('runtime.js')}"></script>\n<script async src="${bases.SCRIPT}${path('fallback.js')}"></script>\n<img src="${bases.STATIC_ASSETS}${path('html.gif')}" width="1" height="1" alt="" referrerpolicy="strict-origin-when-cross-origin">`,
+  return {html:`<link rel="preconnect" href="${new URL(bases.TELEMETRY).origin}" crossorigin>\n<script async src="${bases.SCRIPT}${path('runtime.js')}"></script>\n<script async src="${bases.SCRIPT}${path('fallback.js')}"></script>\n<img src="${bases.STATIC_ASSETS}${path('html.gif')}" width="1" height="1" alt="" referrerpolicy="strict-origin-when-cross-origin">`,
     css:`/* Aplique a classe a um elemento existente. Sinal passivo; sem mitigação. */\n.anticlone-canary { background-image: url("${bases.STATIC_ASSETS}${path('css.gif')}"); }`};
 }
 export async function distributionAdmin(db:Pool,body:unknown,env=process.env) {

@@ -2,6 +2,8 @@ import type {Pool,PoolClient} from 'pg';
 import {assertProjectAdministrativeWrite,assertPageAdministrativeWrite} from './admin-project-write.js';
 import {PageConflict} from './protected-pages.js';
 import {currentApproval} from './page-policy-approval.js';
+import {validateOperationalCopy} from './operational-copy-context.js';
+import {suspendCopyRedirectRule} from './page-redirect-rules.js';
 import {operationallyEligible} from './operational-eligibility.js';
 
 export async function operationalAuthorization(db:PoolClient,project:string,page:string,origin:string,pathname:string) {
@@ -16,20 +18,6 @@ export async function operationalAuthorization(db:PoolClient,project:string,page
     AND a.approval_id=(SELECT max(id) FROM page_policy_approvals WHERE project_id=$1 AND page_id=$2)
     FOR SHARE OF a`,[project,page])).rows[0];
   return row && row.copy_origin===origin && row.copy_pathname===pathname ? row : null;
-}
-
-export async function isOfficialOrigin(client: PoolClient, origin: string) {
-  const result=await client.query('SELECT 1 FROM protected_page_urls WHERE origin=$1 UNION ALL SELECT 1 FROM projects WHERE origin=$1',[origin]);
-  return Boolean(result.rowCount);
-}
-
-export async function validateOperationalCopy(client: PoolClient, copyOrigin: unknown, copyPathname: unknown, acknowledged: unknown) {
-  if (acknowledged!==true || typeof copyOrigin!=='string' || typeof copyPathname!=='string' ||
-      !/^\/[a-zA-Z0-9/_-]{0,200}$/.test(copyPathname)) throw new TypeError('explicit context required');
-  const url=new URL(copyOrigin);
-  if (url.origin!==copyOrigin || url.protocol!=='https:' || url.hostname.endsWith('.') || url.username || url.password) throw new TypeError('HTTPS context required');
-  if (await isOfficialOrigin(client,url.origin)) throw new TypeError('original context forbidden');
-  return {copy_origin:copyOrigin,copy_pathname:copyPathname};
 }
 
 export type AuthorizationRow = {
@@ -74,6 +62,7 @@ export async function operationalAdmin(db:Pool,body:unknown) {
         configuration={...page,approval_id:approval.id,...copy};
       }
       if(!configuration)throw new TypeError('no authorization to suspend');
+      if (action==='suspend') await suspendCopyRedirectRule(client,data.project,data.page,configuration.copy_origin,configuration.copy_pathname);
       await writeOperationalAuthorization(client,data.project,data.page,
         {...configuration,revision:(old?.revision??0)+1,enabled:action==='authorize'});
     }

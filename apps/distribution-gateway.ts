@@ -20,16 +20,17 @@ export function distributionGateway(db:Pool,scripts:Record<string,Buffer>,dispat
     if (++count>1200) {res.writeHead(429).end();return true;}
     if (!match) {res.writeHead(404).end();return true;}
     void (async()=>{
-      const installed=(await db.query("SELECT to_regclass('runtime_aliases') IS NOT NULL AS installed")).rows[0].installed;
-      if (!installed) {res.writeHead(404).end();return;}
-      const row=(await db.query('SELECT installation_id,version,role FROM runtime_aliases WHERE alias=$1',[match[1]])).rows[0];
+      const routeStarted = performance.now();
       const modern=(req.url??'').startsWith('/r/v2/');
       const endpoint=modern ? Object.keys(neutralPaths).find(name=>neutralPaths[name]===match[2])??'' : match[2];
-      if (!row || !allowed[row.role]?.includes(endpoint)) {res.writeHead(404).end();return;}
-      const distribution=await readDistribution(db,row.installation_id,row.version);
-      if (!distribution) {res.writeHead(503).end();return;}
-      if(Boolean(distribution.paths)!==modern){res.writeHead(404).end();return;}
+      const row=(await db.query(`SELECT a.installation_id,a.version,a.role,d.contract_version,
+        (SELECT count(*)::int FROM runtime_aliases WHERE installation_id=a.installation_id AND version=a.version) AS aliases
+        FROM runtime_aliases a JOIN runtime_distributions d USING(installation_id,version) WHERE alias=$1`,[match[1]])).rows[0];
+      if (!row || !allowed[row.role]?.includes(endpoint) || (row.contract_version===2)!==modern) {res.writeHead(404).end();return;}
+      if (row.aliases!==3) {res.writeHead(503).end();return;}
       if (scripts[endpoint]) {
+        const distribution=await readDistribution(db,row.installation_id,row.version);
+        if (!distribution) {res.writeHead(503).end();return;}
         if (req.method!=='GET') {res.writeHead(405).end();return;}
         const content=scripts[endpoint].toString('utf8').replace('const distribution = null;',()=>`const distribution = ${JSON.stringify(distribution)};`);
         receiveDistributionScript(db,row.installation_id,endpoint,match[1]);
@@ -65,10 +66,11 @@ export function distributionGateway(db:Pool,scripts:Record<string,Buffer>,dispat
         if(claimedOrigin)void layers(context,claimedOrigin,source).catch(()=>{});
         return;
       }
+      if (endpoint==='entry-decision') res.setHeader('Server-Timing', `route;dur=${(performance.now()-routeStarted).toFixed(1)}`);
       receiptAliases.set(req,match[1]);
       req.url='/i/'+row.installation_id+'/'+endpoint;
       dispatch(req,res);
-    })().catch(()=>{if(!res.headersSent)res.writeHead(503).end();});
+    })().catch((error:unknown)=>{if(!res.headersSent)res.writeHead((error as {code?:string}).code==='42P01'?404:503).end();});
     return true;
   };
 }

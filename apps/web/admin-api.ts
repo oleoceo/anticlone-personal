@@ -9,7 +9,15 @@ export class AdminError extends Error {
   }
 }
 
+const redirectMessages: Record<string,string> = {
+  PROJECT_DESTINATION_ON_COPY: 'Uma cópia que usa o destino padrão está na origem informada. Escolha outra URL ou altere o destino dessa cópia.',
+  REDIRECT_RUNTIME_REQUIRED: 'Publique a instalação desta LP com a origem de telemetria do gateway operacional.',
+  REDIRECT_GATEWAY_UNAVAILABLE: 'O gateway de redirecionamento está indisponível. Atualize a situação antes de ativar.',
+  REDIRECT_SCHEMA_REQUIRED: 'A atualização do banco para regras por cópia está pendente.',
+};
+
 export function errorMessage(error: unknown): string {
+  if (error instanceof AdminError && error.code && Object.hasOwn(redirectMessages,error.code)) return redirectMessages[error.code];
   if (error instanceof AdminError && error.code && Object.hasOwn(installationMessages,error.code)) return installationMessages[error.code];
   const status = error instanceof AdminError ? error.status : 0;
   switch (status) {

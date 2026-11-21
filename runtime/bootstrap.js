@@ -198,7 +198,7 @@
         addEventListener('pagehide', event => { if (!event.persisted) { clearInterval(timer); suspendCtas(); } });
         document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(true); });
         const entryWall = Date.now(), entryMono = performance.now(), entrySequence = sequence;
-        fetch(endpoint('entry-decision'), { method:'POST', headers:{'Content-Type':'text/plain'}, body:JSON.stringify({session,signals,pathname:initialPath}), cache: 'no-store' })
+        fetch(endpoint('entry-decision'), { method:'POST', headers:{'Content-Type':'text/plain'}, body:JSON.stringify({session,signals,pathname:initialPath}), cache: 'no-store', credentials:'omit', priority:'high' })
           .then(response => { if (!response.ok) throw new Error('decision unavailable'); return response.json(); })
           .then(decision => {
             if (!validContext()) return;
@@ -213,7 +213,7 @@
             if (decision.action !== 'PAGE_REDIRECT' || !Number.isSafeInteger(decision.version) || decision.version < 1 || typeof decision.destination !== 'string') return;
             if(decision.operationalContext && !operationalContextMatches(decision)) return;
             const target = new URL(decision.destination);
-            if (!['http:', 'https:'].includes(target.protocol) || target.username || target.password || target.hash || target.href === location.href || target.origin === location.origin) return;
+            if ((target.protocol !== 'https:' && !(target.protocol === 'http:' && !decision.operationalContext && ['localhost','127.0.0.1'].includes(target.hostname))) || target.username || target.password || target.hash || target.href === location.href || target.origin === location.origin) return;
             reportAction(decision.observationReceipt, null, null);
             location.replace(attributed(target.href, decision.attribution));
           }).catch(cancelRedirect);

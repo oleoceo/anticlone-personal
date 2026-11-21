@@ -2,15 +2,17 @@ import { request } from 'node:https';
 import type { Pool, PoolClient } from 'pg';
 import { assertPageAdministrativeWrite, assertProjectAdministrativeWrite } from './admin-project-write.js';
 import { validateAllocation } from './allocation.js';
-import { isOfficialOrigin, validateOperationalCopy, writeOperationalAuthorization, type AuthorizationRow } from './operational-authorization.js';
+import { isOfficialOrigin, validateOperationalCopy } from './operational-copy-context.js';
+import { writeOperationalAuthorization, type AuthorizationRow } from './operational-authorization.js';
 import { approvalConfiguration, currentApproval, savePageApproval } from './page-policy-approval.js';
-import { approvedDestination } from './page-redirect.js';
+import { pageDestination } from './page-redirect.js';
 import { insertPagePolicyVersion } from './protection-admin.js';
 import { PageConflict } from './protected-pages.js';
+import { RedirectRuleConflict, redirectRuleSettings, saveRedirectRule } from './page-redirect-rules.js';
 import { readDistribution } from './runtime-distribution.js';
 
 type Gateway = 'OPERATIONAL' | 'OBSERVATION_ONLY' | 'UNREACHABLE' | 'UNCONFIGURED';
-async function probeGateway(origin: string | undefined): Promise<Gateway> {
+async function probeGateway(origin: string | undefined, requireCopyRules = false): Promise<Gateway> {
   let url: URL;
   try {
     url=new URL(origin ?? '');
@@ -28,7 +30,7 @@ async function probeGateway(origin: string | undefined): Promise<Gateway> {
       res.on('end',()=>{
         try {
           const health=JSON.parse(body);
-          if (res.statusCode!==200 || health.status!=='ready') return resolve('UNREACHABLE');
+          if (res.statusCode!==200 || health.status!=='ready' || (requireCopyRules && res.headers['x-anticlone-redirect-contract']!=='2')) return resolve('UNREACHABLE');
           resolve(health.mode==='OPERATIONAL' && health.action==='SCOPED_AUTHORIZATION_REQUIRED' ? 'OPERATIONAL' :
             ['LAB','PILOT_OBSERVE'].includes(health.mode) && health.action==='OBSERVE_ONLY' ? 'OBSERVATION_ONLY' : 'UNREACHABLE');
         } catch { resolve('UNREACHABLE'); }
@@ -75,19 +77,26 @@ export async function pageRedirectAdmin(db: Pool, input: unknown, env=process.en
   const {project,page,action}=data;
   if (typeof project!=='string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(project) ||
       typeof page!=='string' || !/^[a-f0-9-]{36}$/i.test(page)) throw new TypeError('invalid scope');
+  const gatewayOrigin=env.ADMIN_OPERATIONAL_GATEWAY_ORIGIN;
+  if (action==='save-default' || action==='save-copy' || action==='disable-copy') {
+    if (action==='save-copy' && await checkGateway(gatewayOrigin,true)!=='OPERATIONAL') throw new RedirectRuleConflict('REDIRECT_GATEWAY_UNAVAILABLE');
+    return saveRedirectRule(db,project,page,data,gatewayOrigin);
+  }
   const versionFields='action,approvalId,configGeneration,page,project,revision,urlGeneration';
   const expected={inspect:'action,page,project',activate:'acknowledged,action,approvalId,configGeneration,copyOrigin,copyPathname,page,policy,project,revision,urlGeneration',deactivate:versionFields};
   if (typeof action!=='string' || !Object.hasOwn(expected,action) ||
       expected[action as keyof typeof expected]!==Object.keys(data).sort().join(',')) throw new TypeError('invalid action');
-  const gatewayOrigin=env.ADMIN_OPERATIONAL_GATEWAY_ORIGIN;
-  const gateway=action==='deactivate' ? 'UNCONFIGURED' : await checkGateway(gatewayOrigin);
+  const [gateway,rulesGateway] = action==='deactivate' ? ['UNCONFIGURED','UNCONFIGURED'] as const : await Promise.all([
+    checkGateway(gatewayOrigin),action==='inspect' ? checkGateway(gatewayOrigin,true) : Promise.resolve('UNCONFIGURED' as const),
+  ]);
   const client=await db.connect();
   try {
     if (action==='inspect') {
       await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
       const scope=await readScope(client,project,page,gatewayOrigin);
+      const rules=await redirectRuleSettings(client,project,page);
       await client.query('COMMIT');
-      return {gateway,issue:scope.issue,entryIssue:scope.entryIssue,entry:scope.entry,approvalId:scope.approval?.id ?? null,
+      return {gateway,rules,rulesGateway,issue:scope.issue,entryIssue:scope.entryIssue,entry:scope.entry,approvalId:scope.approval?.id ?? null,
         authorization:scope.authorization ?? null,active:gateway==='OPERATIONAL' && !scope.issue && !scope.entryIssue && scope.readyContext && scope.entry?.enabled===true,
         urlGeneration:scope.row.url_generation,configGeneration:scope.row.config_generation};
     }
@@ -120,7 +129,7 @@ export async function pageRedirectAdmin(db: Pool, input: unknown, env=process.en
       const allocation=validateAllocation(options.allocation);
       if (typeof options.destination!=='string' || typeof options.stealth!=='boolean') throw new TypeError('invalid redirect policy');
       if (Object.values(allocation).every(value=>value===0)) throw new TypeError('redirect allocation is zero');
-      const destination=approvedDestination(options.destination,scope.urls[0].origin);
+      const destination=pageDestination(options.destination);
       if (new URL(destination).origin===copy.copy_origin) throw new TypeError('redirect destination shares the copy origin');
       entry=await insertPagePolicyVersion(client,project,scope.urls[0].origin,{
         enabled:true,approved_destination:destination,allocation,stealth:options.stealth,stealth_version:2,

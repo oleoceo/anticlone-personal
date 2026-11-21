@@ -4,7 +4,7 @@ Base inspecionada: main após PR #63, 34853e1. Este contrato precede alteraçõe
 
 | Camada atual | Entrada e identidade | Saída / dependências | Falha |
 |---|---|---|---|
-| Bootstrap (`runtime/bootstrap.js`) | URL do script, pathname, sessão pública, sinais declarados | Carrega Core; aplica PAGE_REDIRECT e snapshots CTA; consulta entry-decision/cta-refresh; recibos F29. Fallback é instalado separadamente | Redirect 150ms fail-open; CTA sem fetch no clique, resposta até 5s, TTL 120s; navegação nativa |
+| Bootstrap (`runtime/bootstrap.js`) | URL do script, pathname, sessão pública, sinais declarados | Inicia a decisão em paralelo com o Core; aplica PAGE_REDIRECT e snapshots CTA; consulta entry-decision/cta-refresh; recibos F29. Fallback é instalado separadamente | Redirect 150ms fail-open; CTA sem fetch no clique, resposta até 5s, TTL 120s; navegação nativa |
 | Core (`runtime/core.js`) | URL, origem/pathname, atribuição limitada | POST observe; somente coleta, não é o motor completo | Melhor esforço, sem bloquear página |
 | Fallback (`runtime/fallback.js`) | Sua própria URL e contexto | POST observe/fallback, observação independente quando instalado diretamente | Sem promessa de mitigação; falha silenciosa |
 | HTML/CSS Canary | GET imagem com Referer alegado | observeCanary; agregados passivos, sem decisão | Referer ausente é desconhecido; nenhuma mitigação |

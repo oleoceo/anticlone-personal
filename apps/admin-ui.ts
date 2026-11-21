@@ -1,3 +1,4 @@
+import {RedirectRuleConflict} from './page-redirect-rules.js';
 import {pageRedirectAdmin} from './page-redirect-admin.js';
 import {listTelemetryOrigins, telemetryOriginAdmin} from './telemetry-origins.js';
 import {listEmailAttempts} from './notification-email-log.js';
@@ -98,6 +99,10 @@ export function handleAdminUi(req: IncomingMessage, res: ServerResponse, db: Poo
     }
     const operation=req.url === '/admin/ui/telemetry-origins' ? telemetryOriginAdmin(db,body) : req.url === '/admin/ui/health' ? adminHealth(db,body) : req.url === '/admin/ui/commerce' ? commerceAdmin(db,body) : req.url === '/admin/ui/project-create' ? registerProject(db,body,req.headers['idempotency-key']) : req.url === '/admin/ui/project-history' ? registrationHistory(db,body) : req.url === '/admin/ui/notifications' ? notificationAdmin(db,body) : req.url === '/admin/ui/page-redirect' ? pageRedirectAdmin(db,body) : req.url === '/admin/ui/operational' ? operationalAdmin(db,body) : req.url === '/admin/ui/distribution' ? distributionAdmin(db,body) : req.url === '/admin/ui/observed-metrics' ? metricsAdmin(db,body) : req.url === '/admin/ui/pages' ? managePages(db,body) : req.url === '/admin/ui/checkout-metrics' ? checkoutSummary(db,body) : req.url === '/admin/ui/protection' ? protectionAdmin(db,body) : req.url === '/admin/ui/incidents' ? incidentList(db,body) : req.url === '/admin/ui/incident-status' ? classifyIncident(db,body) : req.url === '/admin/ui/settings' ? saveNotificationSettings(db,body) : req.url === '/admin/ui/smtp-test' ? testNotificationSmtp(db,body) : req.url === '/admin/ui/preference' ? setNotificationPreference(db,body) : req.url === '/admin/ui/cta-inventory' ? inventory(db,body) : req.url === '/admin/ui/cta-import' ? importUiInventory(db,body) : req.url?.startsWith('/admin/ui/installation') ? installation(db,body,req.url) : req.url === '/admin/ui/cta-commercial' ? approveCommercial(db,body).then(()=>({state:'APPROVED'})) : selectObservation(db,body).then(()=>({state:'PENDING'}));
     void operation.then(result=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result))).catch((error:unknown)=>{
+      if (error instanceof RedirectRuleConflict) {
+        res.writeHead(409,{'Content-Type':'application/json'}).end(JSON.stringify({code:error.code}));
+        return;
+      }
       if (error instanceof DistributionBlocked) {
         res.writeHead(400,{'Content-Type':'application/json'}).end(JSON.stringify({code:error.code}));
         return;

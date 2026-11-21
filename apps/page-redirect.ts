@@ -1,6 +1,6 @@
 import { permitsMitigation, type StealthPolicy } from './stealth.js';
 import type { RiskAssessment } from './risk.js';
-﻿import { selected, validateAllocation } from './allocation.js';
+import { selected, validateAllocation } from './allocation.js';
 import { configuredOrigin } from './detection.js';
 import { isIP } from 'node:net';
 
@@ -29,6 +29,18 @@ export function externalDestinations(projectOrigin: string): string[] {
   });
 }
 
+// Page destinations are confirmed in the admin policy. They are never fetched by the server.
+export function pageDestination(value: unknown, legacyOrigin?: string): string {
+  if (typeof value !== 'string' || value.length > 2048 || /[\u0000-\u0020\u007f\\]/.test(value) ||
+      !/^https?:\/\/[^/?#]/i.test(value)) throw new TypeError('invalid redirect destination');
+  const url = new URL(value);
+  const laboratory = url.protocol === 'http:' && ['localhost','127.0.0.1'].includes(url.hostname) && url.origin === legacyOrigin;
+  if ((!laboratory && url.protocol !== 'https:') || url.username || url.password || url.hash || url.href.length > 2048) {
+    throw new TypeError('invalid redirect destination');
+  }
+  return url.href;
+}
+
 // Same-origin destinations or an exact URL in the owner's private allowlist.
 export function approvedDestination(value: string, projectOrigin: string): string {
   if (typeof value !== 'string' || value.length > 2048 || /[\u0000-\u0020\\]/.test(value)) throw new Error('invalid destination');
@@ -40,6 +52,10 @@ export function approvedDestination(value: string, projectOrigin: string): strin
 
 export function entryDecision(policy: {version: number; enabled: boolean; approved_destination: string; allocation: unknown} & StealthPolicy | undefined, original: string, origin: string, controlledOrigin: string | undefined, risk: string | undefined, session: unknown, trafficClass: string, assessment?: RiskAssessment) {
   if (origin === original || !controlledOrigin || origin !== controlledOrigin || !policy || policy.enabled !== true || !Number.isSafeInteger(policy.version) || policy.version < 1 || !permitsMitigation(policy,risk,assessment)) return { action: 'OBSERVE_ONLY' };
-  try { if (!selected(session, 'PAGE_REDIRECT', policy.version, validateAllocation(policy.allocation), trafficClass)) return { action: 'OBSERVE_ONLY' }; return { action: 'PAGE_REDIRECT', ...(policy.stealth_version===2?{stealthVersion:2}:{}), version: policy.version, destination: approvedDestination(policy.approved_destination, original) }; }
-  catch { return { action: 'OBSERVE_ONLY' }; }
+  try {
+    if (!selected(session,'PAGE_REDIRECT',policy.version,validateAllocation(policy.allocation),trafficClass)) return {action:'OBSERVE_ONLY'};
+    const destination=pageDestination(policy.approved_destination,original);
+    if (new URL(destination).origin===origin) return {action:'OBSERVE_ONLY'};
+    return {action:'PAGE_REDIRECT',...(policy.stealth_version===2 ? {stealthVersion:2} : {}),version:policy.version,destination};
+  } catch { return {action:'OBSERVE_ONLY'}; }
 }

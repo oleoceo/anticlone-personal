@@ -1,3 +1,4 @@
+import {CopyRedirectRules, type CopyRedirectSettings} from './copy-redirect-rules';
 import type {Page} from './admin-api';
 import {emptyAllocation, formData, InputError, trafficLabels, value, type Allocation, type useOperation} from './operations';
 import type {EntryPolicy, Operational} from './protection-contracts';
@@ -6,6 +7,8 @@ import type {AdminApi} from './admin-api';
 export type RedirectStatus = {
   gateway: 'OPERATIONAL' | 'OBSERVATION_ONLY' | 'UNREACHABLE' | 'UNCONFIGURED';
   issue: string | null;
+  rules: CopyRedirectSettings | null;
+  rulesGateway: RedirectStatus['gateway'];
   entryIssue: string | null;
   entry: EntryPolicy | null;
   approvalId: string | null;
@@ -34,23 +37,28 @@ const blockers: Record<string, string> = {
   CTA_REVIEW_REQUIRED: 'Revise a aprovação e a autorização dos CTAs vinculados a esta LP.',
 };
 
-export function PageRedirectControls({api, page, state, incidentHost, destinations, operation, refresh}: {
-  api: AdminApi; page: Page; state: RedirectStatus; incidentHost?: string; destinations: string[];
+export function PageRedirectControls({api, page, state, incidentHost, operation, refresh}: {
+  api: AdminApi; page: Page; state: RedirectStatus; incidentHost?: string;
   operation: ReturnType<typeof useOperation>; refresh: () => void;
 }) {
   const authorization=state.authorization;
   const current=state.entry;
   const original=page.urls.length===1 ? page.urls[0].origin+page.urls[0].pathname : '';
   const authorizedCopy=authorization ? authorization.copy_origin+authorization.copy_pathname : '';
+  const replaced = state.rules?.rules.some(rule=>rule.copy_origin===authorization?.copy_origin && rule.copy_pathname===authorization.copy_pathname);
   const mismatch=incidentHost && authorization && new URL(authorization.copy_origin).hostname!==incidentHost.toLowerCase();
   const scope={project:page.project_id,page:page.id,approvalId:state.approvalId,
     revision:authorization?.revision??0,configGeneration:state.configGeneration,urlGeneration:state.urlGeneration};
-  return <section className="panel operation-section">
-    <h2>Redirecionamento desta LP</h2>
+  return <>
+    {state.rules && <CopyRedirectRules api={api} page={page} settings={state.rules} gatewayReady={state.rulesGateway==='OPERATIONAL'}
+      issue={state.issue && !['CTA_REVIEW_REQUIRED','REDIRECT_SCHEMA_REQUIRED'].includes(state.issue) ? blockers[state.issue] : null}
+      operation={operation} refresh={refresh} incidentHost={incidentHost} urlGeneration={state.urlGeneration} configGeneration={state.configGeneration}/>}
+    {state.gateway!=='UNCONFIGURED' && (!state.rules || current) && <details className="panel operation-section" open={!state.rules}>
+    <summary>Política vinculada à LP</summary>
     <p>{gatewayMessages[state.gateway]}</p>
     {state.entryIssue && <p className="notice">{blockers[state.entryIssue]}</p>}
     {state.issue && <p className="notice">{blockers[state.issue] ?? 'A configuração desta LP exige revisão.'}</p>}
-    {state.active && !mismatch ? <>
+    {replaced ? <p>A regra específica da cópia tem prioridade sobre esta política de página.</p> : state.active && !mismatch ? <>
       <p><strong>Autorizado para {authorizedCopy}</strong> · versão {current?.version}</p>
       <p>O navegador aplica a decisão dentro de 150 ms. Em caso de atraso ou falha, a visita segue na página aberta.</p>
     </> : <p>{!current ? 'Sem redirecionamento vinculado a esta LP.' :
@@ -82,9 +90,8 @@ export function PageRedirectControls({api, page, state, incidentHost, destinatio
         operation.setError(new InputError('O destino precisa estar em outra origem que a cópia.'));
         return;
       }
-      if (destinationUrl.username || destinationUrl.password || destinationUrl.hash ||
-          ((!original || destinationUrl.origin!==new URL(original).origin) && !destinations.includes(destinationUrl.href))) {
-        operation.setError(new InputError('Use um destino oficial ou uma URL externa já autorizada para a LP.'));
+      if (destinationUrl.protocol!=='https:' || destinationUrl.username || destinationUrl.password || destinationUrl.hash) {
+        operation.setError(new InputError('Informe uma URL HTTPS válida, sem credenciais nem fragmento.'));
         return;
       }
       if (incidentHost && copyUrl.hostname!==incidentHost.toLowerCase()) {
@@ -104,9 +111,7 @@ export function PageRedirectControls({api, page, state, incidentHost, destinatio
       }, fields);
     }}>
       <label>Destino da página<input name="destination" type="url" required maxLength={2048}
-        defaultValue={current?.approved_destination ?? original} list="operational-page-destinations"/></label>
-      <datalist id="operational-page-destinations">{[...new Set([original,...destinations])].filter(Boolean).map(url=>
-        <option key={url} value={url}/>)}</datalist>
+        defaultValue={current?.approved_destination ?? original}/></label>
       <fieldset className="allocation">
         <legend>Percentual por classe</legend>
         {Object.entries(trafficLabels).map(([key,label])=><label key={key}>{label}
@@ -132,5 +137,6 @@ export function PageRedirectControls({api, page, state, incidentHost, destinatio
         refresh();
         return 'Redirecionamento desativado.';
       })}>Desativar redirecionamento</button>}
-  </section>;
+  </details>}
+  </>;
 }

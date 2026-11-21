@@ -1,7 +1,7 @@
 import { validateStealth } from './stealth.js';
 import { assertProjectAdministrativeWrite, withProjectAdministrativeWrite } from './admin-project-write.js';
 import type { Pool } from 'pg';
-import { approvedDestination, configurationOrigin } from './page-redirect.js';
+import { pageDestination, configurationOrigin } from './page-redirect.js';
 
 import { validateAllocation, type Allocation } from './allocation.js';
 
@@ -13,7 +13,7 @@ export function validateDraft(body: unknown, origin: string): Draft {
   if ('stealth_version' in value && value.stealth_version !== 2) throw Error('invalid stealth version');
   validateStealth(value as {stealth:boolean;stealth_version?:number});
   configurationOrigin(origin);
-  return {enabled:value.enabled, approved_destination:approvedDestination(value.approved_destination, origin), stealth:value.stealth, ...(value.stealth_version == null ? {} : {stealth_version:value.stealth_version as number}), allocation:validateAllocation(value.allocation)};
+  return {enabled:value.enabled, approved_destination:pageDestination(value.approved_destination, origin), stealth:value.stealth, ...(value.stealth_version == null ? {} : {stealth_version:value.stealth_version as number}), allocation:validateAllocation(value.allocation)};
 }
 export async function saveDraft(db: Pool, project: string, body: unknown) {
  return withProjectAdministrativeWrite(db,project,async client=>{

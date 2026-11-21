@@ -22,6 +22,18 @@ export async function issueObservedReceipt<T extends Decision>(db:Pool,project:s
   return id?{...decision,observationReceipt:id}:decision;
  }catch{return decision;}
 }
+// Receipt persistence is best-effort. Locks or pool contention must not consume
+// the browser's decision window. A timely receipt is committed before delivery.
+export async function issueEntryReceipt<T extends Decision>(db:Pool,project:string,page:string,origin:string,session:unknown,traffic:string,decision:T) {
+ let timer: NodeJS.Timeout | undefined;
+ try {
+  return await Promise.race([
+   issueObservedReceipt(db,project,page,origin,session,traffic,decision),
+   new Promise<T>(resolve=>{timer=setTimeout(()=>resolve(decision),15);}),
+  ]);
+ } finally { clearTimeout(timer); }
+}
+
 export async function observeReceiptAction(db:Pool,project:string,page:string,origin:string,body:Record<string,unknown>){
  if(Object.keys(body).sort().join(',')!=='event,marker,receipt,surface'||typeof body.event!=='string'||typeof body.receipt!=='string'||!['event','receipt'].every(key=>/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(body[key] as string)))throw new TypeError('invalid observation');
  const row=(await db.query('SELECT * FROM observed_decision_receipts WHERE id=$1 AND project_id=$2 AND page_id=$3 AND origin=$4 AND expires_at>clock_timestamp()',[body.receipt,project,page,origin])).rows[0];

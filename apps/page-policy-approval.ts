@@ -1,6 +1,6 @@
 import { assertCtaStealthCompatibility } from './stealth.js';
 ﻿import type { PoolClient } from 'pg';
-import { approvedDestination } from './page-redirect.js';
+import { approvedDestination, pageDestination } from './page-redirect.js';
 import { validateAllocation } from './allocation.js';
 
 // A conservative snapshot: changes to any selected surface suspend the approval.
@@ -10,7 +10,7 @@ export async function approvalConfiguration(client: PoolClient, project: string,
   const original=urls.rows[0];
   const entries=entry===null ? {rows:[]} : await client.query(`SELECT v.version,v.enabled,v.stealth,v.approved_destination,v.allocation,to_jsonb(v)->'stealth_version' AS stealth_version FROM protection_policy_versions v WHERE v.project_id=$1 AND v.version=$2`,[project,entry]);
   if (entry!==null && (entries.rows.length!==1 || !entries.rows[0].enabled || (!entries.rows[0].stealth && entries.rows[0].stealth_version!==2))) throw new Error('inactive page policy');
-  for (const row of entries.rows) { approvedDestination(row.approved_destination,original.origin); validateAllocation(row.allocation); }
+  for (const row of entries.rows) { pageDestination(row.approved_destination,original.origin); validateAllocation(row.allocation); }
   const policies=await client.query(`SELECT v.version,v.enabled,v.surface,v.pathname,v.allocation,to_jsonb(v)->'stealth' AS stealth,to_jsonb(v)->'stealth_version' AS stealth_version,b.page_id AS bound_page FROM cta_policy_versions v JOIN active_cta_surface_policies a ON a.project_id=v.project_id AND a.surface=v.surface AND a.version=v.version LEFT JOIN page_cta_policy_bindings b ON b.project_id=v.project_id AND b.surface=v.surface WHERE v.project_id=$1 AND v.version=ANY($2::int[]) ORDER BY v.surface`,[project,versions]);
   if (policies.rows.length!==versions.length || new Set(policies.rows.map(row=>row.surface)).size!==versions.length) throw new Error('inactive or ambiguous CTA policies');
   for (const row of policies.rows) {

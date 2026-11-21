@@ -42,8 +42,8 @@ export function ProtectionScreen({api, project, page, incident, action, setGuard
     {pageAction && redirect.error !== undefined && <Failure error={redirect.error} retry={redirect.revalidate}/>}
     {pageAction && redirect.error === undefined && redirect.data?.gateway==='UNCONFIGURED' &&
       <p className="notice">A ativação em um gateway público requer ADMIN_OPERATIONAL_GATEWAY_ORIGIN no admin privado.</p>}
-    {pageAction && redirect.error === undefined && redirect.data && redirect.data.gateway!=='UNCONFIGURED' && <PageRedirectControls api={api} page={page} state={redirect.data} incidentHost={incident?.host}
-      destinations={data.pr.data?.externalDestinations ?? []} operation={{...operation,busy:operation.busy || redirect.pending}}
+    {pageAction && redirect.error === undefined && redirect.data && (redirect.data.rules || redirect.data.gateway!=='UNCONFIGURED') && <PageRedirectControls api={api} page={page} state={redirect.data} incidentHost={incident?.host}
+      operation={{...operation,busy:operation.busy || redirect.pending}}
       refresh={refresh}/>}
     {(!pageAction || (redirect.error === undefined && redirect.data?.gateway==='UNCONFIGURED')) && <>
     <ol className="steps protection-steps" aria-label="Etapas de proteção">

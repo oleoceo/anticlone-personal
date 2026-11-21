@@ -333,7 +333,7 @@ test('distribution v1: persistent revisions, admin HTML/CSS, real browser layers
     await panel.getByLabel('Endpoint de telemetria').selectOption(pooledOrigin);
     await panel.getByRole('button',{name:'Publicar endereços de instalação',exact:true}).click();
     await panel.getByRole('button',{name:'Confirmar',exact:true}).click();
-    await panel.getByRole('region',{name:'Trecho HTML'}).locator('code').filter({hasText:pooledOrigin}).waitFor();
+    await panel.getByRole('region',{name:'Trecho HTML'}).locator('code').filter({hasText:pooledOrigin+'/r/v2/'}).waitFor();
     const aligned=(await readDistribution(db,siblingInstallation))!;
     assert.equal(aligned.version,implicit.distribution!.version+1);
     assert.deepEqual(new Set(Object.values(aligned.bases).map(url=>new URL(url).origin)),new Set([pooledOrigin]));

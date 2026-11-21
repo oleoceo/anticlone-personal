@@ -1,5 +1,6 @@
+import { copyRedirectAdmission } from './page-redirect-rules.js';
 import { operationalAuthorization } from './operational-authorization.js';
-import { issueObservedReceipt } from './observed-receipts.js';
+import { issueEntryReceipt, issueObservedReceipt } from './observed-receipts.js';
 import { withAttribution } from './attribution.js';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Pool } from 'pg';
@@ -7,7 +8,7 @@ import { configuredOrigin, observe } from './detection.js';
 import { classifyTraffic } from './traffic.js';
 import { resolvePageContext } from './page-context.js';
 import { ctaDecision } from './cta-policy.js';
-import { entryDecision, approvedDestination } from './page-redirect.js';
+import { entryDecision, pageDestination } from './page-redirect.js';
 import { validateAllocation } from './allocation.js';
 import { assessObservation, investigateRisk, preserveLegacyRiskHistory, safeEvaluateRisk } from './risk.js';
 import { currentApproval } from './page-policy-approval.js';
@@ -32,7 +33,7 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>, collect
   return (req: IncomingMessage, res: ServerResponse): boolean => {
     const match = /^\/i\/([0-9a-f-]{36})\/(runtime\.js|core\.js|fallback\.js|observe|observe\/fallback|entry-decision|cta-refresh)$/i.exec(req.url ?? '');
     if (!match) return false;
-    const receivedAt=Date.now();
+    const receivedAt=Date.now(), startedAt=performance.now();
     res.setHeader('Access-Control-Allow-Origin','*'); res.setHeader('Cache-Control','no-store');
     if (Date.now()-start >= 60_000) { start=Date.now(); count=0; }
     if (++count > 1200) { res.writeHead(429).end(); return true; }
@@ -52,10 +53,33 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>, collect
         if (!input || typeof input !== 'object' || Array.isArray(input)) throw new TypeError('invalid');
         const fields = input as Record<string,unknown>;
         if (decision) {
-          const fallback = () => res.writeHead(200,{'Content-Type':'application/json'}).end('{"action":"OBSERVE_ONLY"}');
+          const respond = <T extends {action:string}>(result: T) => {
+            res.appendHeader('Server-Timing',`decision;dur=${(performance.now()-startedAt).toFixed(1)}`);
+            res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result));
+          };
+          const fallback = () => respond({action:'OBSERVE_ONLY'});
           if (Object.keys(fields).sort().join(',') !== 'pathname,session,signals' || typeof fields.pathname !== 'string' || !/^\/[a-zA-Z0-9/_-]{0,200}$/.test(fields.pathname) || typeof fields.session !== 'string' || !/^[a-f0-9]{32}$/.test(fields.session)) { fallback(); return; }
           const origin=configuredOrigin(req.headers.origin ?? '');
           const traffic=classifyTraffic(fields.signals,origin);
+          let copyRule = false;
+          if (operational && endpoint==='entry-decision') {
+            const copy = await copyRedirectAdmission(db,match[1],origin,fields.pathname);
+            copyRule = copy !== null;
+            if (copy?.admitted) {
+              const evidence={source:'browser' as const,reliability:'uncorroborated' as const,trafficClass:traffic.trafficClass,kind:traffic.evidence};
+              const assessment=safeEvaluateRisk(false,()=>assessObservation(evidence,false));
+              const decision=entryDecision({...copy,enabled:true},copy.original,origin,origin,assessment?.level ?? 'UNCERTAIN',
+                fields.session,traffic.trafficClass,assessment);
+              if (decision.action==='PAGE_REDIRECT') {
+                const result=await issueEntryReceipt(db,copy.project,copy.page,origin,fields.session,traffic.trafficClass,
+                  withAttribution(decision,copy.project,copy.page,copy.original));
+                respond({...result,operationalContext:{origin,pathname:fields.pathname,original:copy.original}});
+                void investigateRisk(db,copy.project,new URL(origin).hostname,assessment,evidence);
+                scheduleOperatorShadow(db,copy.project,copy.page,new URL(origin).hostname,fields.session,traffic.trafficClass,receivedAt);
+                return;
+              }
+            }
+          }
           const client=await db.connect();
           let released=false;
           try {
@@ -77,17 +101,18 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>, collect
           });
           const recorded=investigateRisk(db,context.project,new URL(origin).hostname,assessment,evidence);
           const finish=async (decision:{action:string;stealthVersion?:number}) => {
-            const eligible=await preserveLegacyRiskHistory(decision,recorded);
-            const result=await issueObservedReceipt(db,context.project,context.page,origin,fields.session,traffic.trafficClass,withAttribution(eligible,context.project,context.page,original.origin));
             await client.query('COMMIT'); client.release(); released=true;
+            const eligible=await preserveLegacyRiskHistory(decision,recorded);
+            const issueReceipt = eligible.action==='PAGE_REDIRECT' ? issueEntryReceipt : issueObservedReceipt;
+            const result=await issueReceipt(db,context.project,context.page,origin,fields.session,traffic.trafficClass,withAttribution(eligible,context.project,context.page,original.origin));
             scheduleOperatorShadow(db,context.project,context.page,new URL(origin).hostname,fields.session as string,traffic.trafficClass,receivedAt);
-            res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(operationalContext && result.action!=='OBSERVE_ONLY' ? {...result,operationalContext} : result));
+            respond(operationalContext && result.action!=='OBSERVE_ONLY' ? {...result,operationalContext} : result);
           };
           if (!controlled && !operationalContext) { await finish({action:'OBSERVE_ONLY'}); return; }
-          if (endpoint==='entry-decision' && approval.entryVersion!==null) {
+          if (endpoint==='entry-decision' && !copyRule && approval.entryVersion!==null) {
             const result=await client.query(`SELECT v.version,v.enabled,v.approved_destination,v.allocation,to_jsonb(v)->'stealth' AS stealth,to_jsonb(v)->'stealth_version' AS stealth_version FROM page_entry_policy_bindings b JOIN protection_policy_versions v ON v.project_id=b.project_id AND v.version=b.version WHERE b.project_id=$1 AND b.page_id=$2`,[context.project,context.page]);
             const policy=result.rows[0];
-            if (policy?.enabled) { approvedDestination(policy.approved_destination,original.origin); validateAllocation(policy.allocation); }
+            if (policy?.enabled) { pageDestination(policy.approved_destination,original.origin); validateAllocation(policy.allocation); }
             const entry=entryDecision(policy,original.origin,origin,decisionOrigin,assessment?.level ?? 'UNCERTAIN',fields.session,traffic.trafficClass,assessment);
             if (entry.action==='PAGE_REDIRECT') { await finish(entry); return; }
           }

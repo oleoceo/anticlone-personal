@@ -210,10 +210,10 @@ test('GS06 integration: persisted policy, controlled LOW and original', {timeout
     await browserPage.route('**/core.js',route=>route.abort());
     const fallbackOnly=browserPage.waitForResponse(r=>r.url().endsWith('/observe/fallback'));
     const blockedCanary=browserPage.waitForResponse(r=>r.url().endsWith('/canary/html.gif'));
-    let blockedDecisions=0; browserPage.on('request',request=>{ if (request.url().endsWith('/entry-decision')) blockedDecisions++; });
+    const withoutCore=browserPage.waitForResponse(r=>r.url().endsWith('/entry-decision'));
     await browserPage.reload();
     assert.equal((await fallbackOnly).status(),204); assert.equal((await blockedCanary).status(),200);
-    assert.equal(blockedDecisions,0);
+    assert.equal((await (await withoutCore).json()).action,'OBSERVE_ONLY');
     await browserPage.locator('a').click(); await browserPage.waitForURL(clone+'/next');
     await adversarial.close();
     for (const phase of ['entry-decision','cta-refresh']) {

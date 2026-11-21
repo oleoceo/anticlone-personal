@@ -18,7 +18,7 @@ import { smtpProvider } from './smtp-provider.js';
 import {currentSmtpProvider} from './panel-smtp.js';
 import {deliverProviderCta} from './cta-delivery.js';
 import { classifyTraffic } from './traffic.js';
-import { entryDecision, approvedDestination } from './page-redirect.js';
+import { entryDecision, pageDestination } from './page-redirect.js';
 import { validateAllocation } from './allocation.js';
 import { ctaDecision } from './cta-policy.js';
 import { safeEvaluateRisk, assessObservation, investigateRisk, preserveLegacyRiskHistory, type RiskEvidence } from './risk.js';
@@ -178,7 +178,10 @@ const handler: http.RequestListener = (req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Access-Control-Allow-Origin', '*'); res.setHeader('Cache-Control', 'no-store');
   if (req.method === 'GET' && req.url === '/healthz') {
-    void pool.query('SELECT 1').then(() => res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify({status:'ready', mode:process.env.GATEWAY_MODE==='OPERATIONAL'?'OPERATIONAL':mode.pilot ? 'PILOT_OBSERVE' : 'LAB', action:process.env.GATEWAY_MODE==='OPERATIONAL'?'SCOPED_AUTHORIZATION_REQUIRED':'OBSERVE_ONLY'}))).catch(() => res.writeHead(503).end()); return;
+    void pool.query("SELECT to_regclass('page_redirect_rules') IS NOT NULL AS redirects").then(({rows}) => {
+      if (rows[0].redirects) res.setHeader('X-AntiClone-Redirect-Contract','2');
+      res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify({status:'ready', mode:process.env.GATEWAY_MODE==='OPERATIONAL'?'OPERATIONAL':mode.pilot ? 'PILOT_OBSERVE' : 'LAB', action:process.env.GATEWAY_MODE==='OPERATIONAL'?'SCOPED_AUTHORIZATION_REQUIRED':'OBSERVE_ONLY'}));
+    }).catch(() => res.writeHead(503).end()); return;
   }
   if (req.method === 'GET' && (req.url === '/runtime.js' || req.url === '/core.js' || req.url === '/fallback.js' || req.url === '/cta-inventory.js')) {
     res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
@@ -248,7 +251,7 @@ const handler: http.RequestListener = (req, res) => {
       // Invalid enabled entry policy is an evaluation failure, not permission to continue.
       if (entryPolicy && entryPolicy.enabled) {
         if (!Number.isSafeInteger(entryPolicy.version) || entryPolicy.version < 1) throw Error('invalid entry version');
-        approvedDestination(entryPolicy.approved_destination, normalizedOrigin);
+        pageDestination(entryPolicy.approved_destination, normalizedOrigin);
         validateAllocation(entryPolicy.allocation);
       }
       const entry = entryDecision(entryPolicy, normalizedOrigin, origin, controlledOrigin, decisionRisk, session, trafficClass, assessment);
