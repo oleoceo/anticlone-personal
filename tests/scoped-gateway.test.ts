@@ -122,10 +122,25 @@ for (const distributionMode of [false,true]) test('scoped browser observations i
     for (const [path,label] of [['/entry-one','one'],['/entry-two','two']]) {
       const controlled:Page=await browser.newPage();
       await controlled.clock.install({time:0}); await controlled.clock.pauseAt(1000);
-      await controlled.route('**/entry-decision',async route=>{const result=await route.fetch();const payload=await result.json() as {observationReceipt?:string};assert.ok(payload.observationReceipt,'eligible scoped decision carries an observation receipt');await route.fulfill({response:result});},{times:1});
+      let entryPayload: {action?:string;observationReceipt?:string} | undefined;
+      await controlled.route('**/entry-decision',async route=>{
+        // A real decision can beat the gateway's short, best-effort receipt write.
+        // This scenario needs one receipt to exercise browser evidence persistence.
+        let result=await route.fetch();
+        for(let retry=0;result.ok();retry++){
+          entryPayload=await result.json() as NonNullable<typeof entryPayload>;
+          if(entryPayload.action!=='PAGE_REDIRECT' || entryPayload.observationReceipt || retry===3) break;
+          await result.dispose();
+          result=await route.fetch();
+        }
+        await route.fulfill({response:result});
+      },{times:1});
       let response:Promise<Response>=controlled.waitForResponse(r=>r.url().endsWith('/entry-decision'));
       await controlled.goto(`http://localhost:${address.port}${path}?utm_source=ads&utm_campaign=${label}&token=private`);
-      assert.equal((await response).status(),200);
+      const entryResponse=await response;
+      assert.equal(entryResponse.status(),200);
+      assert.equal(entryPayload?.action,'PAGE_REDIRECT');
+      assert.ok(entryPayload.observationReceipt,'eligible scoped decision carries an observation receipt');
       await controlled.waitForURL(shared+'&utm_campaign='+label);
       const observedPage=label==='one'?pageOne:pageTwo;let persisted=false;
       for(let i=0;i<100;i++){const facts=await db.query("SELECT count(*)::int n FROM observed_action_facts WHERE page_id=$1 AND action='PAGE_REDIRECT_ATTEMPT'",[observedPage]);if(facts.rows[0].n===1){persisted=true;break;}await new Promise(r=>setTimeout(r,50));}

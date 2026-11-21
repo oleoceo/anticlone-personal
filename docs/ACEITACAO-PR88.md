@@ -27,6 +27,8 @@ No Chromium com a fixture sanitizada, o bootstrap iniciou a navegação em 85–
 
 A revisão independente inicial (`/root/pr88_review`, delta sobre `acb7664`) identificou uma corrida entre o registro da decisão e o relato do navegador, motivos legados genéricos e o rótulo da duração. O teste de integração do admin cobre a chegada do relato antes da decisão e a preservação de `PAGE_LEFT`. Na segunda revisão, a mesma sessão conferiu as correções e a origem da fixture. A correlação é de melhor esforço com visitas concorrentes, pois o painel guarda os últimos registros por contexto.
 
+A suíte local anterior ao ajuste final executou 152 testes, com 143 aprovados, dois com falha e sete reservados à CI em Docker. A tela de alertas passou no reteste em desktop e mobile. A revisão independente do último delta (`/root/receipt_review`) conferiu a correção do teste de recibo opcional, que verifica a mesma decisão e persistência sem mudar os prazos do gateway. O teste direto de pins mTLS passou. A CI no GitHub para o candidato continua bloqueada pela falta de autenticação de escrita na branch do PR 88.
+
 O teste requer `TEST_DATABASE_URL` do PostgreSQL isolado. `REDIRECT_BOOTSTRAP` mede do início do Bootstrap até a chamada de navegação. `REDIRECT_BROWSER` registra também a chegada ao destino. `REDIRECT_SMTP` mostra o aceite do transporte e as tentativas por incidente.
 
 ## Janela de homologação após autorização do proprietário

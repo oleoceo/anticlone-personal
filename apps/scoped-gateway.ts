@@ -60,7 +60,7 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>, collect
           const respond = <T extends {action:string}>(result: T) => {
             res.appendHeader('Server-Timing',`decision;dur=${(performance.now()-startedAt).toFixed(1)}`);
             res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result));
-            if(diagnostic && endpoint==='entry-decision')void recordCopyDecision(db,diagnostic,{receivedAt,visit,action:result.action,reason,version});
+            if(diagnostic?.origin.startsWith('https://') && endpoint==='entry-decision')void recordCopyDecision(db,diagnostic,{receivedAt,visit,action:result.action,reason,version});
           };
           const fallback = () => respond({action:'OBSERVE_ONLY'});
           if (Object.keys(fields).sort().join(',')!=='pathname,session,signals' || typeof fields.pathname!=='string' ||

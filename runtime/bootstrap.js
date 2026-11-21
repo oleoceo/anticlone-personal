@@ -219,7 +219,7 @@
         addEventListener('pagehide', event => { if (!event.persisted) { clearInterval(timer); suspendCtas(); } });
         document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(true); });
         const entryWall = Date.now(), entryMono = performance.now(), entrySequence = sequence;
-        if (scoped) visit=Array.from(crypto.getRandomValues(new Uint8Array(16)),x=>x.toString(16).padStart(2,'0')).join('');
+        if (scoped && location.protocol==='https:') visit=Array.from(crypto.getRandomValues(new Uint8Array(16)),x=>x.toString(16).padStart(2,'0')).join('');
         fetch(endpoint('entry-decision'), { method:'POST', headers:{'Content-Type':visit ? 'text/plain;ac-visit='+visit : 'text/plain'}, body:JSON.stringify({session,signals,pathname:initialPath}), cache: 'no-store', credentials:'omit', priority:'high' })
           .then(response => { if (!response.ok) throw new Error('decision unavailable'); return response.json(); })
           .then(decision => {
