@@ -1,9 +1,17 @@
 import { assertProjectAdministrativeWrite, DeletedProjectConflict } from './admin-project-write.js';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import { validateDraft, activatePolicy } from './protection-policy.js';
 import { publishCtaPolicy } from './cta-policy.js';
 import { approveDestination, mapPoint, reviewPoint } from './cta-inventory.js';
 import { externalDestinations, configurationOrigin } from './page-redirect.js';
+
+// Caller holds the project write lock to allocate the next version.
+export async function insertPagePolicyVersion(client: PoolClient, project: string, origin: string, body: unknown) {
+  const draft = validateDraft(body, origin);
+  const inserted = await client.query(`INSERT INTO protection_policy_versions(project_id,version,enabled,approved_destination,stealth,allocation${draft.stealth_version === 2 ? ",stealth_version" : ""})
+    SELECT $1,COALESCE(MAX(version),0)+1,$2,$3,$4,$5${draft.stealth_version === 2 ? ",2" : ""} FROM protection_policy_versions WHERE project_id=$1 RETURNING version`, [project,draft.enabled,draft.approved_destination,draft.stealth,JSON.stringify(draft.allocation)]);
+  return inserted.rows[0].version as number;
+}
 
 // Publish the exact form snapshot, not a draft another admin tab may have replaced.
 export async function publishPagePolicy(db: Pool, project: string, body: unknown) {
@@ -13,10 +21,7 @@ export async function publishPagePolicy(db: Pool, project: string, body: unknown
     await assertProjectAdministrativeWrite(client,project);
     const row = await client.query('SELECT origin FROM projects WHERE id=$1 FOR UPDATE', [project]);
     if (!row.rowCount) throw new TypeError('invalid project');
-    const draft = validateDraft(body, row.rows[0].origin);
-    const inserted = await client.query(`INSERT INTO protection_policy_versions(project_id,version,enabled,approved_destination,stealth,allocation${draft.stealth_version === 2 ? ",stealth_version" : ""})
-      SELECT $1,COALESCE(MAX(version),0)+1,$2,$3,$4,$5${draft.stealth_version === 2 ? ",2" : ""} FROM protection_policy_versions WHERE project_id=$1 RETURNING version`, [project,draft.enabled,draft.approved_destination,draft.stealth,JSON.stringify(draft.allocation)]);
-    const version = inserted.rows[0].version as number;
+    const version = await insertPagePolicyVersion(client, project, row.rows[0].origin, body);
     await client.query('INSERT INTO active_protection_policies VALUES($1,$2) ON CONFLICT(project_id) DO UPDATE SET version=EXCLUDED.version', [project,version]);
     await client.query('COMMIT');
     return {version};

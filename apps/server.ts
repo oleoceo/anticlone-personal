@@ -41,7 +41,8 @@ if (process.env.GATEWAY_BACKGROUND_MAINTENANCE !== undefined &&
     (!maintenanceOff || !npmTransport || process.env.GATEWAY_MODE !== 'OPERATIONAL' || !process.env.NPM_LISTEN_ADDRESS)) {
   throw Error('invalid gateway maintenance configuration');
 }
-const configuredSmtp = smtpProvider(process.env);
+const notificationsOff = process.env.GATEWAY_NOTIFICATION_DELIVERY === 'off';
+const configuredSmtp = notificationsOff ? undefined : smtpProvider(process.env);
 let ctaDeliveryAfter=0;
 if (!connectionString || (project !== undefined && !/^[a-zA-Z0-9_-]{1,64}$/.test(project)) || !Number.isInteger(smtpPort) || smtpPort < 1 || smtpPort > 65535 || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('invalid local test configuration');
 const activeProject: string = project ?? '';
@@ -325,8 +326,8 @@ async function maintenance() {
   busy = true;
   try {
     const active=await operationallyEligible(pool,activeProject);
-    const cloneSmtp = active ? await currentSmtpProvider(pool, configuredSmtp) : undefined;
-    const delivery = cloneSmtp ?? (process.env.SMTP_PANEL_KEY ? undefined : smtpPort);
+    const cloneSmtp = active && !notificationsOff ? await currentSmtpProvider(pool, configuredSmtp) : undefined;
+    const delivery = cloneSmtp ?? (notificationsOff || process.env.SMTP_PANEL_KEY ? undefined : smtpPort);
     const temporalOrigin = !mode.pilot && optional.canaryDegradation.state !== 'NOT_INSTALLED' ? controlledOrigin ?? await scopedCorrelationOrigin(pool,activeProject,process.env) : undefined;
     await degradationTask('maintenance', () => maintainDegradation(pool, activeProject, temporalOrigin, optional.canaryDegradation.state !== 'NOT_INSTALLED'));
     try {

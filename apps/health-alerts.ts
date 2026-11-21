@@ -4,7 +4,7 @@ import { sendLocalMail } from './alerts.js';
 import { budgetMayBeAvailable, lockBudget, recordBudget } from './notification-budget.js';
 import { notificationAdmission, notificationRetention,reviewedRelease } from './notification-lifecycle.js';
 import { operationallyEligible } from './operational-eligibility.js';
-import {providerAuthorized,sendProviderNotice,type SmtpProvider} from './smtp-provider.js';
+import {providerAdmission,sendProviderNotice,type SmtpProvider} from './smtp-provider.js';
 
 export async function healthSettings(db: Pool, project: string) {
   return (await db.query(`SELECT s.enabled,s.operational_enabled,s.inactivity_seconds,l.last_observed_at
@@ -185,7 +185,8 @@ export async function deliverHealth(db: Pool, project: string, port: number|Smtp
     if (cutoff===false) return;
     const released=await reviewedRelease(client,'HEALTH','$2');
     const history=(await client.query("SELECT to_regclass('health_delivery_attempts') IS NOT NULL AS installed")).rows[0].installed;
-    if(typeof port!=='number'&&(!history||!await providerAuthorized(client,port)))return;
+    const deliveryAfter = typeof port === 'number' ? null : history && await providerAdmission(client,port);
+    if (deliveryAfter === false) return;
     const locked = (await client.query('SELECT pg_try_advisory_xact_lock(hashtext($1), 45) AS locked', [project])).rows[0].locked;
     if (!locked || !budgetMayBeAvailable(db)) return;
     let item: {episode_id:string;kind:string;source:string;attempts:number} | undefined;
@@ -195,11 +196,12 @@ export async function deliverHealth(db: Pool, project: string, port: number|Smtp
           JOIN installation_health_settings s ON s.project_id=e.project_id
           JOIN installations i ON i.project_id=e.project_id JOIN projects p ON p.id=i.project_id
           WHERE ($2::timestamptz IS NULL OR e.opened_at>$2 OR ${released}) AND ((e.kind='INACTIVE' AND s.enabled AND i.enabled AND i.origin=p.origin) OR (e.kind='OPERATIONAL' AND s.operational_enabled)) AND e.project_id=$1 AND e.recovered_at IS NULL AND e.invalidated_at IS NULL AND (e.kind='OPERATIONAL' OR NOT EXISTS (SELECT 1 FROM installation_last_signal l WHERE l.project_id=e.project_id AND l.last_observed_at>e.opened_at)) AND d.sent_at IS NULL AND d.expired_at IS NULL
+          AND ($3::timestamptz IS NULL OR e.opened_at>$3)
           AND d.attempts<3 AND d.next_attempt<=clock_timestamp() AND e.opened_at>clock_timestamp()-interval '24 hours'
           ${history?"AND NOT EXISTS(SELECT 1 FROM health_delivery_attempts h WHERE h.episode_id=d.episode_id AND h.finished_at IS NULL)":''}
           ${history&&typeof port!=='number'?"AND (d.attempts=0 OR EXISTS(SELECT 1 FROM health_delivery_attempts h WHERE h.episode_id=d.episode_id AND h.attempt=d.attempts AND h.transport='SMTP_PROVIDER' AND h.finished_at IS NOT NULL))":''}
           ${onlyOperational?"AND e.kind='OPERATIONAL'":''}
-          ORDER BY d.episode_id LIMIT 1 FOR UPDATE OF d SKIP LOCKED`, [project,cutoff]);
+          ORDER BY d.episode_id LIMIT 1 FOR UPDATE OF d SKIP LOCKED`, [project,cutoff,deliveryAfter]);
         item = result.rows[0];
         if (item) {
           await client.query("UPDATE health_delivery SET attempts=attempts+1,next_attempt=clock_timestamp()+make_interval(secs=>60 * (1 << attempts)) WHERE episode_id=$1", [item.episode_id]);

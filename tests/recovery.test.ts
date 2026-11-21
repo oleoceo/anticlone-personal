@@ -111,7 +111,7 @@ test('GS16: real backup, isolated restore, complete data integrity and restarted
       assert.equal((await restored.query('SELECT count(*)::int n FROM projects')).rows[0].n,2);
       assert.equal((await restored.query('SELECT installation_id FROM protected_pages WHERE id=$1',[protectedPage.page])).rows[0].installation_id,protectedPage.installation);
       const approvalClient=await restored.connect();
-      try { assert.deepEqual(await currentApproval(approvalClient,'recovery',protectedPage.page),{entryVersion:1}); } finally { approvalClient.release(); }
+      try { assert.equal((await currentApproval(approvalClient,'recovery',protectedPage.page))?.entryVersion,1); } finally { approvalClient.release(); }
       assert.deepEqual((await restored.query('SELECT project_id,page_id,source FROM page_installation_signals')).rows,[{project_id:'recovery',page_id:protectedPage.page,source:'core'}]);
       assert.equal((await restored.query('SELECT status FROM incidents')).rows[0].status,'investigating');
       assert.equal((await restored.query('SELECT attempts FROM alert_outbox')).rows[0].attempts,1);

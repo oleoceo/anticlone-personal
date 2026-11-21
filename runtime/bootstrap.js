@@ -33,7 +33,7 @@
       }
     };
     let redirectPending = true, redirectInteracted = false, abandoned = false, suspended = false;
-    let suspendCtas = () => {}, resumeCtas = () => {}, startCore = () => {}, coreLoaded = false, coreStarted = false;
+    let suspendCtas = () => {}, resumeCtas = () => {};
     let initialPath = location.pathname, initialSearch = location.search;
     const validContext = () => !abandoned && !suspended && location.pathname === initialPath && location.search === initialSearch;
     const abandon = () => { abandoned = true; cancelRedirect(); };
@@ -50,7 +50,7 @@
       } catch (_) { /* Missing or invalid explicit scope remains visible. */ }
     }
     addEventListener('pagehide', event => { cancelRedirect(); if (event.persisted) { suspended = true; suspendCtas(); } else abandon(); });
-    addEventListener('pageshow', event => { if (event.persisted && suspended && !abandoned) { suspended = false; if (validContext()) { if (coreStarted) resumeCtas(); else if (coreLoaded) startCore(); } else abandon(); } });
+    addEventListener('pageshow', event => { if (event.persisted && suspended && !abandoned) { suspended = false; if (validContext()) resumeCtas(); else abandon(); } });
     addEventListener('beforeunload', cancelRedirect);
     addEventListener('pointerdown', cancelRedirect, {once:true, capture:true});
     addEventListener('keydown', cancelRedirect, {once:true, capture:true});
@@ -58,7 +58,7 @@
     const routeChanged = () => {
       if (location.pathname === initialPath && location.search === initialSearch) return;
       cancelRedirect(); suspendCtas(); initialPath = location.pathname; initialSearch = location.search;
-      if (!abandoned && !suspended) { if (coreStarted) resumeCtas(); else if (coreLoaded) startCore(); }
+      if (!abandoned && !suspended) resumeCtas();
     };
     addEventListener('popstate', routeChanged);
     for (const method of ['pushState', 'replaceState']) {
@@ -154,10 +154,8 @@
     const core = document.createElement('script');
     core.src = new URL(distribution?.paths?.['core.js'] ?? 'core.js', distribution ? distribution.bases.SCRIPT : source).href;
     core.async = true;
-    startCore = () => {
-      if (!validContext()) return;
-      if (coreStarted) return;
-      coreStarted = true;
+    // The deadline starts in the bootstrap. Core only collects observations.
+    const startDecision = () => {
       try {
         let session = sessionStorage.getItem('anticlone.lab.session');
         if (!session) { const bytes = crypto.getRandomValues(new Uint8Array(16)); session = Array.from(bytes, x => x.toString(16).padStart(2, '0')).join(''); sessionStorage.setItem('anticlone.lab.session', session); }
@@ -174,7 +172,6 @@
         const stored = sessionStorage.getItem('anticlone.lab.attribution');
         if (stored === null) sessionStorage.setItem('anticlone.lab.attribution', JSON.stringify(signals));
         else { const initial = JSON.parse(stored); if (!initial || typeof initial !== 'object' || Array.isArray(initial)) return; Object.keys(signals).forEach(key => delete signals[key]); Object.assign(signals, initial); }
-        if (distribution || /\/i\/[a-f0-9-]{36}\/runtime\.js$/.test(new URL(source).pathname)) { try { navigator.sendBeacon(endpoint('observed-session'), new Blob([JSON.stringify({session,signals})],{type:'text/plain'})); } catch (_) { /* Passive metrics never block navigation. */ } }
         let inFlight = false, sequence = 0, lastAttempt = Date.now(), backoff = refreshIntervalMs, failed = false, controller, returnTimer;
         const expired = () => !activeCtas || Date.now() < activeCtas.startedWall || Date.now() - activeCtas.startedWall >= ctaTtlMs || performance.now() - activeCtas.startedMono >= ctaTtlMs;
         const refresh = (onReturn = false, afterEntry = false) => {
@@ -220,10 +217,10 @@
             reportAction(decision.observationReceipt, null, null);
             location.replace(attributed(target.href, decision.attribution));
           }).catch(cancelRedirect);
+        if (distribution || /\/i\/[a-f0-9-]{36}\/runtime\.js$/.test(new URL(source).pathname)) { try { navigator.sendBeacon(endpoint('observed-session'), new Blob([JSON.stringify({session,signals})],{type:'text/plain'})); } catch (_) { /* Passive metrics never block navigation. */ } }
       } catch (_) { cancelRedirect(); }
     };
-    core.onload = () => { coreLoaded = true; startCore(); };
-    core.onerror = cancelRedirect;
+    startDecision();
     document.head.appendChild(core);
   } catch (_) { /* Leave the page operational. */ }
 })();

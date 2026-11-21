@@ -1,3 +1,4 @@
+import {PageRedirectControls, type RedirectStatus} from './page-redirect-controls';
 import {useState} from 'react';
 import {AdminApi, type Page, type Project} from './admin-api';
 import {CtaWorkspace} from './cta-workspace';
@@ -25,18 +26,29 @@ export function ProtectionScreen({api, project, page, incident, action, setGuard
   const authorization = useQuery(page.id, signal => api.request<Operational>('operational', {
     project: project.id, page: page.id, action: 'inspect',
   }, signal));
+  const redirect = useQuery(pageAction ? page.id : '', signal => api.request<RedirectStatus>('page-redirect', {
+    project:project.id, page:page.id, action:'inspect',
+  }, signal));
   const operation = useOperation(setGuard);
   const controls = {...operation, busy: operation.busy || data.pr.pending || data.lp.pending || authorization.pending ||
     data.pr.error !== undefined || data.lp.error !== undefined || authorization.error !== undefined};
-  function refresh() { data.refresh(); authorization.revalidate(); }
+  function refresh() { data.refresh(); authorization.revalidate(); if (pageAction) redirect.revalidate(); }
 
   return <>
     <Heading title={pageAction ? 'Redirecionar página' : 'Substituir checkout/CTA'} description={[project.name, page.name, incident?.host].filter(Boolean).join(' · ')}
       actions={<button type="button" disabled={operation.busy} onClick={refresh}>Atualizar situação</button>}/>
+    {operation.notice()}
+    {pageAction && redirect.error === undefined && !redirect.data && <Loading/>}
+    {pageAction && redirect.error !== undefined && <Failure error={redirect.error} retry={redirect.revalidate}/>}
+    {pageAction && redirect.error === undefined && redirect.data?.gateway==='UNCONFIGURED' &&
+      <p className="notice">A ativação em um gateway público requer ADMIN_OPERATIONAL_GATEWAY_ORIGIN no admin privado.</p>}
+    {pageAction && redirect.error === undefined && redirect.data && redirect.data.gateway!=='UNCONFIGURED' && <PageRedirectControls api={api} page={page} state={redirect.data} incidentHost={incident?.host}
+      destinations={data.pr.data?.externalDestinations ?? []} operation={{...operation,busy:operation.busy || redirect.pending}}
+      refresh={refresh}/>}
+    {(!pageAction || (redirect.error === undefined && redirect.data?.gateway==='UNCONFIGURED')) && <>
     <ol className="steps protection-steps" aria-label="Etapas de proteção">
       <li><span>1</span>Publicar política</li><li><span>2</span>Aprovar na LP</li><li><span>3</span>Autorizar contexto</li>
     </ol>
-    {operation.notice()}
     {data.pr.error !== undefined && <Failure error={data.pr.error} retry={data.pr.revalidate}/>}
     {data.lp.error !== undefined && <Failure error={data.lp.error} retry={data.lp.revalidate}/>}
     {data.pr.data && data.lp.data ? <>
@@ -54,6 +66,7 @@ export function ProtectionScreen({api, project, page, incident, action, setGuard
         authorization.data ? <Authorization api={api} project={project.id} page={page} incident={incident}
           state={authorization.data} pageState={data.lp.data} operation={controls} refresh={refresh}/> : <Loading/>}
     </> : data.pr.error === undefined && data.lp.error === undefined && <Loading/>}
+    </>}
   </>;
 }
 

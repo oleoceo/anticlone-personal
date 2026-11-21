@@ -31,6 +31,20 @@ export async function approvalConfiguration(client: PoolClient, project: string,
   return {urls:urls.rows,entry:entries.rows.map(row=>{const copy={...row};if(copy.stealth_version==null)delete copy.stealth_version;return copy;}),ctas:policies.rows.map(row=>({... (row.stealth_version==null ? {} : {stealth:row.stealth,stealth_version:row.stealth_version}),version:row.version,enabled:row.enabled,surface:row.surface,pathname:row.pathname,allocation:row.allocation})),points:runtime ? points.rows.map(row=>({...row,review_required:false,suspension:null})) : points.rows};
 }
 
+export async function savePageApproval(client: PoolClient, project: string, page: string,
+  entry: number | null, configuration: Awaited<ReturnType<typeof approvalConfiguration>>) {
+  const result=await client.query(`INSERT INTO page_policy_approvals(project_id,page_id,url_generation,config_generation,configuration)
+    SELECT project_id,id,url_generation,config_generation,$3 FROM protected_pages WHERE project_id=$1 AND id=$2
+    RETURNING id,url_generation,config_generation`,[project,page,JSON.stringify(configuration)]);
+  const approval=result.rows[0] as {id:string;url_generation:string;config_generation:string};
+  if (entry!==null) await client.query('INSERT INTO page_policy_approval_entries(approval_id,project_id,version) VALUES($1,$2,$3)',[approval.id,project,entry]);
+  for (const policy of configuration.ctas) {
+    await client.query('INSERT INTO page_policy_approval_ctas(approval_id,project_id,surface,version) VALUES($1,$2,$3,$4)',[approval.id,project,policy.surface,policy.version]);
+  }
+  await client.query('UPDATE protected_pages SET url_review_required=false WHERE id=$1 AND project_id=$2',[page,project]);
+  return approval;
+}
+
 export async function currentApproval(client: PoolClient, project: string, page: string) {
   const result=await client.query(`SELECT a.id,a.configuration FROM page_policy_approvals a JOIN protected_pages p ON p.id=a.page_id AND p.project_id=a.project_id AND p.url_generation=a.url_generation AND p.config_generation=a.config_generation WHERE a.project_id=$1 AND a.page_id=$2 AND p.enabled AND NOT p.url_review_required ORDER BY a.id DESC LIMIT 1`,[project,page]);
   if (!result.rowCount) return null;
@@ -44,6 +58,6 @@ export async function currentApproval(client: PoolClient, project: string, page:
   try {
     const configuration=await approvalConfiguration(client,project,page,entryVersion,ctas.rows.map(row=>row.version),true);
     const equal=await client.query('SELECT $1::jsonb = $2::jsonb AS equal',[JSON.stringify(approval.configuration),JSON.stringify(configuration)]);
-    return equal.rows[0].equal ? {entryVersion} : null;
+    return equal.rows[0].equal ? {id:approval.id as string, entryVersion} : null;
   } catch { return null; }
 }

@@ -18,7 +18,8 @@ import {deliverProviderCta} from './cta-delivery.js';
 export function projectMaintenance(db: Pool, env: NodeJS.ProcessEnv, exclude?: string) {
   const states=new Map<string,Promise<Awaited<ReturnType<typeof createState>>>>();
   const hosts=authorizedHosts(env), resolver=hosts.length ? realResolver(env.INFRASTRUCTURE_DNS_SERVER!) : undefined;
-  const configuredSmtp=smtpProvider(env);
+  const notificationsOff=env.GATEWAY_NOTIFICATION_DELIVERY==='off';
+  const configuredSmtp=notificationsOff ? undefined : smtpProvider(env);
   let busy=false;
   const pageRetention=new Map<string,number>();
   async function createState() {
@@ -37,8 +38,8 @@ export function projectMaintenance(db: Pool, env: NodeJS.ProcessEnv, exclude?: s
     if (busy) return;
     busy=true;
     try {
-      const smtp=await currentSmtpProvider(db, configuredSmtp, env);
-      const delivery=smtp ?? (env.SMTP_PANEL_KEY ? undefined : Number(env.SMTP_PORT));
+      const smtp=notificationsOff ? undefined : await currentSmtpProvider(db, configuredSmtp, env);
+      const delivery=smtp ?? (notificationsOff || env.SMTP_PANEL_KEY ? undefined : Number(env.SMTP_PORT));
       let after='';
       for (;;) {
         const projects=await db.query('SELECT id FROM projects WHERE id>$1 ORDER BY id LIMIT 25',[after]);

@@ -3,7 +3,7 @@ import { deletePage } from './page-deletion.js';
 import { isLifecycleAction, projectLifecycle } from './project-lifecycle.js';
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
-import { approvalConfiguration } from './page-policy-approval.js';
+import { approvalConfiguration, savePageApproval } from './page-policy-approval.js';
 
 export class PageConflict extends Error {}
 
@@ -75,14 +75,8 @@ export async function managePages(db: Pool, body: unknown) {
       for (const policy of configuration.ctas) {
         await client.query('INSERT INTO page_cta_policy_bindings(project_id,page_id,surface,version) VALUES($1,$2,$3,$4)',[project,data.page,policy.surface,policy.version]);
       }
-      const approval=await client.query('INSERT INTO page_policy_approvals(project_id,page_id,url_generation,config_generation,configuration) SELECT project_id,id,url_generation,config_generation,$3 FROM protected_pages WHERE id=$1 AND project_id=$2 RETURNING id',[data.page,project,JSON.stringify(configuration)]);
-      const id=approval.rows[0].id;
-      if (data.entryVersion!==null) await client.query('INSERT INTO page_policy_approval_entries(approval_id,project_id,version) VALUES($1,$2,$3)',[id,project,data.entryVersion]);
-      for (const policy of configuration.ctas) {
-        await client.query('INSERT INTO page_policy_approval_ctas(approval_id,project_id,surface,version) VALUES($1,$2,$3,$4)',[id,project,policy.surface,policy.version]);
-      }
-      await client.query('UPDATE protected_pages SET url_review_required=false WHERE id=$1 AND project_id=$2',[data.page,project]);
-      await client.query('COMMIT'); return {page:data.page,generation:data.generation,approval:id,reviewRequired:false};
+      const approval=await savePageApproval(client,project,data.page,data.entryVersion as number|null,configuration);
+      await client.query('COMMIT'); return {page:data.page,generation:data.generation,approval:approval.id,reviewRequired:false};
     } catch(error) { await client.query('ROLLBACK'); if (['23505','40001','40P01'].includes((error as {code?:string}).code ?? '')) throw new PageConflict(); throw error; } finally { client.release(); }
   }
   if (action==='inspect' && Object.keys(data).sort().join(',')==='action,page,project' && typeof data.page==='string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(data.page)) {

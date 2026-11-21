@@ -11,7 +11,10 @@ test('Chromium: bounded decision leaves navigation usable and ignores late respo
   const server = createServer((req,res) => {
     res.setHeader('Access-Control-Allow-Origin','*');
     if (req.url === '/runtime.js') { res.writeHead(200, {'content-type':'application/javascript'}).end(bootstrap); return; }
-    if (req.url === '/core.js') { res.writeHead(200, {'content-type':'application/javascript'}).end(''); return; }
+    if (req.url === '/core.js') {
+      setTimeout(() => res.writeHead(200, {'content-type':'application/javascript'}).end(''), 500);
+      return;
+    }
     if (req.url === '/entry-decision') {
       if (mode === 'error') { res.writeHead(503).end(); return; }
       const send = () => res.writeHead(200, {'content-type':'application/json'}).end(JSON.stringify({action: mode === 'observe' ? 'OBSERVE_ONLY' : 'PAGE_REDIRECT',version:1,destination}));

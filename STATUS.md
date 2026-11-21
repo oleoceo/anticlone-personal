@@ -1,5 +1,12 @@
 # STATUS — AntiClone Personal
 
+## Redirecionamento e alertas na homologação Dev
+- Público OPERATIONAL via mTLS e privado PILOT_OBSERVE. A LP oficial permaneceu em sua URL no Chromium.
+- Política v2 autoriza só a cópia HTTPS em `/`, com direto/desconhecido em 100%. A cópia recebe HTTP 200/PAGE_REDIRECT em 275–337 ms e mantém fail-open.
+- Worker Dev ativo e restrito ao projeto da LP. Brevo aceitou o teste nº 6. Preferência v6 só para eventos novos, sem tentativas nos itens anteriores.
+- Admin Dev com ativação versionada e sondas. Homologação externa bloqueada pelo acesso de deploy para publicar `/js/a.js` no Vercel e repetir a navegação real.
+- [Evidências e configuração](docs/HOMOLOGACAO-REDIRECT-SMTP-DEV.md).
+
 ## Sincronização do Dev com o GitHub
 - O [PR #84](https://github.com/oleoceo/anticlone-personal/pull/84) integra a conciliação `71f9993` e o histórico do SHA implantado `04ea124846be851a2e8396754f765a1fe318d1e2`.
 - A primeira CI passou em 148 de 149 testes. O ajuste de recuperação cobre as migrações 059–068 e conserva a prova de rollback com a fixture 069.

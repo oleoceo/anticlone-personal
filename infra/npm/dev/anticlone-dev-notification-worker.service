@@ -1,0 +1,20 @@
+[Unit]
+Description=AntiClone Dev private notification worker
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/apps/apps/personal/anticlone-dev/dev-notification-release
+EnvironmentFile=/opt/apps/apps/personal/anticlone-dev/private/recovery-gateway.env
+EnvironmentFile=/opt/apps/apps/personal/anticlone-dev/private/smtp-panel.env
+Environment=NOTIFICATION_WORKER_MODE=PROVIDER
+Environment=NOTIFICATION_WORKER_OWNS_INACTIVITY=1
+Environment=NOTIFICATION_WORKER_STATUS_PATH=/opt/apps/apps/personal/anticlone-dev/private/notification-worker.json
+ExecStart=/opt/apps/apps/personal/anticlone-dev/bin/node dist/apps/cta-delivery-worker.js
+UMask=0077
+NoNewPrivileges=yes
+Restart=on-failure
+RestartSec=3s
+
+[Install]
+WantedBy=default.target
