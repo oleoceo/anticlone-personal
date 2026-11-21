@@ -10,6 +10,9 @@ export class AdminError extends Error {
 }
 
 const redirectMessages: Record<string,string> = {
+  COPY_CONTEXT_REQUIRED: 'O AntiClone ainda precisa observar a origem e o caminho desta cópia para esta LP.',
+  COPY_REVIEW_BUSY: 'Há revisões pendentes. Aguarde a expiração antes de abrir outra revisão.',
+  COPY_REVIEW_EXPIRED: 'Abra a revisão da cópia novamente antes de confirmar.',
   PROJECT_DESTINATION_ON_COPY: 'Uma cópia que usa o destino padrão está na origem informada. Escolha outra URL ou altere o destino dessa cópia.',
   REDIRECT_RUNTIME_REQUIRED: 'Publique a instalação desta LP com a origem de telemetria do gateway operacional.',
   REDIRECT_GATEWAY_UNAVAILABLE: 'O gateway de redirecionamento está indisponível. Atualize a situação antes de ativar.',

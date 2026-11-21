@@ -138,7 +138,7 @@ function IncidentDetail({incident, project, api, pid, actionUrl, search, refresh
     {operation.notice()}
     <section className="panel">
       <h2>Ações de proteção</h2>
-      <p>Selecione a LP e revise as etapas de publicação, aprovação e autorização para o contexto observado.</p>
+      <p>Selecione a LP para abrir a regra de redirecionamento da cópia identificada ou revisar os CTAs.</p>
       <div className="action-links">
         <Link className="button primary" {...nav.link(actionUrl + '/redirecionar', search)}>Redirecionar página</Link>
         <Link className="button" {...nav.link(actionUrl + '/substituir-cta', search)}>Substituir checkout/CTA</Link>

@@ -224,6 +224,37 @@ export async function mapPoint(db: Pool, project: string, body: unknown) {
   } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
 }
 
+// Replace one approved destination for the same offer. The page approval is
+// invalidated by the mapping trigger and must be reviewed before it can run.
+export async function remapPoint(db: Pool, project: string, body: unknown) {
+  const row=fields(body,'captureId,destinationId,observationId,pointId,previousDestinationId');
+  const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
+  for (const key of ['captureId','destinationId','pointId','previousDestinationId']) {
+    if (typeof row[key]!=='string' || !uuid.test(row[key] as string)) throw new TypeError('invalid mapping context');
+  }
+  if (row.destinationId===row.previousDestinationId || typeof row.observationId!=='string' ||
+      !/^[1-9][0-9]{0,18}$/.test(row.observationId) || BigInt(row.observationId)>9223372036854775807n) throw new TypeError('invalid mapping observation');
+  const client=await db.connect();
+  try {
+    await client.query('BEGIN');
+    await assertProjectAdministrativeWrite(client,project);
+    const candidate=await client.query(`SELECT d.url,pj.origin FROM cta_mappings m
+      JOIN projects pj ON pj.id=m.project_id
+      JOIN cta_points p ON p.project_id=m.project_id AND p.id=m.point_id AND p.offer=m.offer
+      JOIN cta_destinations d ON d.project_id=m.project_id AND d.offer=m.offer AND d.id=$6
+      JOIN cta_captures c ON c.project_id=p.project_id AND c.surface=p.surface AND c.id=$3 AND c.is_current
+      JOIN cta_observations o ON o.project_id=p.project_id AND o.point_id=p.id AND o.capture_id=c.id AND o.id=$4::bigint
+      WHERE m.project_id=$1 AND m.point_id=$2 AND m.destination_id=$5 AND p.kind='a' AND p.marker IS NOT NULL
+      AND NOT p.review_required AND o.confidence='HIGH' AND o.selection_allowed AND o.observed_at>=clock_timestamp()-interval '7 days'
+      AND NOT EXISTS (SELECT 1 FROM cta_commercial_references r WHERE r.project_id=p.project_id AND r.point_id=p.id)`,
+    [project,row.pointId,row.captureId,row.observationId,row.previousDestinationId,row.destinationId]);
+    if (candidate.rowCount!==1) throw new SelectionConflict();
+    approvedDestination(candidate.rows[0].url,candidate.rows[0].origin);
+    await client.query('UPDATE cta_mappings SET destination_id=$3 WHERE project_id=$1 AND point_id=$2',[project,row.pointId,row.destinationId]);
+    await client.query('COMMIT');
+  } catch(error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+}
+
 // Confirm the exact latest retained observation and existing approved mapping.
 export async function reviewPoint(db: Pool, project: string, body: unknown) {
   const row = fields(body,'destinationId,observationId,pointId');

@@ -3,6 +3,7 @@ import { assertPageAdministrativeWrite, assertProjectAdministrativeWrite } from 
 import { validateAllocation, type Allocation } from './allocation.js';
 import { validateOperationalCopy } from './operational-copy-context.js';
 import { pageDestination } from './page-redirect.js';
+import { listCopyContexts } from './page-copy-contexts.js';
 import { PageConflict } from './protected-pages.js';
 import { insertPagePolicyVersion } from './protection-admin.js';
 import { readDistribution } from './runtime-distribution.js';
@@ -21,12 +22,12 @@ type CopyRule = {
 const latestCopies = `SELECT DISTINCT ON (copy_origin,copy_pathname) * FROM page_redirect_rules
   WHERE project_id=$1 AND page_id=$2 ORDER BY copy_origin,copy_pathname,revision DESC`;
 
-async function projectDestination(client: PoolClient, project: string) {
+export async function projectDestination(client: Pick<Pool,'query'>, project: string) {
   return (await client.query<ProjectDestination>(`SELECT revision,destination FROM project_redirect_destinations
     WHERE project_id=$1 ORDER BY revision DESC LIMIT 1`, [project])).rows[0] ?? null;
 }
 
-export async function redirectRuleSettings(client: PoolClient, project: string, page: string) {
+export async function redirectRuleSettings(client: PoolClient, project: string, page: string | null) {
   if (!(await client.query("SELECT to_regclass('page_redirect_rules') IS NOT NULL AS ready")).rows[0].ready) return null;
   const projectDefault = await projectDestination(client, project);
   const rules = (await client.query<CopyRule>(`SELECT r.*,v.version,v.approved_destination,v.allocation,v.stealth,
@@ -34,12 +35,12 @@ export async function redirectRuleSettings(client: PoolClient, project: string, 
       OR EXISTS (SELECT 1 FROM projects WHERE origin=r.copy_origin) AS copy_is_official
     FROM (${latestCopies}) r JOIN protection_policy_versions v ON v.project_id=r.project_id AND v.version=r.policy_version
     ORDER BY r.copy_origin,r.copy_pathname`, [project,page])).rows;
-  return {projectDefault,rules};
+  return {projectDefault,rules,contexts:page ? await listCopyContexts(client,project,page) : null};
 }
 
-export async function saveRedirectRule(db: Pool, project: string, page: string, data: Record<string,unknown>, gatewayOrigin?: string) {
+export async function saveRedirectRule(db: Pool, project: string, page: string | null, data: Record<string,unknown>, gatewayOrigin?: string, reviewed = false) {
   const shapes = {
-    'save-default':'acknowledged,action,destination,page,project,revision',
+    'save-default':page ? 'acknowledged,action,destination,page,project,revision' : 'acknowledged,action,destination,project,revision',
     'save-copy':'acknowledged,action,configGeneration,copyOrigin,copyPathname,defaultRevision,page,policy,project,revision,urlGeneration',
     'disable-copy':'action,copyOrigin,copyPathname,page,project,revision',
   };
@@ -49,7 +50,7 @@ export async function saveRedirectRule(db: Pool, project: string, page: string, 
   try {
     await client.query('BEGIN');
     await assertProjectAdministrativeWrite(client,project);
-    await assertPageAdministrativeWrite(client,project,page);
+    if (page) await assertPageAdministrativeWrite(client,project,page);
     const settings = await redirectRuleSettings(client,project,page);
     if (!settings) throw new RedirectRuleConflict('REDIRECT_SCHEMA_REQUIRED');
     const {projectDefault,rules} = settings;
@@ -84,6 +85,7 @@ export async function saveRedirectRule(db: Pool, project: string, page: string, 
       SELECT r.project_id,r.page_id,r.copy_origin,r.copy_pathname,r.revision+1,r.url_generation,r.config_generation,p.version,$2,true
       FROM updates r JOIN published p ON p.project_id=r.project_id AND p.version=r.next_version`,[project,revision,destination]);
     } else {
+      if (!page) throw new TypeError('page scope required');
       const prior = rules.find(rule=>rule.copy_origin===data.copyOrigin && rule.copy_pathname===data.copyPathname);
       if (data.revision !== (prior?.revision ?? 0)) throw new PageConflict('copy rule changed');
       revision = (prior?.revision ?? 0)+1;
@@ -91,8 +93,12 @@ export async function saveRedirectRule(db: Pool, project: string, page: string, 
         if (!prior?.enabled) throw new PageConflict('no enabled copy rule');
         await appendCopySuspension(client,project,page,prior);
       } else {
+        if (settings.contexts && !reviewed) throw new RedirectRuleConflict('COPY_REVIEW_EXPIRED');
         if (!prior && rules.length>=100) throw new PageConflict('copy rule limit');
         const copy = await validateOperationalCopy(client,data.copyOrigin,data.copyPathname,data.acknowledged);
+        if (!prior && settings.contexts && !settings.contexts.some(context=>context.copy_origin===copy.copy_origin && context.copy_pathname===copy.copy_pathname)) {
+          throw new RedirectRuleConflict('COPY_CONTEXT_REQUIRED');
+        }
         const scope = (await client.query(`SELECT pp.installation_id,pp.url_generation,pp.config_generation,u.origin
           FROM protected_pages pp JOIN projects p ON p.id=pp.project_id JOIN protected_page_urls u ON u.page_id=pp.id
           WHERE pp.project_id=$1 AND pp.id=$2 AND pp.enabled AND pp.lifecycle_state='ACTIVE' AND p.lifecycle_state='ACTIVE'`,[project,page])).rows;
@@ -147,7 +153,7 @@ export async function suspendCopyRedirectRule(client: PoolClient, project: strin
 
 type CopyAdmission = {
   project: string; page: string; original: string;
-  admitted: boolean; version: number; approved_destination: string; allocation: Allocation; stealth: boolean; stealth_version: number;
+  admitted: boolean; eligibility: string; version: number; approved_destination: string; allocation: Allocation; stealth: boolean; stealth_version: number;
 };
 
 // One database snapshot checks the exact approval, its generations and the current project default.
@@ -160,6 +166,11 @@ export async function copyRedirectAdmission(db: Pool, installation: string, orig
       AND official.n=1 AND NOT EXISTS (SELECT 1 FROM protected_page_urls WHERE origin=$2)
       AND NOT EXISTS (SELECT 1 FROM projects WHERE origin=$2) AND v.enabled
       AND (r.default_revision IS NULL OR d.destination=v.approved_destination) AS admitted,
+      CASE WHEN NOT r.enabled THEN 'RULE_DISABLED'
+        WHEN NOT pp.enabled OR p.deleted_at IS NOT NULL OR pp.deleted_at IS NOT NULL OR p.lifecycle_state<>'ACTIVE' OR pp.lifecycle_state<>'ACTIVE' THEN 'PAGE_INACTIVE'
+        WHEN pp.url_generation<>r.url_generation OR pp.config_generation<>r.config_generation OR official.n<>1 THEN 'REVIEW_REQUIRED'
+        WHEN EXISTS (SELECT 1 FROM protected_page_urls WHERE origin=$2) OR EXISTS (SELECT 1 FROM projects WHERE origin=$2) THEN 'CONTEXT_EXCLUDED'
+        ELSE 'INVALID_POLICY' END AS eligibility,
       v.version, v.allocation, v.stealth, v.stealth_version, v.approved_destination
       FROM protected_pages pp JOIN projects p ON p.id=pp.project_id
       JOIN LATERAL (SELECT * FROM page_redirect_rules WHERE project_id=p.id AND page_id=pp.id

@@ -15,7 +15,20 @@
         script.onerror = () => script.remove(); document.head.appendChild(script);
       } catch (_) { /* Untrusted message. */ }
     });
-    const deadline = performance.now() + 150;
+    const started = performance.now(), deadline = started + 150;
+    const scoped = !!distribution || new URL(source).pathname.startsWith('/i/');
+    let visit, outcome, handoffElapsed;
+    const initialEntryPath = location.pathname;
+    const reportEntry = phase => {
+      if (!visit || outcome === phase) return;
+      outcome = phase;
+      try {
+        const measured = Math.max(0,Math.min(60000,Math.round(performance.now()-started)));
+        if (phase==='REDIRECT_HANDOFF') handoffElapsed=measured;
+        const elapsed = phase==='PAGE_LEFT' ? handoffElapsed ?? measured : measured;
+        navigator.sendBeacon(endpoint('observed-action'),new Blob([JSON.stringify({pathname:initialEntryPath,visit,phase,elapsed})],{type:'text/plain'}));
+      } catch (_) { /* Diagnostics are best effort. */ }
+    };
     // Optional owner-authored visual scope. Never infer a page-wide gate.
     // Opacity keeps layout and native hit-testing intact during early interaction.
     const gated = [];
@@ -37,8 +50,16 @@
     let initialPath = location.pathname, initialSearch = location.search;
     const validContext = () => !abandoned && !suspended && location.pathname === initialPath && location.search === initialSearch;
     const abandon = () => { abandoned = true; cancelRedirect(); };
-    const cancelRedirect = () => { redirectPending = false; redirectInteracted = true; releaseGate(); };
-    setTimeout(() => { redirectPending = false; releaseGate(); }, Math.max(0,deadline-performance.now()));
+    const cancelRedirect = phase => {
+      const pending = redirectPending;
+      redirectPending = false; redirectInteracted = true; releaseGate();
+      if (pending && phase) reportEntry(phase);
+    };
+    setTimeout(() => {
+      const pending = redirectPending;
+      redirectPending = false; releaseGate();
+      if (pending) reportEntry('TIMEOUT');
+    }, Math.max(0,deadline-performance.now()));
     const scopes = document.querySelectorAll('[data-anticlone-render-gate]');
     if (scopes.length <= 20) for (const node of scopes) {
       try {
@@ -49,15 +70,15 @@
         node.style.setProperty('opacity','0','important');
       } catch (_) { /* Missing or invalid explicit scope remains visible. */ }
     }
-    addEventListener('pagehide', event => { cancelRedirect(); if (event.persisted) { suspended = true; suspendCtas(); } else abandon(); });
+    addEventListener('pagehide', event => { if (outcome==='REDIRECT_HANDOFF') reportEntry('PAGE_LEFT'); cancelRedirect(); if (event.persisted) { suspended = true; suspendCtas(); } else abandon(); });
     addEventListener('pageshow', event => { if (event.persisted && suspended && !abandoned) { suspended = false; if (validContext()) resumeCtas(); else abandon(); } });
-    addEventListener('beforeunload', cancelRedirect);
-    addEventListener('pointerdown', cancelRedirect, {once:true, capture:true});
-    addEventListener('keydown', cancelRedirect, {once:true, capture:true});
-    addEventListener('click', cancelRedirect, {once:true, capture:true});
+    addEventListener('beforeunload', () => cancelRedirect());
+    addEventListener('pointerdown', () => cancelRedirect('INTERACTION'), {once:true, capture:true});
+    addEventListener('keydown', () => cancelRedirect('INTERACTION'), {once:true, capture:true});
+    addEventListener('click', () => cancelRedirect('INTERACTION'), {once:true, capture:true});
     const routeChanged = () => {
       if (location.pathname === initialPath && location.search === initialSearch) return;
-      cancelRedirect(); suspendCtas(); initialPath = location.pathname; initialSearch = location.search;
+      cancelRedirect('CONTEXT_CHANGED'); suspendCtas(); initialPath = location.pathname; initialSearch = location.search;
       if (!abandoned && !suspended) resumeCtas();
     };
     addEventListener('popstate', routeChanged);
@@ -198,26 +219,44 @@
         addEventListener('pagehide', event => { if (!event.persisted) { clearInterval(timer); suspendCtas(); } });
         document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(true); });
         const entryWall = Date.now(), entryMono = performance.now(), entrySequence = sequence;
-        fetch(endpoint('entry-decision'), { method:'POST', headers:{'Content-Type':'text/plain'}, body:JSON.stringify({session,signals,pathname:initialPath}), cache: 'no-store', credentials:'omit', priority:'high' })
+        if (scoped) visit=Array.from(crypto.getRandomValues(new Uint8Array(16)),x=>x.toString(16).padStart(2,'0')).join('');
+        fetch(endpoint('entry-decision'), { method:'POST', headers:{'Content-Type':visit ? 'text/plain;ac-visit='+visit : 'text/plain'}, body:JSON.stringify({session,signals,pathname:initialPath}), cache: 'no-store', credentials:'omit', priority:'high' })
           .then(response => { if (!response.ok) throw new Error('decision unavailable'); return response.json(); })
           .then(decision => {
             if (!validContext()) return;
             if (entrySequence === sequence) observeCtaVersion(decision);
-            if (decision.action === 'REPLACE_CONVERSION') { releaseGate(); if (entrySequence === sequence) prepareCtas(decision, entryWall, entryMono); return; }
-            if (decision.action !== 'PAGE_REDIRECT') releaseGate();
-            if (!redirectPending || redirectInteracted || performance.now() >= deadline) {
-              if (decision.action === 'PAGE_REDIRECT' && entrySequence === sequence) refresh(false, true);
+            if (decision.action === 'REPLACE_CONVERSION') {
+              redirectPending = false; releaseGate();
+              if (entrySequence === sequence) prepareCtas(decision, entryWall, entryMono);
               return;
             }
-            redirectPending = false;
-            if (decision.action !== 'PAGE_REDIRECT' || !Number.isSafeInteger(decision.version) || decision.version < 1 || typeof decision.destination !== 'string') return;
-            if(decision.operationalContext && !operationalContextMatches(decision)) return;
+            if (decision.action !== 'PAGE_REDIRECT') {
+              if (decision.action!=='OBSERVE_ONLY') reportEntry('RUNTIME_ERROR');
+              redirectPending = false; releaseGate(); return;
+            }
+            if (!redirectPending || redirectInteracted || performance.now() >= deadline) {
+              if (!redirectInteracted) reportEntry('LATE_REDIRECT');
+              if (entrySequence === sequence) refresh(false, true);
+              return;
+            }
+            if (!Number.isSafeInteger(decision.version) || decision.version < 1 || typeof decision.destination !== 'string' ||
+                (decision.operationalContext && !operationalContextMatches(decision))) { cancelRedirect('INVALID_REDIRECT'); return; }
             const target = new URL(decision.destination);
-            if ((target.protocol !== 'https:' && !(target.protocol === 'http:' && !decision.operationalContext && ['localhost','127.0.0.1'].includes(target.hostname))) || target.username || target.password || target.hash || target.href === location.href || target.origin === location.origin) return;
+            if ((target.protocol !== 'https:' && !(target.protocol === 'http:' && !decision.operationalContext && ['localhost','127.0.0.1'].includes(target.hostname))) || target.username || target.password || target.hash || target.href === location.href || target.origin === location.origin) {
+              cancelRedirect('INVALID_REDIRECT'); return;
+            }
+            const destination = attributed(target.href, decision.attribution);
+            if (!redirectPending || redirectInteracted || performance.now() >= deadline) {
+              reportEntry('LATE_REDIRECT');
+              if (entrySequence === sequence) refresh(false,true);
+              return;
+            }
+            location.replace(destination);
+            redirectPending = false;
+            reportEntry('REDIRECT_HANDOFF');
             reportAction(decision.observationReceipt, null, null);
-            location.replace(attributed(target.href, decision.attribution));
-          }).catch(cancelRedirect);
-        if (distribution || /\/i\/[a-f0-9-]{36}\/runtime\.js$/.test(new URL(source).pathname)) { try { navigator.sendBeacon(endpoint('observed-session'), new Blob([JSON.stringify({session,signals})],{type:'text/plain'})); } catch (_) { /* Passive metrics never block navigation. */ } }
+          }).catch(() => { reportEntry('RUNTIME_ERROR'); cancelRedirect(); });
+        if (scoped) { try { navigator.sendBeacon(endpoint('observed-session'), new Blob([JSON.stringify({session,signals})],{type:'text/plain'})); } catch (_) { /* Passive metrics never block navigation. */ } }
       } catch (_) { cancelRedirect(); }
     };
     startDecision();

@@ -2,7 +2,7 @@ import { assertProjectAdministrativeWrite, DeletedProjectConflict } from './admi
 import type { Pool, PoolClient } from 'pg';
 import { validateDraft, activatePolicy } from './protection-policy.js';
 import { publishCtaPolicy } from './cta-policy.js';
-import { approveDestination, mapPoint, reviewPoint } from './cta-inventory.js';
+import { approveDestination, mapPoint, remapPoint, reviewPoint, SelectionConflict } from './cta-inventory.js';
 import { externalDestinations, configurationOrigin } from './page-redirect.js';
 
 // Caller holds the project write lock to allocate the next version.
@@ -50,6 +50,7 @@ export async function protectionAdmin(db: Pool, body: unknown) {
     if (input.action === 'cta-publish') return {version:await publishCtaPolicy(db,project,input.data)};
     if (input.action === 'destination') return approveDestination(db,project,input.data);
     if (input.action === 'map') { await mapPoint(db,project,input.data); return {state:'MAPPED'}; }
+    if (input.action === 'remap') { await remapPoint(db,project,input.data); return {state:'MAPPED'}; }
     if (input.action === 'review') { await reviewPoint(db,project,input.data); return {state:'REVIEWED'}; }
     if (input.action === 'page-activate') {
       if (!input.data || typeof input.data !== 'object' || Array.isArray(input.data) || Object.keys(input.data).join(',') !== 'version' || !Number.isSafeInteger((input.data as {version:unknown}).version)) throw new TypeError('invalid version');
@@ -57,7 +58,7 @@ export async function protectionAdmin(db: Pool, body: unknown) {
     }
     throw new TypeError('invalid protection action');
   } catch (error) {
-    if (error instanceof DeletedProjectConflict) throw error;
+    if (error instanceof DeletedProjectConflict || error instanceof SelectionConflict) throw error;
     if (error && typeof error === 'object' && 'code' in error) throw error;
     throw new TypeError('invalid protection configuration');
   }

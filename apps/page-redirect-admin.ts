@@ -1,3 +1,5 @@
+import {copyContextsInstalled} from './page-copy-contexts.js';
+import { randomUUID } from 'node:crypto';
 import { request } from 'node:https';
 import type { Pool, PoolClient } from 'pg';
 import { assertPageAdministrativeWrite, assertProjectAdministrativeWrite } from './admin-project-write.js';
@@ -8,11 +10,11 @@ import { approvalConfiguration, currentApproval, savePageApproval } from './page
 import { pageDestination } from './page-redirect.js';
 import { insertPagePolicyVersion } from './protection-admin.js';
 import { PageConflict } from './protected-pages.js';
-import { RedirectRuleConflict, redirectRuleSettings, saveRedirectRule } from './page-redirect-rules.js';
+import { projectDestination, RedirectRuleConflict, redirectRuleSettings, saveRedirectRule } from './page-redirect-rules.js';
 import { readDistribution } from './runtime-distribution.js';
 
 type Gateway = 'OPERATIONAL' | 'OBSERVATION_ONLY' | 'UNREACHABLE' | 'UNCONFIGURED';
-async function probeGateway(origin: string | undefined, requireCopyRules = false): Promise<Gateway> {
+async function probeGateway(origin: string | undefined, minimumContract = 0): Promise<Gateway> {
   let url: URL;
   try {
     url=new URL(origin ?? '');
@@ -30,7 +32,7 @@ async function probeGateway(origin: string | undefined, requireCopyRules = false
       res.on('end',()=>{
         try {
           const health=JSON.parse(body);
-          if (res.statusCode!==200 || health.status!=='ready' || (requireCopyRules && res.headers['x-anticlone-redirect-contract']!=='2')) return resolve('UNREACHABLE');
+          if (res.statusCode!==200 || health.status!=='ready' || (minimumContract && ![2,3].some(version=>String(version)===res.headers['x-anticlone-redirect-contract'] && version>=minimumContract))) return resolve('UNREACHABLE');
           resolve(health.mode==='OPERATIONAL' && health.action==='SCOPED_AUTHORIZATION_REQUIRED' ? 'OPERATIONAL' :
             ['LAB','PILOT_OBSERVE'].includes(health.mode) && health.action==='OBSERVE_ONLY' ? 'OBSERVATION_ONLY' : 'UNREACHABLE');
         } catch { resolve('UNREACHABLE'); }
@@ -71,23 +73,56 @@ async function readScope(client: PoolClient, project: string, page: string, gate
   return {row,urls,authorization,entry,ctaVersions,approval,readyContext:Boolean(readyContext),issue,entryIssue};
 }
 
+const pendingReviews = new Map<string,{project:string;page:string;draft:Record<string,unknown>;expiresAt:number}>();
+
+function prepareCopyReview(project: string, page: string, data: Record<string,unknown>) {
+  const keys=Object.keys(data).sort().join(',');
+  if (keys!=='action,configGeneration,copyOrigin,copyPathname,defaultRevision,page,policy,project,revision,urlGeneration') {
+    throw new TypeError('invalid copy review');
+  }
+  const now=Date.now();
+  for (const [id,review] of pendingReviews) if (review.expiresAt<=now) pendingReviews.delete(id);
+  if (pendingReviews.size>=100) throw new RedirectRuleConflict('COPY_REVIEW_BUSY');
+  const reviewId=randomUUID();
+  pendingReviews.set(reviewId,{project,page,draft:{...data,action:'save-copy',acknowledged:true},expiresAt:now+5*60_000});
+  return {reviewId};
+}
+
 export async function pageRedirectAdmin(db: Pool, input: unknown, env=process.env, checkGateway=probeGateway) {
   if (!input || typeof input!=='object' || Array.isArray(input)) throw new TypeError('invalid redirect');
   const data=input as Record<string,unknown>;
   const {project,page,action}=data;
-  if (typeof project!=='string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(project) ||
-      typeof page!=='string' || !/^[a-f0-9-]{36}$/i.test(page)) throw new TypeError('invalid scope');
+  if (typeof project!=='string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(project)) throw new TypeError('invalid project');
+  if (action==='inspect-default' && Object.keys(data).sort().join(',')==='action,project') {
+    const catalog=await db.query("SELECT to_regclass('project_redirect_destinations') IS NOT NULL AS ready");
+    return {available:catalog.rows[0].ready as boolean,projectDefault:catalog.rows[0].ready ? await projectDestination(db,project) : null};
+  }
   const gatewayOrigin=env.ADMIN_OPERATIONAL_GATEWAY_ORIGIN;
+  if (action==='save-default' && page===undefined) return saveRedirectRule(db,project,null,data,gatewayOrigin);
+  if (typeof page!=='string' || !/^[a-f0-9-]{36}$/i.test(page)) throw new TypeError('invalid page scope');
+  if (action==='review-copy') return prepareCopyReview(project,page,data);
+  if (action==='confirm-copy') {
+    if (Object.keys(data).sort().join(',')!=='action,page,project,reviewId' || typeof data.reviewId!=='string') throw new TypeError('invalid confirmation');
+    const review=pendingReviews.get(data.reviewId);
+    if (!review || review.expiresAt<=Date.now() || review.project!==project || review.page!==page) throw new RedirectRuleConflict('COPY_REVIEW_EXPIRED');
+    pendingReviews.delete(data.reviewId);
+    if (await checkGateway(gatewayOrigin,3)!=='OPERATIONAL') throw new RedirectRuleConflict('REDIRECT_GATEWAY_UNAVAILABLE');
+    return saveRedirectRule(db,project,page,review.draft,gatewayOrigin,true);
+  }
   if (action==='save-default' || action==='save-copy' || action==='disable-copy') {
-    if (action==='save-copy' && await checkGateway(gatewayOrigin,true)!=='OPERATIONAL') throw new RedirectRuleConflict('REDIRECT_GATEWAY_UNAVAILABLE');
+    if (action==='save-copy') {
+      if (await copyContextsInstalled(db)) throw new RedirectRuleConflict('COPY_REVIEW_EXPIRED');
+      if (await checkGateway(gatewayOrigin,2)!=='OPERATIONAL') throw new RedirectRuleConflict('REDIRECT_GATEWAY_UNAVAILABLE');
+    }
     return saveRedirectRule(db,project,page,data,gatewayOrigin);
   }
+  if (action==='activate' && await copyContextsInstalled(db)) throw new RedirectRuleConflict('COPY_REVIEW_EXPIRED');
   const versionFields='action,approvalId,configGeneration,page,project,revision,urlGeneration';
   const expected={inspect:'action,page,project',activate:'acknowledged,action,approvalId,configGeneration,copyOrigin,copyPathname,page,policy,project,revision,urlGeneration',deactivate:versionFields};
   if (typeof action!=='string' || !Object.hasOwn(expected,action) ||
       expected[action as keyof typeof expected]!==Object.keys(data).sort().join(',')) throw new TypeError('invalid action');
   const [gateway,rulesGateway] = action==='deactivate' ? ['UNCONFIGURED','UNCONFIGURED'] as const : await Promise.all([
-    checkGateway(gatewayOrigin),action==='inspect' ? checkGateway(gatewayOrigin,true) : Promise.resolve('UNCONFIGURED' as const),
+    checkGateway(gatewayOrigin),action==='inspect' ? copyContextsInstalled(db).then(installed=>checkGateway(gatewayOrigin,installed ? 3 : 2)) : Promise.resolve('UNCONFIGURED' as const),
   ]);
   const client=await db.connect();
   try {

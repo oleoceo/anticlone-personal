@@ -6,6 +6,7 @@ import { Pool } from 'pg';
 import { copyRedirectAdmission } from '../apps/page-redirect-rules.js';
 import { pageRedirectAdmin } from '../apps/page-redirect-admin.js';
 import { managePages } from '../apps/protected-pages.js';
+import { listCopyContexts, recordCopyBrowserOutcome, recordCopyDecision } from '../apps/page-copy-contexts.js';
 import { distributionAdmin } from '../apps/runtime-distribution.js';
 
 test('scoped redirect activation, revision and deactivation preserve the other LP', async () => {
@@ -15,7 +16,7 @@ test('scoped redirect activation, revision and deactivation preserve the other L
   await root.query(`CREATE SCHEMA ${schema}`);
   const db=new Pool({connectionString:process.env.TEST_DATABASE_URL,options:'-c search_path='+schema});
   try {
-    for (const file of (await readdir('infra')).filter(f=>/^\d{3}_.+\.sql$/.test(f)).sort()) {
+    for (const file of (await readdir('infra')).filter(f=>/^\d{3}_.+\.sql$/.test(f) && Number(f.slice(0,3))<=70).sort()) {
       await db.query((await readFile('infra/'+file,'utf8')).replace(/^\uFEFF/,''));
     }
     const project='owned', original='https://owner.test', gateway='https://gateway.test';
@@ -61,6 +62,27 @@ test('scoped redirect activation, revision and deactivation preserve the other L
     assert.equal((await inspect(first)).active,false);
     assert.deepEqual(await inspect(second),sibling);
     assert.equal((await db.query('SELECT count(*)::int AS n FROM active_protection_policies')).rows[0].n,0);
+    await db.query(await readFile('infra/071_page_copy_contexts.sql','utf8'));
+    const context={project,page:first,origin:'https://timing.test',pathname:'/timing'};
+    const oldVisit='1'.repeat(32), newVisit='2'.repeat(32);
+    const oldAt=Date.now();
+    await db.query('INSERT INTO page_copy_contexts(project_id,page_id,copy_origin,copy_pathname) VALUES($1,$2,$3,$4)',
+      [context.project,context.page,context.origin,context.pathname]);
+    await recordCopyDecision(db,context,{receivedAt:oldAt,visit:oldVisit,action:'OBSERVE_ONLY',reason:'ALLOCATION',version:1});
+    for (const phase of ['REDIRECT_HANDOFF','PAGE_LEFT','TIMEOUT']) {
+      await recordCopyBrowserOutcome(db,context,context.origin,{pathname:context.pathname,visit:newVisit,phase,
+        elapsed:phase==='TIMEOUT'?150:90});
+    }
+    await recordCopyDecision(db,context,{receivedAt:oldAt+1,visit:newVisit,action:'PAGE_REDIRECT',reason:'REDIRECT_SELECTED',version:2});
+    const client=await db.connect();
+    try {
+      const [timing]=await listCopyContexts(client,project,first) ?? [];
+      assert.equal(timing.browser_correlated,true);
+      assert.equal(timing.browser_phase,'PAGE_LEFT');
+      assert.equal(timing.elapsed_ms,90);
+    } finally {client.release();}
+    await db.query('DELETE FROM page_copy_contexts WHERE project_id=$1 AND page_id=$2',[project,first]);
+    await assert.rejects(activate(first,'/'),/COPY_REVIEW_EXPIRED/);
     const firstInstallation=(await db.query('SELECT installation_id FROM protected_pages WHERE id=$1',[first])).rows[0].installation_id;
     const secondInstallation=(await db.query('SELECT installation_id FROM protected_pages WHERE id=$1',[second])).rows[0].installation_id;
     const defaultDestination='https://destination.test/path?campaign=a';
@@ -73,14 +95,29 @@ test('scoped redirect activation, revision and deactivation preserve the other L
     await assert.rejects(saveDefault(overrideDestination,0),/project destination changed/);
     const saveCopy=async(copyOrigin:string,copyPathname:string,destination:string|null,revision=0,defaultRevision:number|null=1)=>{
       const {urlGeneration,configGeneration}=await inspect(first);
-      return run({page:first,action:'save-copy',copyOrigin,copyPathname,revision,defaultRevision:destination===null?defaultRevision:null,
-        acknowledged:true,urlGeneration,configGeneration,policy:{destination,stealth:false,
+      const prepared=await run({page:first,action:'review-copy',copyOrigin,copyPathname,revision,defaultRevision:destination===null?defaultRevision:null,
+        urlGeneration,configGeneration,policy:{destination,stealth:false,
           allocation:{DIRECT_UNKNOWN:100,PAID_ATTRIBUTED:0,ORGANIC:0,REFERRAL:0}}});
+      assert.ok('reviewId' in prepared);
+      return run({page:first,action:'confirm-copy',reviewId:prepared.reviewId});
     };
     await assert.rejects(saveCopy(original,'/',null),/original context forbidden/);
+    await assert.rejects(saveCopy('https://copy.test','/',null),/COPY_CONTEXT_REQUIRED/);
+    await db.query("INSERT INTO page_copy_contexts(project_id,page_id,copy_origin,copy_pathname) VALUES($1,$2,'https://copy.test','/'),($1,$2,'https://copy.test','/second-copy')",[project,first]);
     await assert.rejects(saveCopy('https://copy.test','/',null,0,0),/project destination changed/);
     await saveCopy('https://copy.test','/',null);
     await saveCopy('https://copy.test','/second-copy',overrideDestination);
+    const snapshot=await inspect(first);
+    const prepared=await run({page:first,action:'review-copy',copyOrigin:'https://copy.test',copyPathname:'/second-copy',revision:1,defaultRevision:null,
+      urlGeneration:snapshot.urlGeneration,configGeneration:snapshot.configGeneration,
+      policy:{destination:overrideDestination,stealth:false,allocation:{DIRECT_UNKNOWN:100,PAID_ATTRIBUTED:0,ORGANIC:0,REFERRAL:0}}});
+    assert.ok('reviewId' in prepared);
+    const confirmation={action:'confirm-copy',reviewId:prepared.reviewId};
+    await assert.rejects(run({...confirmation,page:second}),/COPY_REVIEW_EXPIRED/);
+    await assert.rejects(run({...confirmation,page:first,destination:'https://injected.test/'}),/invalid confirmation/);
+    await run({...confirmation,page:first});
+    await assert.rejects(run({...confirmation,page:first}),/COPY_REVIEW_EXPIRED/);
+
     const inherited=()=>copyRedirectAdmission(db,firstInstallation,'https://copy.test','/');
     const customized=()=>copyRedirectAdmission(db,firstInstallation,'https://copy.test','/second-copy');
     assert.equal((await inherited())?.approved_destination,defaultDestination);
@@ -103,12 +140,12 @@ test('scoped redirect activation, revision and deactivation preserve the other L
     await db.query('UPDATE protected_pages SET url_generation=url_generation+1 WHERE id=$1',[first]);
     assert.equal((await inherited())?.admitted,false);
     assert.equal((await customized())?.admitted,false);
-    await saveCopy('https://copy.test','/second-copy',overrideDestination,1);
+    await saveCopy('https://copy.test','/second-copy',overrideDestination,2);
     assert.equal((await customized())?.admitted,true);
     await db.query("INSERT INTO projects(id,name,origin) VALUES('other','Other','https://copy.test')");
     assert.equal((await customized())?.admitted,false);
     assert.equal((await inspect(first)).rules?.rules.find(rule=>rule.copy_pathname==='/second-copy')?.copy_is_official,true);
-    assert.equal((await db.query("SELECT count(*)::int AS n FROM administrative_change_audit WHERE relation_name='page_redirect_rules'")).rows[0].n,6);
+    assert.equal((await db.query("SELECT count(*)::int AS n FROM administrative_change_audit WHERE relation_name='page_redirect_rules'")).rows[0].n,7);
     await assert.rejects(db.query('DELETE FROM project_redirect_destinations'),/immutable/);
 
   } finally {

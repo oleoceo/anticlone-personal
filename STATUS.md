@@ -1,10 +1,11 @@
 # STATUS — AntiClone Personal
 
-## F17 — destino HTTPS confirmado no painel
-- Padrão por projeto e regra por origem/caminho da cópia com destino opcional, percentuais e revisões imutáveis no PostgreSQL (070).
-- Cópia HTTPS controlada em laboratório com painel autenticado e destino público real. Chromium: `PAGE_REDIRECT` HTTP 200 em 89 ms e navegação; atraso de 304 ms preservou a cópia; LP e regra desativada ficaram em `OBSERVE_ONLY`.
-- Homologação da cópia pública pendente da atualização do Dev e da publicação do bootstrap no projeto Vercel. A regra continua sujeita ao fail-open de 150 ms.
-- Procedimento e limites em [PROTECTION-ADMIN.md](docs/PROTECTION-ADMIN.md). Revisão independente do delta sobre `3119bbd`: `/root/redirect_review`, sem achados remanescentes.
+## PR #88 — aceitação do redirecionamento, SMTP e CTA
+- A regra usa origem e caminho observados, desafio de confirmação e auditoria. O padrão do projeto fica na configuração do projeto.
+- A migration 071 guarda evidência operacional limitada. O painel distingue decisão enviada, relato do navegador e chegada ainda sem confirmação.
+- Validação em Chromium isolado: dois destinos HTTPS, edição sem reinício, fail-open, SMTP TLS em uma tentativa e troca de CTA com restauração do link nativo.
+- Revisão independente identificou e conferiu a correção da corrida entre relatos e decisões. CI do candidato depende de escrita no GitHub.
+- Matriz, execução isolada e janela de deploy condicionada à autorização em [ACEITACAO-PR88.md](docs/ACEITACAO-PR88.md).
 
 ## Redirecionamento e alertas na homologação Dev
 - Público OPERATIONAL via mTLS e privado PILOT_OBSERVE. A LP oficial permaneceu em sua URL no Chromium.

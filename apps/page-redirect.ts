@@ -50,12 +50,22 @@ export function approvedDestination(value: string, projectOrigin: string): strin
   return url.href;
 }
 
-export function entryDecision(policy: {version: number; enabled: boolean; approved_destination: string; allocation: unknown} & StealthPolicy | undefined, original: string, origin: string, controlledOrigin: string | undefined, risk: string | undefined, session: unknown, trafficClass: string, assessment?: RiskAssessment) {
-  if (origin === original || !controlledOrigin || origin !== controlledOrigin || !policy || policy.enabled !== true || !Number.isSafeInteger(policy.version) || policy.version < 1 || !permitsMitigation(policy,risk,assessment)) return { action: 'OBSERVE_ONLY' };
+type EntryPolicy = {version: number; enabled: boolean; approved_destination: string; allocation: unknown} & StealthPolicy;
+
+export function evaluateEntryPolicy(policy: EntryPolicy | undefined, original: string, origin: string,
+  controlledOrigin: string | undefined, risk: string | undefined, session: unknown, trafficClass: string, assessment?: RiskAssessment) {
+  const observe = (reason: string) => ({decision:{action:'OBSERVE_ONLY'},reason});
+  if (origin===original || !controlledOrigin || origin!==controlledOrigin) return observe('CONTEXT_EXCLUDED');
+  if (!policy || !policy.enabled || !Number.isSafeInteger(policy.version) || policy.version<1) return observe('POLICY_INACTIVE');
+  if (!permitsMitigation(policy,risk,assessment)) return observe('RISK_POLICY');
   try {
-    if (!selected(session,'PAGE_REDIRECT',policy.version,validateAllocation(policy.allocation),trafficClass)) return {action:'OBSERVE_ONLY'};
+    if (!selected(session,'PAGE_REDIRECT',policy.version,validateAllocation(policy.allocation),trafficClass)) return observe('ALLOCATION');
     const destination=pageDestination(policy.approved_destination,original);
-    if (new URL(destination).origin===origin) return {action:'OBSERVE_ONLY'};
-    return {action:'PAGE_REDIRECT',...(policy.stealth_version===2 ? {stealthVersion:2} : {}),version:policy.version,destination};
-  } catch { return {action:'OBSERVE_ONLY'}; }
+    if (new URL(destination).origin===origin) return observe('DESTINATION_LOOP');
+    return {decision:{action:'PAGE_REDIRECT',...(policy.stealth_version===2 ? {stealthVersion:2} : {}),version:policy.version,destination},reason:'REDIRECT_SELECTED'};
+  } catch { return observe('INVALID_POLICY'); }
+}
+
+export function entryDecision(...args: Parameters<typeof evaluateEntryPolicy>) {
+  return evaluateEntryPolicy(...args).decision;
 }

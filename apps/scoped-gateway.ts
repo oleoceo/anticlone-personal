@@ -1,3 +1,4 @@
+import {copyPath,recordCopyDecision,redirectVisit,rememberCopyContext} from './page-copy-contexts.js';
 import { copyRedirectAdmission } from './page-redirect-rules.js';
 import { operationalAuthorization } from './operational-authorization.js';
 import { issueEntryReceipt, issueObservedReceipt } from './observed-receipts.js';
@@ -8,8 +9,7 @@ import { configuredOrigin, observe } from './detection.js';
 import { classifyTraffic } from './traffic.js';
 import { resolvePageContext } from './page-context.js';
 import { ctaDecision } from './cta-policy.js';
-import { entryDecision, pageDestination } from './page-redirect.js';
-import { validateAllocation } from './allocation.js';
+import { evaluateEntryPolicy } from './page-redirect.js';
 import { assessObservation, investigateRisk, preserveLegacyRiskHistory, safeEvaluateRisk } from './risk.js';
 import { currentApproval } from './page-policy-approval.js';
 import { projectMaintenance } from './project-maintenance.js';
@@ -53,23 +53,40 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>, collect
         if (!input || typeof input !== 'object' || Array.isArray(input)) throw new TypeError('invalid');
         const fields = input as Record<string,unknown>;
         if (decision) {
+          let diagnostic: {project: string; page: string; origin: string; pathname: string} | undefined;
+          let reason = operational ? 'NO_COPY_RULE' : 'GATEWAY_OBSERVE';
+          let version: number | null = null;
+          let visit: string | null = null;
           const respond = <T extends {action:string}>(result: T) => {
             res.appendHeader('Server-Timing',`decision;dur=${(performance.now()-startedAt).toFixed(1)}`);
             res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result));
+            if(diagnostic && endpoint==='entry-decision')void recordCopyDecision(db,diagnostic,{receivedAt,visit,action:result.action,reason,version});
           };
           const fallback = () => respond({action:'OBSERVE_ONLY'});
-          if (Object.keys(fields).sort().join(',') !== 'pathname,session,signals' || typeof fields.pathname !== 'string' || !/^\/[a-zA-Z0-9/_-]{0,200}$/.test(fields.pathname) || typeof fields.session !== 'string' || !/^[a-f0-9]{32}$/.test(fields.session)) { fallback(); return; }
+          if (Object.keys(fields).sort().join(',')!=='pathname,session,signals' || typeof fields.pathname!=='string' ||
+              !copyPath.test(fields.pathname) || typeof fields.session!=='string' || !redirectVisit.test(fields.session)) { fallback(); return; }
+          if (endpoint==='entry-decision') {
+            const marker = /;\s*ac-visit=([a-f0-9]{32})(?=;|$)/.exec(req.headers['content-type'] ?? '');
+            visit=marker?.[1] ?? null;
+          }
           const origin=configuredOrigin(req.headers.origin ?? '');
           const traffic=classifyTraffic(fields.signals,origin);
           let copyRule = false;
           if (operational && endpoint==='entry-decision') {
             const copy = await copyRedirectAdmission(db,match[1],origin,fields.pathname);
             copyRule = copy !== null;
+            if (copy) {
+              diagnostic={project:copy.project,page:copy.page,origin,pathname:fields.pathname};
+              version=copy.version;
+              reason=copy.eligibility;
+            }
             if (copy?.admitted) {
               const evidence={source:'browser' as const,reliability:'uncorroborated' as const,trafficClass:traffic.trafficClass,kind:traffic.evidence};
               const assessment=safeEvaluateRisk(false,()=>assessObservation(evidence,false));
-              const decision=entryDecision({...copy,enabled:true},copy.original,origin,origin,assessment?.level ?? 'UNCERTAIN',
+              const evaluated=evaluateEntryPolicy({...copy,enabled:true},copy.original,origin,origin,assessment?.level ?? 'UNCERTAIN',
                 fields.session,traffic.trafficClass,assessment);
+              reason=evaluated.reason;
+              const decision=evaluated.decision;
               if (decision.action==='PAGE_REDIRECT') {
                 const result=await issueEntryReceipt(db,copy.project,copy.page,origin,fields.session,traffic.trafficClass,
                   withAttribution(decision,copy.project,copy.page,copy.original));
@@ -85,9 +102,13 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>, collect
           try {
           await client.query('BEGIN ISOLATION LEVEL READ COMMITTED');
           const context=await resolvePageContext(client,match[1]);
-          if (!context || context.urls.length!==1 || !await operationallyEligible(client,context.project,context.page,true)) { fallback(); return; }
+          if (context && !diagnostic) diagnostic={project:context.project,page:context.page,origin,pathname:fields.pathname};
+          if (!context || context.urls.length!==1 || !await operationallyEligible(client,context.project,context.page,true)) {
+            if (!copyRule) reason='PAGE_INACTIVE';
+            fallback(); return;
+          }
           const approval=await currentApproval(client,context.project,context.page);
-          if (!approval) { fallback(); return; }
+          if (!approval) { if (!copyRule && operational) reason='APPROVAL_REQUIRED'; fallback(); return; }
           const original=context.urls[0];
           const authorization=operational ? await operationalAuthorization(client,context.project,context.page,origin,fields.pathname) : null;
           const official=operational ? await client.query('SELECT 1 FROM protected_page_urls WHERE origin=$1 UNION ALL SELECT 1 FROM projects WHERE origin=$1',[origin]) : null;
@@ -108,13 +129,18 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>, collect
             scheduleOperatorShadow(db,context.project,context.page,new URL(origin).hostname,fields.session as string,traffic.trafficClass,receivedAt);
             respond(operationalContext && result.action!=='OBSERVE_ONLY' ? {...result,operationalContext} : result);
           };
-          if (!controlled && !operationalContext) { await finish({action:'OBSERVE_ONLY'}); return; }
+          if (!controlled && !operationalContext) {
+            if (!copyRule && operational) reason='CONTEXT_EXCLUDED';
+            await finish({action:'OBSERVE_ONLY'}); return;
+          }
           if (endpoint==='entry-decision' && !copyRule && approval.entryVersion!==null) {
             const result=await client.query(`SELECT v.version,v.enabled,v.approved_destination,v.allocation,to_jsonb(v)->'stealth' AS stealth,to_jsonb(v)->'stealth_version' AS stealth_version FROM page_entry_policy_bindings b JOIN protection_policy_versions v ON v.project_id=b.project_id AND v.version=b.version WHERE b.project_id=$1 AND b.page_id=$2`,[context.project,context.page]);
             const policy=result.rows[0];
-            if (policy?.enabled) { pageDestination(policy.approved_destination,original.origin); validateAllocation(policy.allocation); }
-            const entry=entryDecision(policy,original.origin,origin,decisionOrigin,assessment?.level ?? 'UNCERTAIN',fields.session,traffic.trafficClass,assessment);
-            if (entry.action==='PAGE_REDIRECT') { await finish(entry); return; }
+            const evaluated=evaluateEntryPolicy(policy,original.origin,origin,decisionOrigin,assessment?.level ?? 'UNCERTAIN',
+              fields.session,traffic.trafficClass,assessment);
+            version=policy?.version ?? null;
+            reason=evaluated.decision.action==='PAGE_REDIRECT' ? 'LEGACY_RULE' : evaluated.reason;
+            if (evaluated.decision.action==='PAGE_REDIRECT') { await finish(evaluated.decision); return; }
           }
           const result=await ctaDecision(db,context.project,original.origin,origin,decisionOrigin,assessment?.level ?? 'UNCERTAIN',fields.session,traffic.trafficClass,original.pathname,fields.pathname,context.page,client,assessment);
           await finish(result); return;
@@ -139,6 +165,7 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>, collect
           receiveRuntimeReceipt(db,context,endpoint,core?'core':'fallback',new URL(origin).hostname,receiptAliases.get(req));
           if (authorized) await collect(context.project,context.page,origin,core ? 'core':'fallback');
           res.writeHead(result==='capacity' ? 429 : 204).end();
+          if (!authorized && result!=='capacity') void rememberCopyContext(db,{...context,origin,pathname:url.pathname});
           void layers(context,origin,core?'core':'fallback',result==='capacity').catch(()=>{});
         } catch(error) {
           if(context) void layers(context,origin,core?'core':'fallback',true).catch(()=>{});

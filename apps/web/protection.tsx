@@ -22,6 +22,7 @@ export function ProtectionScreen({api, project, page, incident, action, setGuard
   api: AdminApi; project: Project; page: Page; incident?: Incident; action: ProtectionAction; setGuard: SetGuard;
 }) {
   const pageAction = action === 'redirecionar';
+  const [legacyOpen,setLegacyOpen]=useState(false);
   const data = useProtection(api, project.id, page.id);
   const authorization = useQuery(page.id, signal => api.request<Operational>('operational', {
     project: project.id, page: page.id, action: 'inspect',
@@ -42,10 +43,14 @@ export function ProtectionScreen({api, project, page, incident, action, setGuard
     {pageAction && redirect.error !== undefined && <Failure error={redirect.error} retry={redirect.revalidate}/>}
     {pageAction && redirect.error === undefined && redirect.data?.gateway==='UNCONFIGURED' &&
       <p className="notice">A ativação em um gateway público requer ADMIN_OPERATIONAL_GATEWAY_ORIGIN no admin privado.</p>}
-    {pageAction && redirect.error === undefined && redirect.data && (redirect.data.rules || redirect.data.gateway!=='UNCONFIGURED') && <PageRedirectControls api={api} page={page} state={redirect.data} incidentHost={incident?.host}
+    {pageAction && !legacyOpen && redirect.error === undefined && redirect.data && (redirect.data.rules || redirect.data.gateway!=='UNCONFIGURED') && <PageRedirectControls api={api} page={page} state={redirect.data} incidentHost={incident?.host}
       operation={{...operation,busy:operation.busy || redirect.pending}}
       refresh={refresh}/>}
-    {(!pageAction || (redirect.error === undefined && redirect.data?.gateway==='UNCONFIGURED')) && <>
+    {(!pageAction || (redirect.error === undefined && redirect.data?.gateway==='UNCONFIGURED')) && (pageAction ?
+      <LegacyProtection open={legacyOpen} onToggle={setLegacyOpen}>{legacyProtection()}</LegacyProtection> : legacyProtection())}
+  </>;
+
+  function legacyProtection() { return <>
     <ol className="steps protection-steps" aria-label="Etapas de proteção">
       <li><span>1</span>Publicar política</li><li><span>2</span>Aprovar na LP</li><li><span>3</span>Autorizar contexto</li>
     </ol>
@@ -64,10 +69,13 @@ export function ProtectionScreen({api, project, page, incident, action, setGuard
       <Approval api={api} project={project.id} page={page} state={data.lp.data} operation={controls} refresh={refresh}/>
       {authorization.error !== undefined ? <Failure error={authorization.error} retry={authorization.revalidate}/> :
         authorization.data ? <Authorization api={api} project={project.id} page={page} incident={incident}
-          state={authorization.data} pageState={data.lp.data} operation={controls} refresh={refresh}/> : <Loading/>}
+          state={authorization.data} pageState={data.lp.data} operation={controls} refresh={refresh} confirmInReview={pageAction}/> : <Loading/>}
     </> : data.pr.error === undefined && data.lp.error === undefined && <Loading/>}
-    </>}
-  </>;
+    </>; }
+}
+
+function LegacyProtection({children,open,onToggle}: {children: import('react').ReactNode; open:boolean; onToggle:(open:boolean)=>void}) {
+  return <details className="panel operation-section" open={open} onToggle={event=>onToggle(event.currentTarget.open)}><summary>Configuração anterior da LP</summary>{children}</details>;
 }
 
 type Operation = ReturnType<typeof useOperation>;
@@ -335,9 +343,9 @@ function Approval({api, project, page, state, operation, refresh}: {
   </section>;
 }
 
-function Authorization({api, project, page, incident, state, pageState, operation, refresh}: {
+function Authorization({api, project, page, incident, state, pageState, operation, refresh, confirmInReview}: {
   api: AdminApi; project: string; page: Page; incident?: Incident; state: Operational; pageState: PageProtection;
-  operation: Operation; refresh: () => void;
+  operation: Operation; refresh: () => void; confirmInReview: boolean;
 }) {
   const approvalVisible = pageState.approvalId !== null && pageState.urls.length === 1 && !pageState.page.url_review_required &&
     (pageState.entryPolicies.some(policy => policy.bound) || pageState.ctaPolicies.some(policy => policy.bound));
@@ -373,7 +381,7 @@ function Authorization({api, project, page, incident, state, pageState, operatio
           throw new InputError('A configuração da LP mudou. Atualize a situação e revise a autorização novamente.');
         }
         const result = await api.request<Operational>('operational', {project, page: page.id, action: 'authorize',
-          revision: existing?.revision ?? 0, expectedApprovalId: reviewed.approvalId, copyOrigin, copyPathname, acknowledgeUntrustedContext: fields.get('assent') === 'on'});
+          revision: existing?.revision ?? 0, expectedApprovalId: reviewed.approvalId, copyOrigin, copyPathname, acknowledgeUntrustedContext: confirmInReview || fields.get('assent') === 'on'});
         refresh();
         return 'Autorização registrada. Revisão ' + result.state?.revision + '.';
       }, fields);
@@ -384,7 +392,7 @@ function Authorization({api, project, page, incident, state, pageState, operatio
         <label>Caminho exato da cópia<input name="pathname" required maxLength={201} pattern="/(?:[A-Za-z0-9_\-]|/){0,200}"
           defaultValue={existing?.copy_pathname}/></label>
       </div>
-      <label className="check"><input name="assent" type="checkbox" required/>Conferi o contexto e reconheço que o domínio observado é uma alegação.</label>
+      {!confirmInReview && <label className="check"><input name="assent" type="checkbox" required/>Conferi o contexto e reconheço que o domínio observado é uma alegação.</label>}
       <button type="submit" className="primary" disabled={operation.busy}>Revisar autorização</button>
     </form>}
     {existing?.enabled && <button type="button" disabled={operation.busy} onClick={() =>

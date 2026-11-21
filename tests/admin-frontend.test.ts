@@ -644,6 +644,7 @@ for (const width of [1440, 390]) {
     await capture('02-investigacao');
     await page.getByRole('link', {name: 'Redirecionar página', exact: true}).click();
     await page.getByRole('heading', {name: 'Redirecionar página', exact: true}).waitFor();
+    await page.getByText('Configuração anterior da LP', {exact:true}).click();
     await page.getByLabel('Destino da página').fill(original + '/segura');
     await page.goBack().catch(() => undefined);
     await page.getByRole('dialog', {name:'Descartar alterações?'}).waitFor();
@@ -673,7 +674,6 @@ for (const width of [1440, 390]) {
     await page.getByText('Aprovação registrada.', {exact:false}).waitFor();
     await page.getByLabel('Origem HTTPS observada').fill(observedDomain);
     await page.getByLabel('Caminho exato da cópia').fill('/evidencia');
-    await page.getByLabel('Conferi o contexto', {exact: false}).check();
     await action(page, 'Revisar autorização').click();
     await page.getByRole('dialog', {name:'Autorizar contexto', exact:true}).waitFor();
     await page.route('**/admin/ui/operational', async route => {
@@ -1250,6 +1250,7 @@ test('React provisions an original LP and copy, then real gateway applies scoped
     await capture(panel, '06-investigacao');
 
     await panel.getByRole('link', {name: 'Redirecionar página', exact: true}).click();
+    await panel.getByText('Configuração anterior da LP', {exact:true}).click();
     await panel.getByLabel('Destino da página').fill(original + '/segura');
     await panel.getByLabel('Direto ou desconhecido').selectOption('100');
     await panel.getByLabel('Habilitar nesta versão').check();
@@ -1259,7 +1260,8 @@ test('React provisions an original LP and copy, then real gateway applies scoped
     async function authorize(revision: number) {
       await panel.getByLabel('Origem HTTPS observada').fill(copy);
       await panel.getByLabel('Caminho exato da cópia').fill('/lp');
-      await panel.getByLabel('Conferi o contexto', {exact: false}).check();
+      const assent=panel.getByLabel('Conferi o contexto', {exact:false});
+      if (await assent.count()) await assent.check();
       await confirm('Revisar autorização', 'Autorização registrada. Revisão ' + revision + '.');
     }
     await authorize(1);
@@ -1276,6 +1278,7 @@ test('React provisions an original LP and copy, then real gateway applies scoped
     await panel.getByRole('link', {name: 'Abrir Página de vendas na oferta'}).click();
     await panel.getByRole('link', {name: 'Políticas de proteção'}).click();
     assert.equal((await panel.reload())?.status(), 200);
+    await panel.getByText('Configuração anterior da LP', {exact:true}).click();
     await panel.getByLabel('Direto ou desconhecido').selectOption('0');
     await confirm('Revisar publicação', 'Política publicada. Versão 2.');
     await panel.getByText('Selecionar versão de entrada do projeto', {exact: true}).click();
@@ -1329,6 +1332,27 @@ test('React provisions an original LP and copy, then real gateway applies scoped
       await visit.waitForURL(original + point.target);
     }
     assert.equal((await lab.db.query('SELECT count(*)::int n FROM cta_mappings')).rows[0].n, 2);
+    const editedPoint=candidates[0];
+    const editedTarget=original+'/checkout-editado';
+    await panel.getByLabel('Identificador da oferta').fill(editedPoint.marker);
+    await panel.getByLabel('URL do destino do CTA').fill(editedTarget);
+    await confirm('Revisar destino', 'Destino cadastrado.');
+    const editedCard=panel.getByRole('article').filter({has:panel.getByRole('heading',{name:editedPoint.marker,exact:true})});
+    await editedCard.getByRole('button',{name:'Editar destino do CTA'}).click();
+    await editedCard.getByLabel('Destino aprovado para '+editedPoint.marker).selectOption({label:editedPoint.marker+' · '+editedTarget});
+    await editedCard.getByRole('button',{name:'Revisar mapeamento'}).click();
+    await action(panel,'Confirmar').click();
+    await panel.getByText('Mapeamento salvo.',{exact:true}).waitFor();
+    await confirm('Revisar aprovação', /^Aprovação registrada\./);
+    await authorize(3);
+    for (const point of candidates) {
+      const decision=visit.waitForResponse(response=>response.url().startsWith(gatewayOrigin+'/r/v2/') && response.url().endsWith('/g'));
+      await visit.goto(copy+'/lp');
+      assert.equal((await (await decision).json()).action,'REPLACE_CONVERSION');
+      await visit.locator('[data-anticlone-point="'+point.marker+'"]').click();
+      await visit.waitForURL(point===editedPoint ? editedTarget : original+point.target);
+    }
+
     await action(panel, 'Suspender autorização').click();
     await action(panel, 'Confirmar').click();
     await panel.getByRole('status').getByText('Autorização suspensa.', {exact: true}).waitFor();

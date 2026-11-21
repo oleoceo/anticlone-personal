@@ -175,11 +175,14 @@ function PointCard({point, inventory, surface, api, project, operation, update}:
   operation: ReturnType<typeof useOperation>; update: () => void;
 }) {
   const {captureId, destinations} = inventory;
+  const [editing,setEditing]=useState(false);
   const pointId = point.point_id;
   const observationId = point.observation_id;
   const destinationId = point.destination_id;
   const protection = (action: string, data: object) => api.request('protection', {action, project, data});
   const label = point.marker ?? 'Ponto sem marcador';
+  const mapped=destinations.find(item=>item.id===destinationId);
+  const choices=destinationId ? destinations.filter(item=>item.offer===mapped?.offer && item.id!==destinationId) : destinations;
   const eligible = point.kind === 'a' && point.marker && point.confidence === 'HIGH' && point.selection_allowed;
   return <article className="operation-card">
     <h3>{label}</h3>
@@ -197,26 +200,31 @@ function PointCard({point, inventory, surface, api, project, operation, update}:
         aprovado: {unidades_menores: point.approved_amount, moeda: point.approved_currency, termos: point.approved_terms},
         alerta: point.commercial_alert,
       }}/>}
-    {eligible && pointId && !destinationId && !point.review_required && destinations.length > 0 && <form
+    {eligible && destinationId && !point.review_required && point.commercial_version===null && choices.length>0 && !editing &&
+      <button type="button" disabled={operation.busy} onClick={()=>setEditing(true)}>Editar destino do CTA</button>}
+    {eligible && pointId && (!destinationId || (editing && point.commercial_version===null)) && !point.review_required && choices.length>0 && <form
       onSubmit={event => {
         const data = formData(event);
-        const chosen = destinations.find(item => item.id === value(data, 'destination'));
+        const chosen = choices.find(item => item.id === value(data, 'destination'));
         const pending = data.get('pending') === 'on';
-        if (!chosen || (pending && !captureId)) return;
-        operation.review(pending ? 'Registrar seleção pendente' : 'Mapear CTA ao destino',
+        if (!chosen || ((pending || destinationId) && !captureId)) return;
+        operation.review(pending ? 'Registrar seleção pendente' : destinationId ? 'Alterar destino do CTA' : 'Mapear CTA ao destino',
           <p>{label} → {chosen.offer} · {chosen.url}</p>, async () => {
             if (pending) await api.request('cta-selection', {project, surface, captureId, observationId,
               pointId, offer: chosen.offer, destinationId: chosen.id});
-            else await protection('map', {pointId, offer: chosen.offer, destinationId: chosen.id});
+            else if (destinationId) {
+              await protection('remap',{captureId,observationId,pointId,previousDestinationId:destinationId,destinationId:chosen.id});
+              setEditing(false);
+            } else await protection('map', {pointId, offer: chosen.offer, destinationId: chosen.id});
             update();
             return pending ? 'Seleção pendente registrada.' : 'Mapeamento salvo.';
           }, data);
       }}>
       <label>Destino aprovado para {label}<select name="destination" defaultValue="" required>
         <option value="">Selecione</option>
-        {destinations.map(item => <option key={item.id} value={item.id}>{item.offer} · {item.url}</option>)}
+        {choices.map(item => <option key={item.id} value={item.id}>{item.offer} · {item.url}</option>)}
       </select></label>
-      <label className="check"><input type="checkbox" name="pending"/>Registrar como seleção pendente</label>
+      {!destinationId && <label className="check"><input type="checkbox" name="pending"/>Registrar como seleção pendente</label>}
       <button type="submit" disabled={operation.busy}>Revisar mapeamento</button>
     </form>}
     {point.kind === 'a' && point.marker && point.confidence === 'HIGH' && pointId && destinationId && point.review_required &&
