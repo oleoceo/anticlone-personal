@@ -13,8 +13,12 @@ type Operation = ReturnType<typeof useOperation>;
 
 const keyOf = (rule: CopyRule) => rule.copy_origin + rule.copy_pathname;
 
+function parseUrl(raw: string) {
+  try { return new URL(raw); } catch { return null; }
+}
+
 function httpsDestination(raw: string) {
-  const url = URL.parse(raw);
+  const url = parseUrl(raw);
   if (!url || !/^https:\/\/[^/?#]/i.test(raw) || /[\s\\]/.test(raw) || url.username || url.password || url.hash || url.href.length>2048) {
     throw new InputError('Informe uma URL HTTPS válida, sem credenciais nem fragmento.');
   }
@@ -70,7 +74,7 @@ export function CopyRedirectRules({api,page,settings,issue,gatewayReady,operatio
       const fields=formData(event);
       try {
         const enteredOrigin=value(fields,'origin');
-        const origin=URL.parse(enteredOrigin);
+        const origin=parseUrl(enteredOrigin);
         const pathname=value(fields,'pathname');
         if (!origin || origin.protocol!=='https:' || origin.origin!==enteredOrigin ||
             (incidentHost && origin.hostname!==incidentHost.toLowerCase() && !current)) throw new InputError('Informe a origem HTTPS exata da cópia.');
