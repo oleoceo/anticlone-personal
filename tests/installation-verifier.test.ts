@@ -143,9 +143,9 @@ test('network-none sandboxed Chromium + mediated real TLS/PostgreSQL: FULL, CSP 
     } finally { await new Promise<void>(resolve=>{admin.close(()=>resolve());admin.closeAllConnections();}); }
     policy="default-src 'none'";const unsupported=await run(spec,image);assert.equal(unsupported.status,'UNSUPPORTED',JSON.stringify(unsupported));
     policy='';documentUnavailable=true;
-    const unavailable=await run(spec,image);assert.equal(unavailable.status,'NOT_VERIFIED');
+    const unavailable=await run(spec,image);assert.equal(unavailable.status,'NOT_VERIFIED');assert.equal(unavailable.reason,'OFFICIAL_SITE_UNAVAILABLE');
     documentUnavailable=false;gatewayUnavailable=true;
-    const gatewayDown=await run(spec,image);assert.equal(gatewayDown.status,'NOT_VERIFIED','loaded document with unavailable gateway is not unsupported');
+    const gatewayDown=await run(spec,image);assert.equal(gatewayDown.status,'NOT_VERIFIED','loaded document with unavailable gateway is not unsupported');assert.equal(gatewayDown.reason,'CHECK_FAILED');
     gatewayUnavailable=false;
     stale=true;const changed=await verifyPublishedInstallation(db,'owner',page,env,run);assert.equal(changed.status,'NOT_VERIFIED');assert.equal(changed.reason,'CONFIGURATION_CHANGED');
     assert.equal((await distributionAdmin(db,{action:'inspect',project:'owner',page})).diagnostic?.status,'NOT_VERIFIED','old successful revision never validates new configuration');

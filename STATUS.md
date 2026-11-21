@@ -1,5 +1,12 @@
 # STATUS — AntiClone Personal
 
+## Instalação da LP real e orientação no painel — F07/F08
+- LP de teste preparada no PR oleoceo/lp-teste-real#1 com os trechos oficiais da revisão 1 e checkout sem campos de pagamento.
+- Compose sem portas publicadas validado em rede de ensaio. Chromium desktop/mobile carregou scripts e canários, com Fallback ensaiado sem Core e telemetria interceptada.
+- Publicação BLOCKED. O host público retorna HTTP 525 e a sessão não tem acesso ao Docker do NPM.
+- Dev tem a URL oficial ativa e zero incidentes para o host. Brevo autenticou via STARTTLS em conferência sem envio e a preferência de alertas está desativada.
+- Painel orienta HEAD, BODY e CSS por tecnologia e diferencia sinais passivos de falha ao carregar a URL no verificador.
+
 ## Homologação operacional Dev — alerta de cópia F26
 - Em 20/11/2026, o gateway público persistiu os sinais da LP C e da cópia controlada no PostgreSQL Dev. Incidente 10, outbox 10, uma tentativa aceita pelo Brevo.
 - A mensagem entregue ao transporte descreve a suspeita e o host. A correção inclui o ID do incidente e o projeto no alerta, preservando o Message-ID vinculado ao outbox.
