@@ -64,6 +64,12 @@
 - Revisão independente `revisao` aprovou o delta funcional após exigir erro `EAUTH` na prova sem AUTH.
 - Resultados, evidências e limites de homologação em [Auditoria operacional V2.2](docs/AUDITORIA-V22-DEV.md).
 
+## F34 — Sessão web do painel sem prazo fixo
+- O painel usa cookie de sessão sem prazo desde o login. Logout manual, novo login e reinício do serviço revogam o acesso. A API bearer conserva 15 minutos.
+- Chromium e PostgreSQL isolado validaram oito horas simuladas, revogação, MFA e CSRF. Lint, typecheck e build passaram.
+- Revisão independente `session_review` aprovou o delta funcional `07eb0172a4f9b7b00d6ae30e1533b661b88ff125`.
+- O admin Dev em execução já usa o modo sem prazo. Esta alteração padroniza o comportamento do código.
+
 ## Sessão do admin privado Dev
 - O painel da porta 3002 usa sessão de navegador sem prazo fixo. Senha e TOTP continuam exigidos na entrada.
 - Logout, novo login e reinício revogam a sessão. O prazo padrão e o token bearer mantêm 15 minutos.
