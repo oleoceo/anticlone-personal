@@ -614,6 +614,11 @@ for (const width of [1440, 390]) {
     await capture('01-incidentes');
     await page.getByRole('link', {name: 'Investigar observado.frontend.test'}).click();
     await page.getByRole('heading', {name: 'observado.frontend.test', exact:true}).waitFor();
+    const alert = page.locator('section').filter({has: page.getByRole('heading', {name: 'Alerta por e-mail'})});
+    await alert.getByText('Aguardando envio', {exact: true}).waitFor();
+    await alert.getByText('Tentativas de envio · 0', {exact: true}).waitFor();
+    assert.equal(await alert.getByRole('link', {name: 'Ver configurações de SMTP'}).getAttribute('href'),
+      ui + '/configuracoes/notificacoes');
     await page.getByLabel('Página protegida').selectOption(lp.page);
     await page.getByLabel('Nova situação').selectOption('investigating');
     await page.getByLabel('Justificativa').fill('Revisão administrativa no ambiente de teste');
