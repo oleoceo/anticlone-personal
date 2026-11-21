@@ -967,6 +967,7 @@ for (const width of [1440, 390]) {
     await page.getByLabel('Destinatário').fill('destino@frontend.test');
     await action(page, 'Revisar configuração SMTP').click();
     await action(page, 'Confirmar').click();
+    await page.getByText('Configuração SMTP salva.', {exact:true}).waitFor();
     await page.getByText('Ambiente privado sem SMTP configurado', {exact:true}).waitFor();
     assert.equal(await action(page, 'Ativar alertas').isDisabled(), true);
     await capture('05-notificacoes', 'Notificações e SMTP');
