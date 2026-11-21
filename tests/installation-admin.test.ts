@@ -94,11 +94,13 @@ test('installation admin: authentication, session separation, CSRF, expiry and o
     const diagnostic=await (await ui('',web)).json();
     assert.equal(diagnostic.status,'NOT_VERIFIED'); assert.equal(diagnostic.installation.originMatches,false);
     clock+=15*60_000;
-    for (const action of ['','-enable','-disable']) assert.equal((await ui(action,web)).status,403);
+    assert.equal((await ui('',web)).status,200);
+    assert.equal((await ui('-enable',web)).status,409);
     assert.deepEqual(await snapshot(),beforeConflict);
-    // A fresh bearer session also reports the same explicit conflict.
+    // A fresh bearer session revokes the browser session and reports the same conflict.
     const fresh=await fetch(base+'/admin/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:'password',code:totp.generate({timestamp:clock})})});
     assert.equal(fresh.status,200); const next=await fresh.json() as {token:string};
+    for (const action of ['', '-enable', '-disable']) assert.equal((await ui(action,web)).status,403);
     assert.equal((await api('POST','',{authorization:`Bearer ${next.token}`})).status,409);
     assert.deepEqual(await snapshot(),beforeConflict);
   } finally {
