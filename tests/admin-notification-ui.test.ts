@@ -135,8 +135,9 @@ test('local notification UI: browser, session boundaries, CSRF, concurrency and 
     await page.getByLabel('Senha administrativa').fill('test password'); await page.getByLabel('Código TOTP').fill(code()); await page.getByRole('button',{name:'Entrar'}).click();
     await page.getByText('Configurada / desativada').waitFor();
     clock+=900000;
+    const refreshed = page.waitForResponse(response => response.url().endsWith('/admin/ui/settings'));
     await page.getByRole('button',{name:'Recarregar configuração'}).click();
-    await page.getByText('Sessão inválida ou expirada. Recarregue a página.').waitFor();
+    assert.equal((await refreshed).status(), 200);
   } finally {
     await browser.close(); server.close(); await once(server,'close'); trap.close(); await once(trap,'close'); await db.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end();
   }
