@@ -41,6 +41,7 @@ export const installationMessages: Record<string, string> = {
   NO_CURRENT_VERIFICATION: 'Sem prova para a configuração e revisão atuais. Instale os trechos e execute a verificação.',
   CONFIGURATION_CHANGED: 'A configuração mudou durante o teste. Confira a revisão e execute uma nova verificação.',
   VERIFICATION_SUPERSEDED: 'O resultado mais recente mudou enquanto a tela consultava a instalação. Confira o diagnóstico atual.',
+  OFFICIAL_SITE_UNAVAILABLE: 'O verificador não conseguiu carregar a URL oficial. Confira DNS, HTTPS e a resposta do site antes de repetir o teste.',
   CHECK_FAILED: 'O teste ficou inconclusivo. Confira a URL oficial, o DNS, o TLS e a disponibilidade dos recursos e do verificador.',
   ISOLATION_POLICY_NOT_REPRODUCED: 'A política de isolamento do site impediu a reprodução da carga no verificador.',
   CONTAINER_CLEANUP_FAILED: 'O verificador isolado não confirmou o encerramento. Solicite a conferência do serviço privado antes de tentar de novo.',

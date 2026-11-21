@@ -142,8 +142,9 @@ ssh -N -o ExitOnForwardFailure=yes -L 127.0.0.1:3001:127.0.0.1:3001 USUARIO@VPS
 
 Não usar localhost, domínio, outra porta local, bind0.0.0.0 ou encaminhamento remoto.
 Se3001 local estiver ocupada, liberar o processo local deliberadamente antes do túnel.
-Senha+TOTP, replay persistido, sessão de15min, cookies HttpOnly/SameSite Strict,
-CSRF, origem exata e logout permanecem. HTTP é somente loopback dentro do canal SSH
+O painel usa sessão web sem prazo fixo. O token bearer expira em 15 minutos.
+O acesso exige senha e TOTP, com proteção contra replay, CSRF e validação de origem.
+O cookie usa HttpOnly e SameSite Strict. HTTP é somente loopback dentro do canal SSH
 criptografado; não adicionar Secure ao cookie sem listener HTTPS privado.
 Confirmar login real, logout e rejeição de Origin/Host/proxy headers adulterados.
 `ss -lnt` deve mostrar3001 somente127.0.0.1; container em bridge não deve alcançar

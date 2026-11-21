@@ -25,7 +25,7 @@ const password = 'frontend lab only';
 const endpoint = 'https://runtime.frontend.test';
 const action = (page: Page, name: string) => page.getByRole('button', {name, exact: true});
 
-async function fixture(test: TestContext, browserArgs?: string[], webSessionWithoutTimeout = false) {
+async function fixture(test: TestContext, browserArgs?: string[]) {
   assert.ok(process.env.TEST_DATABASE_URL);
   const root = new Pool({connectionString: process.env.TEST_DATABASE_URL});
   const schema = 'frontend_' + randomUUID().replaceAll('-', '');
@@ -59,7 +59,7 @@ async function fixture(test: TestContext, browserArgs?: string[], webSessionWith
   const totp = new TOTP({secret: Secret.fromBase32(secret)});
   const salt = Buffer.alloc(16, 43);
   const record = 'scrypt$' + salt.toString('hex') + '$' + scryptSync(password, salt, 64).toString('hex');
-  const server = createAdminServer(record, secret, db, () => clock, {webSessionWithoutTimeout}).listen(0, '127.0.0.1');
+  const server = createAdminServer(record, secret, db, () => clock).listen(0, '127.0.0.1');
   await once(server, 'listening');
   test.after(() => new Promise<void>((resolve, reject) => {
     server.close(error => error ? reject(error) : resolve());
@@ -158,13 +158,18 @@ for (const width of [1440, 390]) {
     await page.getByRole('dialog').waitFor();
     await action(page, 'Confirmar').click();
     await page.getByText('Revisão 1', {exact: true}).waitFor();
-    assert.match(await page.getByRole('region', {name: 'Trecho HTML'}).locator('code').innerText(), /runtime\.frontend\.test\/r\/v2\//);
-    const technology = page.getByLabel('Tecnologia');
-    await technology.selectOption('React / Vite');
-    await page.getByText(/Adicione o CSS aos estilos globais/).waitFor();
-    await technology.selectOption('WordPress');
-    await page.getByText(/Aplique a classe anticlone-canary a um bloco/).waitFor();
-    await technology.selectOption('HTML');
+    const scripts = await page.getByRole('region', {name: 'Trecho HEAD'}).locator('code').innerText();
+    assert.match(scripts, /runtime\.frontend\.test\/r\/v2\/[^/]+\/a\.js/);
+    assert.match(scripts, /\/c\.js/);
+    assert.doesNotMatch(scripts, /\/(?:e|b\.js)"/);
+    assert.match(await page.getByRole('region', {name: 'Trecho BODY'}).locator('code').innerText(), /\/m\.gif/);
+    assert.match(await page.getByRole('region', {name: 'Trecho CSS'}).locator('code').innerText(), /\/n\.gif/);
+    await page.getByLabel('Tecnologia do site').selectOption('React/Vite');
+    await page.getByText('<main className="conteudo anticlone-canary">…</main>', {exact: true}).waitFor();
+    await page.getByLabel('Tecnologia do site').selectOption('WordPress');
+    await page.getByText(/bloco HTML personalizado/).waitFor();
+    assert.equal(await page.getByRole('region', {name: 'Trecho HEAD'}).locator('code').innerText(), scripts);
+    await page.getByLabel('Tecnologia do site').selectOption('HTML');
     assert.equal(await page.getByRole('link', {name:'Abrir página oficial em nova aba'}).getAttribute('href'),
       'https://offer.frontend.test/inicio');
     const diagnose = page.getByRole('link', {name:'Ir para o diagnóstico'});
@@ -175,7 +180,7 @@ for (const width of [1440, 390]) {
     await page.goBack();
     assert.equal(page.url(), installation);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
-    await page.getByText('Recursos, revisões e rotação', {exact: true}).click();
+    await page.getByText('Diagnóstico avançado e histórico de revisões', {exact: true}).click();
     assert.equal(await page.locator('.resources li').count(), 12);
     await action(page, 'Publicar nova revisão').click();
     await action(page, 'Confirmar').click();
@@ -461,7 +466,7 @@ test('new and legacy consoles share the same MFA, session lifetime and private r
   assert.ok(session?.httpOnly);
   assert.equal(session.sameSite, 'Strict');
   assert.equal(session.path, '/admin/ui/');
-  assert.ok(session.expires > Date.now() / 1000 + 850);
+  assert.equal(session.expires, -1);
 
   const block = await fetch(lab.origin + ui, {headers: {origin: 'https://outside.test', 'sec-fetch-site': 'cross-site'}});
   assert.equal(block.status, 403);
@@ -482,20 +487,17 @@ test('new and legacy consoles share the same MFA, session lifetime and private r
   })).status, 403);
 
   await modern.getByRole('link', {name: 'Proteger oferta'}).click();
-  await modern.getByLabel('Nome da oferta').fill('Rascunho na expiração');
-  lab.advance(15 * 60_000 - 1);
+  await modern.getByLabel('Nome da oferta').fill('Rascunho da oferta');
+  lab.advance(8 * 60 * 60_000);
   const stillActive = await fetch(lab.origin + '/admin/ui/projects', {headers: {
     'sec-fetch-site': 'same-origin', cookie: 'admin_session=' + session.value,
   }});
   assert.equal(stillActive.status, 200);
-  lab.advance(1);
+  const bootstrap = modern.waitForResponse(response => response.url().endsWith('/admin/ui/bootstrap'));
   await modern.bringToFront();
   await modern.evaluate(() => window.dispatchEvent(new Event('focus')));
-  await modern.getByText('Sua sessão terminou. Entre novamente para continuar.').waitFor();
-  await legacy.reload();
-  await legacy.getByLabel('Código TOTP').waitFor();
-  assert.equal(await login(modern, lab.code()), 204);
-  assert.equal(await modern.getByLabel('Nome da oferta').inputValue(), 'Rascunho na expiração');
+  assert.equal((await (await bootstrap).json()).authenticated, true);
+  assert.equal(await modern.getByLabel('Nome da oferta').inputValue(), 'Rascunho da oferta');
   await legacy.reload();
   await legacy.getByText('Configuração incompleta', {exact: true}).waitFor();
 
@@ -541,8 +543,8 @@ test('new and legacy consoles share the same MFA, session lifetime and private r
   assert.equal((await context.cookies()).some(cookie => cookie.name === 'admin_session'), false);
 });
 
-test('private Dev web session remains active after 15 minutes and still supports revocation', {timeout: 60_000}, async t => {
-  const lab = await fixture(t, undefined, true);
+test('private web session remains active after 15 minutes and still supports revocation', {timeout: 60_000}, async t => {
+  const lab = await fixture(t);
   const context = await lab.browser.newContext();
   const page = await context.newPage();
   await page.goto(lab.origin + ui + '/visao-geral');
@@ -630,6 +632,11 @@ for (const width of [1440, 390]) {
     await capture('01-incidentes');
     await page.getByRole('link', {name: 'Investigar observado.frontend.test'}).click();
     await page.getByRole('heading', {name: 'observado.frontend.test', exact:true}).waitFor();
+    const alert = page.locator('section').filter({has: page.getByRole('heading', {name: 'Alerta por e-mail'})});
+    await alert.getByText('Aguardando envio', {exact: true}).waitFor();
+    await alert.getByText('Tentativas de envio · 0', {exact: true}).waitFor();
+    assert.equal(await alert.getByRole('link', {name: 'Ver configurações de SMTP'}).getAttribute('href'),
+      ui + '/configuracoes/notificacoes');
     await page.getByLabel('Página protegida').selectOption(lp.page);
     await page.getByLabel('Nova situação').selectOption('investigating');
     await page.getByLabel('Justificativa').fill('Revisão administrativa no ambiente de teste');
