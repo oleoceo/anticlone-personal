@@ -1,5 +1,11 @@
 # STATUS — AntiClone Personal
 
+## F26 — Alerta de e-mail no incidente
+- O painel exibe o estado do alerta, o número de tentativas e o acesso às configurações SMTP.
+- Lint, typecheck, build e três testes focados passaram com Chromium e PostgreSQL 16 isolado.
+- Revisão independente `review` sem bloqueios no delta funcional `91d3cba6f2b773abe1c01a1e892969ae7a1a44a5`.
+- O recebimento externo depende da configuração privada do provedor e da confirmação na caixa de destino.
+
 ## Auditoria V2.2 no Dev — PR #82
 - Visão Geral com gráfico e tabela sobre a mesma série UTC, origem declarada e estimativa detalhada por projeto.
 - Configurações testa TLS e autenticação SMTP; Saúde identifica o perfil retornado pelo gateway.
