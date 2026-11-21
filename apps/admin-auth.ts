@@ -20,8 +20,7 @@ import { disableInstallation, enableInstallation, installationDiagnostic, Instal
 const sessionSeconds = 900;
 
 // Private loopback process, one owner, ephemeral sessions and rate limit.
-export function createAdminServer(passwordRecord: string, totpSecret: string, db: Pool, now: () => number = Date.now,
-  {webSessionWithoutTimeout = false}: {webSessionWithoutTimeout?: boolean} = {}) {
+export function createAdminServer(passwordRecord: string, totpSecret: string, db: Pool, now: () => number = Date.now) {
   if (!/^[A-Z2-7]{32}$/.test(totpSecret)) throw new Error('invalid TOTP configuration');
   const totp = new TOTP({ secret: Secret.fromBase32(totpSecret), algorithm: 'SHA1', digits: 6, period: 30 });
   const factorId = createHash('sha256').update(totpSecret).digest('hex');
@@ -245,17 +244,15 @@ export function createAdminServer(passwordRecord: string, totpSecret: string, db
       } catch { if (client) { try { await client.query('ROLLBACK'); } catch { /* fail closed */ } } res.writeHead(503).end(); return; }
       finally { client?.release(); }
       const token = randomBytes(32).toString('hex');
-      const browserSession = uiLogin && webSessionWithoutTimeout;
       // Only one active session; replacing it bounds storage and revokes previous tokens.
       sessions.clear();
       sessions.set(createHash('sha256').update(token).digest('hex'), {
-        expiry: browserSession ? Infinity : now() + sessionSeconds * 1_000,
+        expiry: uiLogin ? Infinity : now() + sessionSeconds * 1_000,
         kind: uiLogin ? 'web' : 'bearer',
         csrf: randomBytes(32).toString('hex'),
       });
       if (uiLogin) {
-        const maxAge = browserSession ? '' : `; Max-Age=${sessionSeconds}`;
-        res.setHeader('Set-Cookie', [`admin_session=${token}; HttpOnly; SameSite=Strict; Path=/admin/ui/${maxAge}`,
+        res.setHeader('Set-Cookie', [`admin_session=${token}; HttpOnly; SameSite=Strict; Path=/admin/ui/`,
           'admin_login_csrf=; HttpOnly; SameSite=Strict; Path=/admin/ui/; Max-Age=0']);
         res.writeHead(204).end(); return;
       }
