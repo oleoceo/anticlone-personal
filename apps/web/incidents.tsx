@@ -1,7 +1,7 @@
 import {useState} from 'react';
 import {Link, useLocation, useNavigate} from 'react-router-dom';
 import {AdminApi, pageList, type Project} from './admin-api';
-import {Back, Breadcrumbs, incidentPath, pagePath, projectIncidentsPath, projectPath, searchOf, sectionParams, useContextNavigation} from './navigation';
+import {Back, Breadcrumbs, incidentPath, pagePath, projectIncidentsPath, projectPath, searchOf, sectionParams, settingsPath, useContextNavigation} from './navigation';
 import {DetailsData, formData, formatDate, InputError, useOperation, uuid, value, type SetGuard} from './operations';
 import {ProtectionScreen} from './protection';
 import type {Incident, ProtectionAction} from './protection-contracts';
@@ -13,6 +13,11 @@ const statuses: Record<string, string> = {
 const sources: Record<string, string> = {
   core: 'Core', fallback: 'Fallback', html_canary: 'Canário HTML', css_canary: 'Canário CSS', runtime: 'Runtime',
 };
+const alertStates = new Map([
+  ['PENDING', 'Aguardando envio'], ['EXPIRED', 'Prazo de envio expirado'],
+  ['EXHAUSTED', 'Limite de tentativas atingido'], ['ACCEPTED_BY_TRANSPORT', 'Aceito pelo servidor de e-mail'],
+  ['SUSPENDED', 'Envio suspenso'], ['REVIEW_REQUIRED', 'Aguardando revisão'],
+]);
 
 export function IncidentProjects({projects}: {projects: Project[]}) {
   const navigation = useContextNavigation();
@@ -134,8 +139,17 @@ function IncidentDetail({incident, project, api, pid, actionUrl, search, refresh
 }) {
   const nav = useContextNavigation();
   const operation = useOperation(setGuard);
+  const outbox = incident.notification?.outbox;
   return <>
     {operation.notice()}
+    <section className="panel">
+      <h2>Alerta por e-mail</h2>
+      <p>{outbox ? alertStates.get(outbox.state) ?? 'Consulte o histórico de notificações' :
+        incident.notification?.available ? 'Sem alerta registrado para este incidente' : 'Histórico de alertas indisponível'}</p>
+      {outbox && <p>Tentativas de envio · {outbox.attempts}</p>}
+      {outbox?.state === 'ACCEPTED_BY_TRANSPORT' && <p>O recebimento na caixa de destino precisa ser confirmado separadamente.</p>}
+      <Link {...nav.link(settingsPath + '/notificacoes')}>Ver configurações de SMTP</Link>
+    </section>
     <section className="panel">
       <h2>Ações de proteção</h2>
       <p>Selecione a LP e revise as etapas de publicação, aprovação e autorização para o contexto observado.</p>
