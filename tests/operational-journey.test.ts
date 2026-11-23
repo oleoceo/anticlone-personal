@@ -46,6 +46,15 @@ for(const width of [1440,390])test(`GS01-04/06/13/16/17: continuous operational 
   await panel.locator('#login [name=password]').fill('journey-password');await panel.locator('#login [name=code]').fill(new TOTP({secret:Secret.fromBase32(secret)}).generate());await panel.locator('#login button').click();await panel.locator('#project-create').waitFor();
   const submit=async(selector:string,button:string,endpoint:string,body=false)=>{assert.equal(await panel.locator(selector).evaluate(el=>!(el instanceof HTMLFormElement)||el.checkValidity()),true,'valid form: '+selector);const response=panel.waitForResponse(r=>r.url().endsWith('/admin/ui/'+endpoint)&&r.request().method()==='POST');await panel.locator(selector).locator(button).click();const r=await response;assert.equal(r.status(),200,selector+' '+r.url());const result=body?await r.json():null;if(endpoint==='protection')await panel.waitForFunction(()=>!document.querySelector<HTMLElement>('#protection-page')?.closest('section')?.inert);return result;};
   const original='https://owner.test',copy='https://copy.test';
+  const authorize=async()=>{
+    const confirmed=panel.waitForEvent('dialog').then(async dialog=>{
+      try {
+        assert.equal(dialog.type(),'confirm');
+        assert.equal(dialog.message(),'Confirme o contexto '+copy+'/lp');
+      } finally { await dialog.accept(); }
+    });
+    await Promise.all([confirmed,submit('#operational-form','button[value=authorize]','operational')]);
+  };
   await panel.locator('#project-create [name=name]').fill('Continuous '+width);await panel.locator('#project-create [name=origin]').fill(original);
   const project=(await submit('#project-create','button','project-create',true)).id as string;assert.ok(project);
   await panel.locator('#pages-form [name=project]').fill(project);await panel.locator('#pages-form [name=name]').fill('Owned LP');await panel.locator('#pages-form [name=url]').fill(original+'/lp');
@@ -85,7 +94,7 @@ for(const width of [1440,390])test(`GS01-04/06/13/16/17: continuous operational 
   const configure=async(pagePercent:number,ctaPercent:number)=>{
    for(const [selector,value] of [['#protection-page',pagePercent],['#protection-cta',ctaPercent]] as const){await panel.locator(selector+' [name=enabled]').check();await panel.locator(selector+' [name=stealthMode]').selectOption('OFF');if(selector==='#protection-cta'){await panel.locator(selector+' [name=surface]').fill('landing');await panel.locator(selector+' [name=pathname]').fill('/lp');}else await panel.locator(selector+' [name=destination]').selectOption(original+'/checkout-approved');for(const c of classes)await panel.locator(selector+` [name=${c}]`).fill(String(value));await submit(selector,'button','protection');}
    await submit('#pages-form','button[value=inspect]','pages');await panel.locator('#page-approval [name=entry]').selectOption({index:1});for(const box of await panel.locator('#page-approval-ctas input').all())await box.check();await submit('#page-approval','button','pages');
-   const f=panel.locator('#operational-form');await f.locator('[name=project]').fill(project);await f.locator('[name=page]').fill(lp.id);await f.locator('[name=revision]').fill(String(revision));await f.locator('[name=copyOrigin]').fill(copy);await f.locator('[name=copyPathname]').fill('/lp');await f.locator('[name=acknowledge]').check();await submit('#operational-form','button[value=authorize]','operational');revision++;
+   const f=panel.locator('#operational-form');await f.locator('[name=project]').fill(project);await f.locator('[name=page]').fill(lp.id);await f.locator('[name=revision]').fill(String(revision));await f.locator('[name=copyOrigin]').fill(copy);await f.locator('[name=copyPathname]').fill('/lp');await authorize();revision++;
   };
   // Real browser outcomes in both buckets at 50%, independently for each action/class.
   for(const action of ['REPLACE_CONVERSION','PAGE_REDIRECT'] as const)for(const percent of [0,50,100]){
@@ -117,7 +126,7 @@ for(const width of [1440,390])test(`GS01-04/06/13/16/17: continuous operational 
   await configure(0,100);
   await panel.locator('#operational-form [name=revision]').fill(String(revision));await submit('#operational-form','button[value=suspend]','operational');revision++;
   const suspended=visit.waitForResponse(r=>r.url()===decisionUrl);await visit.goto(copy+'/lp');assert.equal((await (await suspended).json()).action,'OBSERVE_ONLY');await visit.locator('[data-anticlone-point=checkout01]').click();await visit.waitForURL(copy+'/native-checkout');
-  await panel.locator('#operational-form [name=revision]').fill(String(revision));await submit('#operational-form','button[value=authorize]','operational');
+  await panel.locator('#operational-form [name=revision]').fill(String(revision));await authorize();
   const recovered=visit.waitForResponse(r=>r.url()===decisionUrl);await visit.goto(copy+'/lp');assert.equal((await (await recovered).json()).action,'REPLACE_CONVERSION');await visit.waitForTimeout(80);await visit.locator('[data-anticlone-point=checkout01]').click();await visit.waitForURL(original+'/checkout-approved');
   await visit.goto(original+'/lp');await visit.waitForTimeout(100);await visit.locator('[data-anticlone-point=checkout01]').click();await visit.waitForURL(original+'/native-checkout');
   assert.equal(messages.length,1);assert.equal((await db.query('SELECT count(*)::int n FROM incidents WHERE project_id=$1',[project])).rows[0].n,1);

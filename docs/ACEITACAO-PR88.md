@@ -39,6 +39,8 @@ O teste acionou dois links com pop-up, incluindo um inserido dinamicamente, e ve
 
 O relato Dev anterior mediu 275–337 ms apenas na requisição, acima do orçamento inteiro do Bootstrap. Para a próxima janela autorizada, publicar o Bootstrap atual e medir separadamente DNS, conexão/TLS, tempo até o primeiro byte, leitura e processamento até a navegação. Se o caminho de rede continuar excedendo o prazo, avaliar reutilização de conexão ou entrega da decisão no mesmo ingresso dos scripts, mantendo o orçamento e o fail-open. As medições isoladas não estimam a proporção de visitas redirecionadas em público.
 
+A primeira suíte completa local executou 152 testes, com 144 aprovados, oito falhas e nenhum teste pulado. Duas falhas vinham do seletor antigo de confirmação no painel legado. O reteste desktop e mobile passou ao verificar e aceitar o diálogo efetivo, com as mesmas expectativas de decisão, navegação e persistência. Os testes de pins mTLS passaram diretamente. Cinco cenários que usam a rede host do Docker falharam na prontidão HTTP/SSH ou no TLS local da fixture. O host tem outro serviço na porta 443 e o daemon rootful recusa acesso neste usuário. O teste do recibo opcional falhou no PostgreSQL via TCP publicado pelo Docker rootless e passou no PostgreSQL 16 descartável via socket Unix, preservando a exigência de persistência e o orçamento interno de 15 ms.
+
 ## Janela de homologação após autorização do proprietário
 
 1. Aprovar o SHA revisado e os domínios, destinos e caixa de teste. Identificar a publicação que serve o JavaScript da cópia e reservar o release anterior para rollback.

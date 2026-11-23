@@ -5,7 +5,7 @@
 - CTA por link identificado na cópia, com edição e suspensão. A migração 072 acrescenta inventário limitado e regras versionadas.
 - Jornada isolada Chromium desktop/mobile: início de navegação em 88–128 ms, atraso fail-open, edição sem reinício e restauração dos dois links nativos.
 - Worker isolado: um SMTP aceito em uma tentativa para incidente novo, zero tentativas no anterior e nenhuma duplicata após recargas.
-- Publicação e CI oficial pendentes de autenticação GitHub. Homologação pública pendente. [Provas e procedimento](docs/ACEITACAO-PR88.md).
+- **BLOCKED** na suíte local completa: topologia Docker rootless/portas do host. Publicação e CI oficial pendentes de login GitHub. Homologação pública pendente. [Provas e procedimento](docs/ACEITACAO-PR88.md).
 
 ## Redirecionamento e alertas na homologação Dev
 - Público OPERATIONAL via mTLS e privado PILOT_OBSERVE. A LP oficial permaneceu em sua URL no Chromium.
