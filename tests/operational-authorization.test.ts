@@ -167,9 +167,15 @@ test('operational v2 + MFA/CSRF admin: HTTPS publication, rotation, PAGE/CTA, su
       await operationalForm.locator('[name="project"]').fill(p.project);await operationalForm.locator('[name="page"]').fill(p.page);
       await operationalForm.locator('[name="revision"]').fill(String(revision));
       await operationalForm.locator('[name="copyOrigin"]').fill(copy);await operationalForm.locator('[name="copyPathname"]').fill(p.path);
-      await operationalForm.locator('[name="acknowledge"]').check();
+      const confirmation=action==='authorize' ? panel.waitForEvent('dialog').then(async dialog=>{
+        assert.equal(dialog.type(),'confirm');
+        assert.equal(dialog.message(),'Confirme o contexto '+copy+p.path);
+        await dialog.accept();
+      }) : null;
       const response=panel.waitForResponse(r=>r.url().endsWith('/admin/ui/operational'));
-      await operationalForm.locator('button[value="'+action+'"]').click();assert.equal((await response).status(),200);
+      await operationalForm.locator('button[value="'+action+'"]').click();
+      if (confirmation) await confirmation;
+      assert.equal((await response).status(),200);
     };
     const decide=async(p:typeof pages[number],origin=copy,endpoint='cta-refresh',path=p.path)=>{
       if(proxy)await new Promise(r=>setTimeout(r,550)); // honor the real proxy budget
