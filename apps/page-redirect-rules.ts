@@ -38,9 +38,10 @@ export async function redirectRuleSettings(client: PoolClient, project: string, 
   return {projectDefault,rules,contexts:page ? await listCopyContexts(client,project,page) : null};
 }
 
-export async function saveRedirectRule(db: Pool, project: string, page: string | null, data: Record<string,unknown>, gatewayOrigin?: string, reviewed = false) {
+export async function saveRedirectRule(db: Pool, project: string, page: string | null, data: Record<string,unknown>, gatewayOrigin?: string) {
   const shapes = {
     'save-default':page ? 'acknowledged,action,destination,page,project,revision' : 'acknowledged,action,destination,project,revision',
+    'confirm-copy':'action,allocation,configGeneration,copyOrigin,copyPathname,destination,page,project,revision,urlGeneration',
     'save-copy':'acknowledged,action,configGeneration,copyOrigin,copyPathname,defaultRevision,page,policy,project,revision,urlGeneration',
     'disable-copy':'action,copyOrigin,copyPathname,page,project,revision',
   };
@@ -93,9 +94,10 @@ export async function saveRedirectRule(db: Pool, project: string, page: string |
         if (!prior?.enabled) throw new PageConflict('no enabled copy rule');
         await appendCopySuspension(client,project,page,prior);
       } else {
-        if (settings.contexts && !reviewed) throw new RedirectRuleConflict('COPY_REVIEW_EXPIRED');
+        if (action==='confirm-copy' && !settings.contexts) throw new RedirectRuleConflict('REDIRECT_SCHEMA_REQUIRED');
+        if (settings.contexts && action==='save-copy') throw new RedirectRuleConflict('COPY_REVIEW_EXPIRED');
         if (!prior && rules.length>=100) throw new PageConflict('copy rule limit');
-        const copy = await validateOperationalCopy(client,data.copyOrigin,data.copyPathname,data.acknowledged);
+        const copy = await validateOperationalCopy(client,data.copyOrigin,data.copyPathname,action==='confirm-copy' || data.acknowledged);
         if (!prior && settings.contexts && !settings.contexts.some(context=>context.copy_origin===copy.copy_origin && context.copy_pathname===copy.copy_pathname)) {
           throw new RedirectRuleConflict('COPY_CONTEXT_REQUIRED');
         }
@@ -109,11 +111,12 @@ export async function saveRedirectRule(db: Pool, project: string, page: string |
         }
         const distribution = await readDistribution(client,current.installation_id);
         if (!distribution || new URL(distribution.bases.TELEMETRY).origin!==gatewayOrigin) throw new RedirectRuleConflict('REDIRECT_RUNTIME_REQUIRED');
-        const policy = data.policy as Record<string,unknown> | undefined;
+        const policy = action==='confirm-copy' ? {destination:data.destination,allocation:data.allocation,stealth:false} :
+          data.policy as Record<string,unknown> | undefined;
         if (!policy || Object.keys(policy).sort().join(',')!=='allocation,destination,stealth' || typeof policy.stealth!=='boolean') throw new TypeError('invalid copy policy');
         const inherited = policy.destination === null;
-        if (inherited && (!projectDefault || data.defaultRevision!==projectDefault.revision)) throw new PageConflict('project destination changed');
-        if (!inherited && data.defaultRevision!==null) throw new TypeError('unexpected default revision');
+        if (inherited && (action==='confirm-copy' || !projectDefault || data.defaultRevision!==projectDefault.revision)) throw new PageConflict('project destination changed');
+        if (!inherited && action==='save-copy' && data.defaultRevision!==null) throw new TypeError('unexpected default revision');
         const destination = pageDestination(inherited ? projectDefault?.destination : policy.destination);
         if (new URL(destination).origin===copy.copy_origin) throw new TypeError('destination shares the copy origin');
         let allocation: Allocation;

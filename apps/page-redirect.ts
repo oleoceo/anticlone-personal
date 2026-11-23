@@ -1,3 +1,4 @@
+import { normalizeHttpsAddress } from './https-address.js';
 import { permitsMitigation, type StealthPolicy } from './stealth.js';
 import type { RiskAssessment } from './risk.js';
 import { selected, validateAllocation } from './allocation.js';
@@ -31,14 +32,13 @@ export function externalDestinations(projectOrigin: string): string[] {
 
 // Page destinations are confirmed in the admin policy. They are never fetched by the server.
 export function pageDestination(value: unknown, legacyOrigin?: string): string {
-  if (typeof value !== 'string' || value.length > 2048 || /[\u0000-\u0020\u007f\\]/.test(value) ||
-      !/^https?:\/\/[^/?#]/i.test(value)) throw new TypeError('invalid redirect destination');
-  const url = new URL(value);
-  const laboratory = url.protocol === 'http:' && ['localhost','127.0.0.1'].includes(url.hostname) && url.origin === legacyOrigin;
-  if ((!laboratory && url.protocol !== 'https:') || url.username || url.password || url.hash || url.href.length > 2048) {
-    throw new TypeError('invalid redirect destination');
+  if (typeof value === 'string' && /^http:\/\//i.test(value) && legacyOrigin) {
+    const url = new URL(value);
+    if (url.origin === legacyOrigin && ['localhost','127.0.0.1'].includes(url.hostname) &&
+        !url.username && !url.password && !url.hash && value.length <= 2048 && !/[\u0000-\u0020\u007f\\]/.test(value)) return url.href;
   }
-  return url.href;
+  try { return normalizeHttpsAddress(value); }
+  catch { throw new TypeError('invalid redirect destination'); }
 }
 
 // Same-origin destinations or an exact URL in the owner's private allowlist.

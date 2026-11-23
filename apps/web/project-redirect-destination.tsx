@@ -25,7 +25,7 @@ export function ProjectRedirectDestination({api,project,setGuard}: {api:AdminApi
         },fields);
       } catch(error) { operation.setError(error); }
     }}>
-      <label>Para onde redirecionar os visitantes<input name="destination" type="url" required maxLength={2048} defaultValue={current?.destination}/></label>
+      <label>Para onde redirecionar os visitantes<input name="destination" type="text" inputMode="url" required maxLength={2048} defaultValue={current?.destination}/></label>
       <button type="submit" disabled={operation.busy || query.pending}>Revisar destino padrão</button>
     </form>
   </section>;

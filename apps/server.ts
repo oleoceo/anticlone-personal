@@ -178,8 +178,8 @@ const handler: http.RequestListener = (req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Access-Control-Allow-Origin', '*'); res.setHeader('Cache-Control', 'no-store');
   if (req.method === 'GET' && req.url === '/healthz') {
-    void pool.query("SELECT to_regclass('page_redirect_rules') IS NOT NULL AS redirects,to_regclass('page_copy_contexts') IS NOT NULL AS diagnostics").then(({rows}) => {
-      if (rows[0].redirects) res.setHeader('X-AntiClone-Redirect-Contract',rows[0].diagnostics ? '3' : '2');
+    void pool.query("SELECT to_regclass('page_redirect_rules') IS NOT NULL AS redirects,to_regclass('page_copy_contexts') IS NOT NULL AS diagnostics,to_regclass('copy_cta_rules') IS NOT NULL AS ctas").then(({rows}) => {
+      if (rows[0].redirects) res.setHeader('X-AntiClone-Redirect-Contract',rows[0].ctas ? '4' : rows[0].diagnostics ? '3' : '2');
       res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify({status:'ready', mode:process.env.GATEWAY_MODE==='OPERATIONAL'?'OPERATIONAL':mode.pilot ? 'PILOT_OBSERVE' : 'LAB', action:process.env.GATEWAY_MODE==='OPERATIONAL'?'SCOPED_AUTHORIZATION_REQUIRED':'OBSERVE_ONLY'}));
     }).catch(() => res.writeHead(503).end()); return;
   }

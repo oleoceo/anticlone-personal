@@ -771,7 +771,6 @@ for (const width of [1440, 390]) {
     await page.getByText('Aprovação registrada.', {exact:false}).waitFor();
     await page.getByLabel('Origem HTTPS observada').fill(observedDomain);
     await page.getByLabel('Caminho exato da cópia').fill('/evidencia');
-    await page.getByLabel('Conferi o contexto', {exact:false}).check();
     await action(page, 'Revisar autorização').click();
     await action(page, 'Confirmar').click();
     await page.getByText('Autorização registrada. Revisão 3.').waitFor();
@@ -1216,7 +1215,7 @@ test('React provisions an original LP and copy, then real gateway applies scoped
     const ids = (await lab.db.query('SELECT project_id AS project, id AS page FROM protected_pages')).rows[0];
     assert.ok(ids?.project && ids.page);
     await confirm('Publicar endereços de instalação', 'Revisão 1');
-    html = await panel.getByRole('region', {name: 'Trecho HTML'}).locator('code').innerText();
+    html = (await Promise.all(['HEAD','BODY'].map(piece=>panel.getByRole('region',{name:'Trecho '+piece}).locator('code').innerText()))).join('\n');
     css = await panel.getByRole('region', {name: 'Trecho CSS'}).locator('code').innerText();
     await capture(panel, '04-instalacao-publicada');
 
@@ -1267,8 +1266,6 @@ test('React provisions an original LP and copy, then real gateway applies scoped
     async function authorize(revision: number) {
       await panel.getByLabel('Origem HTTPS observada').fill(copy);
       await panel.getByLabel('Caminho exato da cópia').fill('/lp');
-      const assent=panel.getByLabel('Conferi o contexto', {exact:false});
-      if (await assent.count()) await assent.check();
       await confirm('Revisar autorização', 'Autorização registrada. Revisão ' + revision + '.');
     }
     await authorize(1);

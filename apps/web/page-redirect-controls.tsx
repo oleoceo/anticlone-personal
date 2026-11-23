@@ -1,4 +1,4 @@
-import {CopyRedirectRules, type CopyRedirectSettings} from './copy-redirect-rules';
+import {CopyRedirectRules, type CopyRedirectSettings, type ContextKey} from './copy-redirect-rules';
 import type {Page} from './admin-api';
 import type {useOperation} from './operations';
 import type {EntryPolicy, Operational} from './protection-contracts';
@@ -8,6 +8,7 @@ export type RedirectStatus = {
   gateway: 'OPERATIONAL' | 'OBSERVATION_ONLY' | 'UNREACHABLE' | 'UNCONFIGURED';
   issue: string | null;
   rules: CopyRedirectSettings | null;
+  ctaRuleCopies: ContextKey[];
   rulesGateway: RedirectStatus['gateway'];
   entryIssue: string | null;
   entry: EntryPolicy | null;
@@ -30,12 +31,13 @@ export function PageRedirectControls({api,page,state,incidentHost,operation,refr
   operation: ReturnType<typeof useOperation>; refresh: () => void;
 }) {
   const authorization=state.authorization;
+  const replaced=state.rules?.rules.some(rule=>rule.copy_origin===authorization?.copy_origin && rule.copy_pathname===authorization?.copy_pathname);
   return <>
     {state.rules?.contexts ? <CopyRedirectRules key={page.id+':'+(incidentHost??'')} api={api} page={page} settings={state.rules}
       gateway={state.gateway} ruleGateway={state.rulesGateway} issue={state.issue ? blockers[state.issue] ?? null : null} operation={operation} refresh={refresh}
       incidentHost={incidentHost} urlGeneration={state.urlGeneration} configGeneration={state.configGeneration}/> :
       <p className="notice">As regras por cópia observada exigem a atualização do banco.</p>}
-    {state.entry && authorization && state.gateway!=='UNCONFIGURED' && <details className="panel operation-section">
+    {state.entry && authorization && !replaced && state.gateway!=='UNCONFIGURED' && <details className="panel operation-section">
       <summary>Regra anterior da LP</summary>
       <p>Cópia {authorization.copy_origin}{authorization.copy_pathname}</p>
       <p>Destino {state.entry.approved_destination}</p>

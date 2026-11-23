@@ -55,11 +55,6 @@ const layerLabels: Record<string, string> = {
   bootstrap: 'Bootstrap', core: 'Core', fallback: 'Fallback',
   html_canary: 'Canário HTML', css_canary: 'Canário CSS',
 };
-const installGuides = {
-  HTML: 'Cole o trecho HTML na página oficial. Adicione o CSS aos estilos e aplique a classe anticlone-canary a um elemento existente.',
-  'React / Vite': 'Inclua o trecho HTML no arquivo HTML de entrada. Adicione o CSS aos estilos globais e aplique a classe anticlone-canary via className. Confira o resultado no build publicado.',
-  WordPress: 'Use um recurso autorizado do site para inserir o HTML e o CSS. Aplique a classe anticlone-canary a um bloco existente e, se houver cache, confira a versão publicada.',
-} as const;
 const utcDate = new Intl.DateTimeFormat('pt-BR', {dateStyle: 'short', timeStyle: 'short'});
 
 function date(value: string) {
@@ -117,7 +112,7 @@ export function Installation({api, project, page, context, setGuard}: {
   const officialUrl = page.urls.length === 1 ? page.urls[0].origin + page.urls[0].pathname : null;
   const guide = placements[technology];
   const snippetLines = data?.snippets?.html.split('\n');
-  const head = snippetLines?.filter(line => line.startsWith('<script ')).join('\n');
+  const head = snippetLines?.filter(line => line.startsWith('<link ') || line.startsWith('<script ')).join('\n');
   const body = snippetLines?.find(line => line.startsWith('<img '));
 
   async function execute(action: Action) {

@@ -1,4 +1,5 @@
-import {copyPath,recordCopyDecision,redirectVisit,rememberCopyContext} from './page-copy-contexts.js';
+import {copyCtaDecision, ctaPointKey, rememberCopyCtas, validateCopyCtaInventory} from './copy-cta-rules.js';
+import {validCopyPath,recordCopyDecision,redirectVisit,rememberCopyContext} from './page-copy-contexts.js';
 import { copyRedirectAdmission } from './page-redirect-rules.js';
 import { operationalAuthorization } from './operational-authorization.js';
 import { issueEntryReceipt, issueObservedReceipt } from './observed-receipts.js';
@@ -64,7 +65,7 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>, collect
           };
           const fallback = () => respond({action:'OBSERVE_ONLY'});
           if (Object.keys(fields).sort().join(',')!=='pathname,session,signals' || typeof fields.pathname!=='string' ||
-              !copyPath.test(fields.pathname) || typeof fields.session!=='string' || !redirectVisit.test(fields.session)) { fallback(); return; }
+              !validCopyPath(fields.pathname) || typeof fields.session!=='string' || !redirectVisit.test(fields.session)) { fallback(); return; }
           if (endpoint==='entry-decision') {
             const marker = /;\s*ac-visit=([a-f0-9]{32})(?=;|$)/.exec(req.headers['content-type'] ?? '');
             visit=marker?.[1] ?? null;
@@ -107,12 +108,14 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>, collect
             if (!copyRule) reason='PAGE_INACTIVE';
             fallback(); return;
           }
-          const approval=await currentApproval(client,context.project,context.page);
-          if (!approval) { if (!copyRule && operational) reason='APPROVAL_REQUIRED'; fallback(); return; }
           const original=context.urls[0];
-          const authorization=operational ? await operationalAuthorization(client,context.project,context.page,origin,fields.pathname) : null;
+          const approval=await currentApproval(client,context.project,context.page);
+          const scopedCta=operational ? await copyCtaDecision(client,{...context,origin,pathname:fields.pathname},fields.session,traffic.trafficClass) : null;
+          if (!approval && !scopedCta) { if (!copyRule && operational) reason='APPROVAL_REQUIRED'; fallback(); return; }
+          const authorization=operational && approval ? await operationalAuthorization(client,context.project,context.page,origin,fields.pathname) : null;
           const official=operational ? await client.query('SELECT 1 FROM protected_page_urls WHERE origin=$1 UNION ALL SELECT 1 FROM projects WHERE origin=$1',[origin]) : null;
           const operationalContext=authorization && !official?.rowCount ? {origin,pathname:fields.pathname,original:original.origin} : null;
+          const copyContext=scopedCta && {origin,pathname:fields.pathname,original:original.origin};
           const decisionOrigin=operationalContext ? origin : fixtureOrigin;
           const evidence={source:'browser' as const,reliability:'uncorroborated' as const,trafficClass:traffic.trafficClass,kind:traffic.evidence};
           const controlled=fixtureIds.some(id=>id.toLowerCase()===match[1].toLowerCase()) && origin===fixtureOrigin && ['localhost','127.0.0.1'].includes(new URL(original.origin).hostname) && origin!==original.origin;
@@ -127,13 +130,15 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>, collect
             const issueReceipt = eligible.action==='PAGE_REDIRECT' ? issueEntryReceipt : issueObservedReceipt;
             const result=await issueReceipt(db,context.project,context.page,origin,fields.session,traffic.trafficClass,withAttribution(eligible,context.project,context.page,original.origin));
             scheduleOperatorShadow(db,context.project,context.page,new URL(origin).hostname,fields.session as string,traffic.trafficClass,receivedAt);
-            respond(operationalContext && result.action!=='OBSERVE_ONLY' ? {...result,operationalContext} : result);
+            const approvedContext=operationalContext ?? copyContext;
+            if (result.action==='REPLACE_CONVERSION') reason='CTA_SELECTED';
+            respond(approvedContext && result.action!=='OBSERVE_ONLY' ? {...result,operationalContext:approvedContext} : result);
           };
-          if (!controlled && !operationalContext) {
+          if (!controlled && !operationalContext && !scopedCta) {
             if (!copyRule && operational) reason='CONTEXT_EXCLUDED';
             await finish({action:'OBSERVE_ONLY'}); return;
           }
-          if (endpoint==='entry-decision' && !copyRule && approval.entryVersion!==null) {
+          if ((controlled || operationalContext) && endpoint==='entry-decision' && !copyRule && approval && approval.entryVersion!==null) {
             const result=await client.query(`SELECT v.version,v.enabled,v.approved_destination,v.allocation,to_jsonb(v)->'stealth' AS stealth,to_jsonb(v)->'stealth_version' AS stealth_version FROM page_entry_policy_bindings b JOIN protection_policy_versions v ON v.project_id=b.project_id AND v.version=b.version WHERE b.project_id=$1 AND b.page_id=$2`,[context.project,context.page]);
             const policy=result.rows[0];
             const evaluated=evaluateEntryPolicy(policy,original.origin,origin,decisionOrigin,assessment?.level ?? 'UNCERTAIN',
@@ -142,17 +147,34 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>, collect
             reason=evaluated.decision.action==='PAGE_REDIRECT' ? 'LEGACY_RULE' : evaluated.reason;
             if (evaluated.decision.action==='PAGE_REDIRECT') { await finish(evaluated.decision); return; }
           }
-          const result=await ctaDecision(db,context.project,original.origin,origin,decisionOrigin,assessment?.level ?? 'UNCERTAIN',fields.session,traffic.trafficClass,original.pathname,fields.pathname,context.page,client,assessment);
+          const legacy:Awaited<ReturnType<typeof ctaDecision>>=(controlled || operationalContext) ? await ctaDecision(db,context.project,original.origin,origin,decisionOrigin,assessment?.level ?? 'UNCERTAIN',fields.session,traffic.trafficClass,original.pathname,fields.pathname,context.page,client,assessment) : {action:'OBSERVE_ONLY'};
+          let result=legacy;
+          if (scopedCta) {
+            const supportingRuntime=/;\s*ac-cta=1(?=;|$)/.test(req.headers['content-type'] ?? '');
+            const untouched=(legacy.mappings ?? [])
+              .filter(point=>!scopedCta.replaced.has(ctaPointKey(point.marker,point.surface ?? '')))
+              .map(point=>scopedCta.replaced.has(ctaPointKey(point.marker,'')) ? {...point,requiresSurface:true} : point);
+            const mappings=[...untouched,...(supportingRuntime ? scopedCta.mappings.slice(0,100-untouched.length) : [])];
+            const ctaVersion=Math.max(scopedCta.version,legacy.version ?? legacy.ctaVersion ?? 0);
+            if (mappings.length>0 && mappings.length<=100) {
+              const externalDestinations=[...new Set(mappings.filter(point=>new URL(point.destination).origin!==original.origin).map(point=>point.destination))];
+              result={action:'REPLACE_CONVERSION',version:ctaVersion,pathname:fields.pathname,original:original.origin,mappings,externalDestinations,
+                ...(legacy.action!=='REPLACE_CONVERSION' || legacy.stealthVersion===2 ? {stealthVersion:2} : {})};
+            } else result={action:'OBSERVE_ONLY',ctaVersion};
+          }
           await finish(result); return;
           } finally { if (!released) { try { await client.query('ROLLBACK'); client.release(); } catch { client.release(true); } } }
         }
         const core = endpoint === 'observe';
-        if (Object.keys(fields).sort().join(',') !== (core ? 'origin,pathname,signals' : 'origin,pathname') || typeof fields.origin !== 'string' || typeof fields.pathname !== 'string' || fields.pathname.length>1024) throw new TypeError('invalid');
+        const keys=Object.keys(fields).sort().join(',');
+        const inventory=core && keys==='ctas,origin,pathname';
+        if ((!inventory && keys !== (core ? 'origin,pathname,signals' : 'origin,pathname')) || typeof fields.origin !== 'string' || typeof fields.pathname !== 'string' || fields.pathname.length>1024) throw new TypeError('invalid');
         const origin=configuredOrigin(fields.origin);
         if (!req.headers.origin || configuredOrigin(req.headers.origin)!==origin) throw new TypeError('invalid');
         const url=new URL(origin+fields.pathname);
         if (url.origin!==origin || url.pathname!==fields.pathname || url.search || url.hash || !fields.pathname.startsWith('/')) throw new TypeError('invalid');
-        if (core) classifyTraffic(fields.signals,origin);
+        if (core && !inventory) classifyTraffic(fields.signals,origin);
+        const points=inventory ? validateCopyCtaInventory(fields.ctas) : null;
         const client=await db.connect();
         let context:Awaited<ReturnType<typeof resolvePageContext>>=null;
         try {
@@ -161,6 +183,16 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>, collect
           if (!context) { res.writeHead(404).end(); return; }
           if (!await operationallyEligible(client,context.project,context.page,true)) { res.writeHead(204).end(); return; }
           const authorized=context.urls.some(value => value.origin===origin && value.pathname===url.pathname);
+          if (points) {
+            if (!authorized && origin.startsWith('https:') && validCopyPath(url.pathname)) {
+              const scope={...context,origin,pathname:url.pathname};
+              await client.query("SET LOCAL statement_timeout='200ms'");
+              await rememberCopyCtas(client,scope,points);
+              await client.query('COMMIT');
+            }
+            res.writeHead(204).end();
+            return;
+          }
           const result=await observe(db,context.project,authorized ? [origin] : [],origin,core ? 'core' : 'fallback',core ? fields.signals : undefined);
           receiveRuntimeReceipt(db,context,endpoint,core?'core':'fallback',new URL(origin).hostname,receiptAliases.get(req));
           if (authorized) await collect(context.project,context.page,origin,core ? 'core':'fallback');

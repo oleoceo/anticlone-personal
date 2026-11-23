@@ -1,7 +1,10 @@
 import type { Pool, PoolClient } from 'pg';
 import { configuredOrigin } from './detection.js';
 
-export const copyPath = /^\/[a-zA-Z0-9/_-]{0,200}$/;
+export function validCopyPath(pathname:string) {
+  if (!pathname.startsWith('/') || pathname.length>1024 || /[\s\\?#]/u.test(pathname)) return false;
+  return new URL('https://copy.test'+pathname).pathname===pathname;
+}
 export const redirectVisit = /^[a-f0-9]{32}$/;
 const browserPhases = new Set(['TIMEOUT','LATE_REDIRECT','REDIRECT_HANDOFF','PAGE_LEFT','OBSERVE_ONLY','REPLACE_CONVERSION',
   'CONTEXT_CHANGED','INVALID_REDIRECT','RUNTIME_ERROR','INTERACTION']);
@@ -14,7 +17,7 @@ export async function copyContextsInstalled(db: Pick<Pool,'query'>) {
 }
 
 export async function rememberCopyContext(db: Pool, scope: Scope) {
-  if (!scope.origin.startsWith('https://') || !copyPath.test(scope.pathname)) return;
+  if (!scope.origin.startsWith('https://') || !validCopyPath(scope.pathname)) return;
   const client=await db.connect().catch(()=>null);
   if (!client) return;
   try {
@@ -74,7 +77,7 @@ export async function recordCopyDecision(db: Pool, scope: Scope, entry: {
 
 export async function recordCopyBrowserOutcome(db: Pool, scope: Context, claimedOrigin: string, fields: Record<string,unknown>) {
   if (Object.keys(fields).sort().join(',')!=='elapsed,pathname,phase,visit' || typeof fields.pathname!=='string' ||
-      !copyPath.test(fields.pathname) || typeof fields.visit!=='string' || !redirectVisit.test(fields.visit) ||
+      !validCopyPath(fields.pathname) || typeof fields.visit!=='string' || !redirectVisit.test(fields.visit) ||
       typeof fields.phase!=='string' || !browserPhases.has(fields.phase) || typeof fields.elapsed!=='number' ||
       !Number.isInteger(fields.elapsed) || fields.elapsed<0 || fields.elapsed>60000) throw new TypeError('invalid runtime outcome');
   if (!await copyContextsInstalled(db)) return;

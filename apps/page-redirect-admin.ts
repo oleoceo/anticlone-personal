@@ -1,5 +1,6 @@
+import {copyCtaAdmin,listCtaRuleCopies} from './copy-cta-rules.js';
 import {copyContextsInstalled} from './page-copy-contexts.js';
-import { randomUUID } from 'node:crypto';
+import { normalizeHttpsAddress } from './https-address.js';
 import { request } from 'node:https';
 import type { Pool, PoolClient } from 'pg';
 import { assertPageAdministrativeWrite, assertProjectAdministrativeWrite } from './admin-project-write.js';
@@ -32,7 +33,7 @@ async function probeGateway(origin: string | undefined, minimumContract = 0): Pr
       res.on('end',()=>{
         try {
           const health=JSON.parse(body);
-          if (res.statusCode!==200 || health.status!=='ready' || (minimumContract && ![2,3].some(version=>String(version)===res.headers['x-anticlone-redirect-contract'] && version>=minimumContract))) return resolve('UNREACHABLE');
+          if (res.statusCode!==200 || health.status!=='ready' || (minimumContract && ![2,3,4].some(version=>String(version)===res.headers['x-anticlone-redirect-contract'] && version>=minimumContract))) return resolve('UNREACHABLE');
           resolve(health.mode==='OPERATIONAL' && health.action==='SCOPED_AUTHORIZATION_REQUIRED' ? 'OPERATIONAL' :
             ['LAB','PILOT_OBSERVE'].includes(health.mode) && health.action==='OBSERVE_ONLY' ? 'OBSERVATION_ONLY' : 'UNREACHABLE');
         } catch { resolve('UNREACHABLE'); }
@@ -65,27 +66,12 @@ async function readScope(client: PoolClient, project: string, page: string, gate
   const issue=!schema.ready ? 'REDIRECT_SCHEMA_REQUIRED' : !row.enabled || row.page_state!=='ACTIVE' || row.project_state!=='ACTIVE' ? 'LP_INACTIVE' :
     urls.length!==1 ? 'LP_URL_REQUIRED' : !distribution ? 'RUNTIME_NOT_PUBLISHED' :
     gatewayOrigin && new URL(distribution.bases.TELEMETRY).origin!==gatewayOrigin ? 'TELEMETRY_MISMATCH' :
-    ctaVersions.length && (!approval || !readyContext || !authorization) ? 'CTA_REVIEW_REQUIRED' : null;
+    null;
   const entryIssue=!entry?.enabled ? null : entry.stealth_version!==2 ? 'LEGACY_STEALTH' :
     Object.values(entry.allocation).every(percent=>percent===0) ? 'ZERO_ALLOCATION' :
     readyContext && new URL(entry.approved_destination).origin===authorization.copy_origin ? 'DESTINATION_ON_COPY' :
     readyContext && await isOfficialOrigin(client,authorization.copy_origin) ? 'OFFICIAL_COPY_ORIGIN' : null;
   return {row,urls,authorization,entry,ctaVersions,approval,readyContext:Boolean(readyContext),issue,entryIssue};
-}
-
-const pendingReviews = new Map<string,{project:string;page:string;draft:Record<string,unknown>;expiresAt:number}>();
-
-function prepareCopyReview(project: string, page: string, data: Record<string,unknown>) {
-  const keys=Object.keys(data).sort().join(',');
-  if (keys!=='action,configGeneration,copyOrigin,copyPathname,defaultRevision,page,policy,project,revision,urlGeneration') {
-    throw new TypeError('invalid copy review');
-  }
-  const now=Date.now();
-  for (const [id,review] of pendingReviews) if (review.expiresAt<=now) pendingReviews.delete(id);
-  if (pendingReviews.size>=100) throw new RedirectRuleConflict('COPY_REVIEW_BUSY');
-  const reviewId=randomUUID();
-  pendingReviews.set(reviewId,{project,page,draft:{...data,action:'save-copy',acknowledged:true},expiresAt:now+5*60_000});
-  return {reviewId};
 }
 
 export async function pageRedirectAdmin(db: Pool, input: unknown, env=process.env, checkGateway=probeGateway) {
@@ -98,16 +84,30 @@ export async function pageRedirectAdmin(db: Pool, input: unknown, env=process.en
     return {available:catalog.rows[0].ready as boolean,projectDefault:catalog.rows[0].ready ? await projectDestination(db,project) : null};
   }
   const gatewayOrigin=env.ADMIN_OPERATIONAL_GATEWAY_ORIGIN;
+  if (action==='inspect-cta' || action==='confirm-cta' || action==='disable-cta') {
+    if (action==='inspect-cta') {
+      const [inventory,ctaGateway]=await Promise.all([copyCtaAdmin(db,data,gatewayOrigin),checkGateway(gatewayOrigin,4)]);
+      return {...inventory,ctaGateway};
+    }
+    if (action==='confirm-cta' && await checkGateway(gatewayOrigin,4)!=='OPERATIONAL') {
+      throw new RedirectRuleConflict('REDIRECT_GATEWAY_UNAVAILABLE');
+    }
+    return copyCtaAdmin(db,data,gatewayOrigin);
+  }
   if (action==='save-default' && page===undefined) return saveRedirectRule(db,project,null,data,gatewayOrigin);
   if (typeof page!=='string' || !/^[a-f0-9-]{36}$/i.test(page)) throw new TypeError('invalid page scope');
-  if (action==='review-copy') return prepareCopyReview(project,page,data);
   if (action==='confirm-copy') {
-    if (Object.keys(data).sort().join(',')!=='action,page,project,reviewId' || typeof data.reviewId!=='string') throw new TypeError('invalid confirmation');
-    const review=pendingReviews.get(data.reviewId);
-    if (!review || review.expiresAt<=Date.now() || review.project!==project || review.page!==page) throw new RedirectRuleConflict('COPY_REVIEW_EXPIRED');
-    pendingReviews.delete(data.reviewId);
+    if (Object.keys(data).sort().join(',')!=='action,allocation,configGeneration,copyUrl,destination,page,project,revision,urlGeneration') {
+      throw new TypeError('invalid confirmation');
+    }
+    const copy = new URL(normalizeHttpsAddress(data.copyUrl));
+    if (copy.search || copy.hash) throw new TypeError('copy URL must match an observed page');
     if (await checkGateway(gatewayOrigin,3)!=='OPERATIONAL') throw new RedirectRuleConflict('REDIRECT_GATEWAY_UNAVAILABLE');
-    return saveRedirectRule(db,project,page,review.draft,gatewayOrigin,true);
+    return saveRedirectRule(db,project,page,{
+      action:'confirm-copy', project, page, copyOrigin:copy.origin, copyPathname:copy.pathname,
+      revision:data.revision, urlGeneration:data.urlGeneration, configGeneration:data.configGeneration,
+      destination:data.destination, allocation:data.allocation,
+    },gatewayOrigin);
   }
   if (action==='save-default' || action==='save-copy' || action==='disable-copy') {
     if (action==='save-copy') {
@@ -130,8 +130,9 @@ export async function pageRedirectAdmin(db: Pool, input: unknown, env=process.en
       await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
       const scope=await readScope(client,project,page,gatewayOrigin);
       const rules=await redirectRuleSettings(client,project,page);
+      const ctaRuleCopies=await listCtaRuleCopies(client,project,page);
       await client.query('COMMIT');
-      return {gateway,rules,rulesGateway,issue:scope.issue,entryIssue:scope.entryIssue,entry:scope.entry,approvalId:scope.approval?.id ?? null,
+      return {gateway,rules,ctaRuleCopies,rulesGateway,issue:scope.issue,entryIssue:scope.entryIssue,entry:scope.entry,approvalId:scope.approval?.id ?? null,
         authorization:scope.authorization ?? null,active:gateway==='OPERATIONAL' && !scope.issue && !scope.entryIssue && scope.readyContext && scope.entry?.enabled===true,
         urlGeneration:scope.row.url_generation,configGeneration:scope.row.config_generation};
     }
@@ -154,6 +155,7 @@ export async function pageRedirectAdmin(db: Pool, input: unknown, env=process.en
     let copy: Pick<AuthorizationRow,'copy_origin'|'copy_pathname'> | undefined;
     if (action==='activate') {
       if (scope.issue) throw new PageConflict(scope.issue);
+      if (scope.ctaVersions.length && !scope.readyContext) throw new PageConflict('CTA_REVIEW_REQUIRED');
       copy=await validateOperationalCopy(client,data.copyOrigin,data.copyPathname,data.acknowledged);
       if (scope.ctaVersions.length && (copy.copy_origin!==scope.authorization?.copy_origin ||
           copy.copy_pathname!==scope.authorization?.copy_pathname)) throw new PageConflict('CTA context would change');

@@ -36,9 +36,9 @@ async function until(check:()=>Promise<boolean>, message: string) {
 }
 
 const browserHost='gateway.test';
-const hostRules='--host-resolver-rules=MAP gateway.test 127.0.0.1, MAP original.test 127.0.0.1, MAP copy.test 127.0.0.1, MAP destination-a.test 127.0.0.1, MAP destination-b.test 127.0.0.1, MAP fresh-copy.test 127.0.0.1';
+const hostRules='--host-resolver-rules=MAP gateway.test 127.0.0.1, MAP original.test 127.0.0.1, MAP destination-a.test 127.0.0.1, MAP destination-b.test 127.0.0.1, MAP fresh-copy.test 127.0.0.1';
 
-test('detected copies: authenticated review, two HTTPS destinations, navigation and 150 ms diagnostics in Chromium', {timeout:140000}, async()=>{
+test('authenticated copy rules, native CTA restoration, 150 ms browser navigation and automatic SMTP', {timeout:140000}, async()=>{
   assert.ok(process.env.TEST_DATABASE_URL);
   const schema='redirect_journey_'+randomUUID().replaceAll('-','');
   const root=new Pool({connectionString:process.env.TEST_DATABASE_URL});
@@ -62,7 +62,7 @@ test('detected copies: authenticated review, two HTTPS destinations, navigation 
       await db.query((await readFile('infra/'+file,'utf8')).replace(/^\uFEFF/,''));
     }
     execFileSync('openssl',['req','-x509','-newkey','rsa:2048','-nodes','-keyout',join(dir,'key'),'-out',join(dir,'cert'),'-days','1','-subj','/CN=gateway.test',
-      '-addext','subjectAltName=DNS:gateway.test,DNS:original.test,DNS:copy.test,DNS:destination-a.test,DNS:destination-b.test,DNS:fresh-copy.test,DNS:localhost'],{stdio:'ignore'});
+      '-addext','subjectAltName=DNS:gateway.test,DNS:original.test,DNS:lp-clone-tawny.vercel.app,DNS:destination-a.test,DNS:destination-b.test,DNS:fresh-copy.test,DNS:localhost'],{stdio:'ignore'});
     const tls={key:await readFile(join(dir,'key')),cert:await readFile(join(dir,'cert'))};
     smtp=new SMTPServer({secure:true,...tls,
       onAuth(auth,_session,done){
@@ -102,7 +102,7 @@ test('detected copies: authenticated review, two HTTPS destinations, navigation 
       const probe=httpsRequest({hostname:'127.0.0.1',port:proxyPort,servername:browserHost,ca:tls.cert,path:'/healthz'},reply=>{
         let body='';reply.on('data',chunk=>body+=String(chunk));
         reply.on('end',()=>{
-          try {resolve(JSON.parse(body).mode==='OPERATIONAL' && reply.headers['x-anticlone-redirect-contract']==='3');}
+          try {resolve(JSON.parse(body).mode==='OPERATIONAL' && reply.headers['x-anticlone-redirect-contract']==='4');}
           catch {resolve(false);}
         });
       });
@@ -120,10 +120,11 @@ test('detected copies: authenticated review, two HTTPS destinations, navigation 
       }
       const site=req.headers.host??'';
       res.writeHead(200,{'content-type':'text/html; charset=utf-8'}).end(site.startsWith('destination-')
-        ? '<h1>Destino da homologação isolada</h1>' : req.url==='/frozen' ? frozenHtml : html);
+        ? '<h1>Destino da homologação isolada</h1>' : req.url==='/frozen' ? frozenHtml : req.url==='/' || req.url==='/lp' ? html :
+          '<h1>Destino nativo controlado</h1>');
     });
     const sitePort=await listen(sites);
-    const original='https://original.test:'+sitePort, copy='https://copy.test:'+sitePort;
+    const original='https://original.test:'+sitePort, copy='https://lp-clone-tawny.vercel.app';
     const destinationA='https://destination-a.test:'+sitePort+'/oferta';
     const destinationB='https://destination-b.test:'+sitePort+'/ponto';
     const project='redirect-acceptance';
@@ -135,7 +136,19 @@ test('detected copies: authenticated review, two HTTPS destinations, navigation 
     assert.ok(published.distribution?.paths && published.snippets);
     const entry=published.distribution.bases.TELEMETRY+published.distribution.paths['entry-decision'];
     const runtime=published.distribution.bases.SCRIPT+published.distribution.paths['runtime.js'];
-    html=landingPage.replace('<!-- ANTICLONE_INSTALLATION -->',published.snippets.html);
+    html=landingPage.replace('<!-- ANTICLONE_INSTALLATION -->',published.snippets.html).replace('</body>', `
+      <div data-anticlone-surface="checkout"><a href="/native-checkout" data-anticlone-point="checkout-main" target="_blank" rel="noopener">Checkout de teste</a></div>
+      <script>
+        setTimeout(() => {
+          const button = document.createElement('a');
+          button.setAttribute('data-anticlone-point','whatsapp-cta');
+          button.href = '/native-whatsapp?test=1';
+          button.target = '_blank';
+          button.rel = 'noopener';
+          button.textContent = 'WhatsApp de teste';
+          document.body.append(button);
+        }, 450);
+      </script></body>`);
     frozenHtml=html.replace(runtime,'/local/a.js');
     frozenBootstrap=execFileSync('git',['show','87b6d30f62f7b7486f0a7b53ac3851652cd1450e:runtime/bootstrap.js'],{encoding:'utf8'})
       .replace('const distribution = null;',()=>`const distribution = ${JSON.stringify(published.distribution)};`);
@@ -147,7 +160,7 @@ test('detected copies: authenticated review, two HTTPS destinations, navigation 
     launch('admin-server.js',{...privateEnv,...smtpEnv,ADMIN_PORT:String(adminPort),RUNTIME_PUBLIC_ORIGIN:gateway,ADMIN_OPERATIONAL_GATEWAY_ORIGIN:gateway,
       ADMIN_TOTP_SECRET:secret,ADMIN_PASSWORD_RECORD:`scrypt$${salt}$${scryptSync(password,Buffer.from(salt,'hex'),64).toString('hex')}`});
     await until(async()=>{try{return (await fetch(adminOrigin+'/admin/ui/novo/')).ok;}catch{return false;}},'authenticated panel fixture');
-    browser=await chromium.launch({args:['--no-proxy-server',hostRules,`--ignore-certificate-errors-spki-list=${pin}`]});
+    browser=await chromium.launch({args:['--no-proxy-server',hostRules+', MAP lp-clone-tawny.vercel.app 127.0.0.1:'+sitePort,`--ignore-certificate-errors-spki-list=${pin}`]});
     const panelContext=await browser.newContext();
     const panel=await panelContext.newPage();
     const projectPath=adminOrigin+'/admin/ui/novo/projetos/'+project;
@@ -165,21 +178,36 @@ test('detected copies: authenticated review, two HTTPS destinations, navigation 
       await review.getByRole('button',{name:'Confirmar',exact:true}).click();
       await panel.getByText(success,{exact:true}).waitFor();
     };
-    await panel.getByLabel('Para onde redirecionar os visitantes').fill(destinationA);
-    await confirm('Revisar destino padrão','Confirmar destino padrão','Destino padrão salvo.');
     const discover=await browser.newContext({userAgent:'AntiCloneFixture-2'});
     await discover.grantPermissions(['local-network-access'],{origin:copy});
     const discovery=await discover.newPage();
-    await discovery.goto(copy+'/lp');
+    await discovery.goto(copy+'/');
     await until(async()=> (await db.query('SELECT count(*)::int n FROM page_copy_contexts WHERE page_id=$1',[pageId])).rows[0].n===1,'observed copy context');
-    const incident=(await db.query('SELECT id FROM incidents WHERE project_id=$1 AND host=$2',[project,'copy.test'])).rows[0];
+    const incident=(await db.query('SELECT id FROM incidents WHERE project_id=$1 AND host=$2',[project,'lp-clone-tawny.vercel.app'])).rows[0];
     await panel.goto(projectPath+'/incidentes/'+incident.id+'/redirecionar?lp='+pageId);
-    const selectCopy=panel.getByLabel('Cópia identificada');
+    const selectCopy=panel.getByLabel('Página clonada');
     await selectCopy.waitFor();
-    assert.equal(await selectCopy.inputValue(),copy+'/lp');
+    assert.equal(await selectCopy.inputValue(),copy+'/');
+    const destinationField=panel.getByLabel('Redirecionar para',{exact:true});
+    const saveRedirect=async(input:string, normalized:string)=>{
+      await destinationField.fill(input);
+      await panel.getByRole('button',{name:'CONFIRMO REDIRECIONAMENTO',exact:true}).click();
+      await panel.getByText('Regra salva e habilitada.',{exact:true}).waitFor();
+      assert.equal(await destinationField.inputValue(),normalized);
+      assert.equal(await panel.locator('form input[type=checkbox]').filter({visible:true}).count(),0);
+      assert.equal(await panel.locator('form').getByText(normalized,{exact:true}).count(),1);
+      await panel.reload();
+      await destinationField.waitFor();
+      assert.equal(await destinationField.inputValue(),normalized);
+    };
     await panel.getByLabel('Direto ou desconhecido',{exact:true}).fill('100');
-    assert.equal(await panel.locator('form input[name="assent"]').filter({visible:true}).count(),0);
-    await confirm('Revisar e ativar','Revisar redirecionamento da cópia','Regra salva e habilitada.');
+    await panel.getByLabel('Orgânico',{exact:true}).fill('30');
+    await saveRedirect('google.com.br','https://google.com.br/');
+    assert.equal(await panel.getByLabel('Orgânico',{exact:true}).inputValue(),'30');
+    await saveRedirect('google.com.br/oferta?ref=123','https://google.com.br/oferta?ref=123');
+    await saveRedirect('https://exemplo.com','https://exemplo.com/');
+    await panel.getByRole('button',{name:'Aplicar 100% a todas'}).click();
+    await saveRedirect(destinationA.replace('https://',''),destinationA);
     await panel.getByText('Regra habilitada e elegível',{exact:true}).waitFor();
     const browserReport=async(path:string,phase:string[],visit:string|null)=>db.query(`SELECT browser_phase,elapsed_ms FROM page_copy_contexts
       WHERE page_id=$1 AND copy_pathname=$2 AND gateway_visit=browser_visit AND browser_phase=ANY($3) AND browser_visit=$4`,[pageId,path,phase,visit]);
@@ -200,7 +228,10 @@ test('detected copies: authenticated review, two HTTPS destinations, navigation 
       try { await visitor.waitForURL(target,{waitUntil:'commit',timeout:1500}); }
       catch {
         assert.equal(visitor.url(),path);
-        console.log('REDIRECT_BROWSER',JSON.stringify({path,decisionHttp:reply.request().timing().responseEnd,final:visitor.url(),outcome:'fail-open'}));
+        const decision=await reply.json();
+        assert.equal(decision.action,action);
+        const browserState=(await db.query('SELECT browser_phase,elapsed_ms,gateway_reason FROM page_copy_contexts WHERE browser_visit=$1',[visit])).rows[0];
+        console.log('REDIRECT_BROWSER',JSON.stringify({path,decisionHttp:reply.request().timing().responseEnd,server:await reply.headerValue('server-timing'),browserState,final:visitor.url(),outcome:'fail-open'}));
         return {reached:false,visit};
       }
       console.log('REDIRECT_BROWSER',JSON.stringify({path,decisionHttp:reply.request().timing().responseEnd,final:visitor.url(),navigationMs:Math.round(performance.now()-started)}));
@@ -226,16 +257,16 @@ test('detected copies: authenticated review, two HTTPS destinations, navigation 
       await context.grantPermissions(['local-network-access'],{origin:copy});
       await context.grantPermissions(['local-network-access'],{origin:original});
       const visitor=await context.newPage();
-      await follow(visitor,copy+'/lp',destinationA);
+      await follow(visitor,copy+'/',destinationA);
       const owned=await context.newPage();
       await scenario(owned,original+'/lp',original+'/lp','OBSERVE_ONLY',false);
       await owned.close();
       delays={entry:true,core:false};
-      const late=await scenario(visitor,copy+'/lp',copy+'/lp','PAGE_REDIRECT',false);
-      await until(async()=>!!(await browserReport('/lp',['LATE_REDIRECT'],late.visit)).rowCount,'late browser report');
-      assert.ok((await browserReport('/lp',['LATE_REDIRECT'],late.visit)).rows[0].elapsed_ms>=150);
+      const late=await scenario(visitor,copy+'/',copy+'/','PAGE_REDIRECT',false);
+      await until(async()=>!!(await browserReport('/',['LATE_REDIRECT'],late.visit)).rowCount,'late browser report');
+      assert.ok((await browserReport('/',['LATE_REDIRECT'],late.visit)).rows[0].elapsed_ms>=150);
       await visitor.getByText('Link nativo').click();
-      await visitor.waitForURL(copy+'/lp#native');
+      await visitor.waitForURL(copy+'/#native');
       delays={entry:false,core:false};
     }
     await panel.getByRole('button',{name:'Atualizar situação',exact:true}).click();
@@ -243,17 +274,15 @@ test('detected copies: authenticated review, two HTTPS destinations, navigation 
     delays={entry:false,core:false,error:true};
     const unavailable=contexts[0].pages()[0];
     const failure=unavailable.waitForResponse(response=>response.url()===entry);
-    await unavailable.goto(copy+'/lp');
+    await unavailable.goto(copy+'/');
     assert.equal((await failure).status(),503);
-    await until(async()=> (await db.query("SELECT 1 FROM page_copy_contexts WHERE page_id=$1 AND copy_pathname='/lp' AND browser_phase='RUNTIME_ERROR'",[pageId])).rowCount===1,'browser runtime error recorded');
-    assert.equal(unavailable.url(),copy+'/lp');
+    await until(async()=> (await db.query("SELECT 1 FROM page_copy_contexts WHERE page_id=$1 AND copy_pathname='/' AND browser_phase='RUNTIME_ERROR'",[pageId])).rowCount===1,'browser runtime error recorded');
+    assert.equal(unavailable.url(),copy+'/');
     await panel.getByRole('button',{name:'Atualizar situação',exact:true}).click();
     await panel.getByText('O runtime relatou falha',{exact:false}).waitFor();
     delays={entry:false,core:false};
-    await panel.getByLabel('Destino desta regra').selectOption('specific');
-    await panel.getByLabel('Para onde redirecionar os visitantes').fill(destinationB);
-    await confirm('Revisar alterações','Revisar redirecionamento da cópia','Regra salva e habilitada.');
-    await follow(contexts[0].pages()[0],copy+'/lp',destinationB);
+    await saveRedirect(destinationB,destinationB);
+    await follow(contexts[0].pages()[0],copy+'/',destinationB);
     await panel.getByRole('button',{name:'Atualizar situação',exact:true}).click();
     await panel.getByText(/PAGE_REDIRECT recebido.*navegação/).waitFor();
     await discovery.goto(copy+'/frozen');
@@ -262,21 +291,64 @@ test('detected copies: authenticated review, two HTTPS destinations, navigation 
     await panel.goto(protect);
     await selectCopy.selectOption(copy+'/frozen');
     await panel.getByLabel('Direto ou desconhecido',{exact:true}).fill('100');
-    await confirm('Revisar e ativar','Revisar redirecionamento da cópia','Regra salva e habilitada.');
+    await destinationField.fill(destinationA);
+    await panel.getByRole('button',{name:'CONFIRMO REDIRECIONAMENTO',exact:true}).click();
+    await panel.getByText('Regra salva e habilitada.',{exact:true}).waitFor();
     delays={entry:false,core:true};
     await scenario(contexts[0].pages()[0],copy+'/frozen',copy+'/frozen','PAGE_REDIRECT',false);
     await panel.getByRole('button',{name:'Atualizar situação',exact:true}).click();
     await panel.getByText('O pedido veio sem o marcador do runtime atual.',{exact:false}).waitFor();
-    await selectCopy.selectOption(copy+'/lp');
+    await selectCopy.selectOption(copy+'/');
     await confirm('Desativar regra','Desativar redirecionamento da cópia','Regra desativada.');
     delays={entry:false,core:false};
-    await scenario(contexts[1].pages()[0],copy+'/lp',copy+'/lp','OBSERVE_ONLY',false);
-    assert.equal((await db.query("SELECT count(*)::int n FROM administrative_change_audit WHERE relation_name='page_redirect_rules'")).rows[0].n,4);
+    await scenario(contexts[1].pages()[0],copy+'/',copy+'/','OBSERVE_ONLY',false);
+    assert.equal((await db.query("SELECT count(*)::int n FROM administrative_change_audit WHERE relation_name='page_redirect_rules'")).rows[0].n,7);
     assert.ok(processes[0].pid && processes[0].exitCode===null,'edited destination was applied without restarting the gateway');
+
+    await until(async()=> (await db.query(`SELECT 1 FROM copy_cta_inventory WHERE page_id=$1 AND copy_pathname='/' AND jsonb_array_length(points)=2`,[pageId])).rowCount===1,
+      'static and dynamic CTA inventory');
+    await panel.goto(projectPath+'/incidentes/'+incident.id+'/substituir-cta?lp='+pageId);
+    await panel.getByLabel('Página clonada').selectOption(copy+'/');
+    await panel.getByLabel('CTA identificado').selectOption('checkout:checkout-main');
+    const saveCta=async (label:string, destination:string, percent:string)=>{
+      await panel.getByLabel('Novo destino do CTA').fill(destination);
+      await panel.getByLabel('Percentual do CTA').fill(percent);
+      await panel.getByRole('button',{name:label,exact:true}).click();
+      await panel.getByRole('dialog',{name:'Confirmar substituição de CTA'}).getByRole('button',{name:'Confirmo substituição de CTA'}).click();
+      await panel.getByText('Regra de CTA salva e habilitada.',{exact:true}).waitFor();
+    };
+    await saveCta('Ativar regra de CTA',destinationA.replace('https://',''), '100');
+    await panel.getByLabel('CTA identificado').selectOption(':whatsapp-cta');
+    await saveCta('Ativar regra de CTA',destinationB+'?channel=whatsapp','100');
+    const clickCtas=async(visitor:Page, checkout:string, whatsapp:string, active:boolean)=>{
+      const received=visitor.waitForResponse(response=>response.url()===entry);
+      await visitor.goto(copy+'/');
+      const payload=await (await received).json();
+      if (active) assert.equal(payload.action,'REPLACE_CONVERSION');
+      else assert.equal(payload.action,'OBSERVE_ONLY');
+      for (const [label,url] of [['Checkout de teste',checkout],['WhatsApp de teste',whatsapp]]) {
+        const popup=visitor.context().waitForEvent('page');
+        await visitor.getByRole('link',{name:label,exact:true}).click();
+        const target=await popup;
+        await target.waitForURL(url,{waitUntil:'commit'});
+        assert.equal(target.url(),url);
+        await target.close();
+      }
+      console.log('COPY_CTA',JSON.stringify({checkout,whatsapp,action:payload.action}));
+    };
+    await clickCtas(contexts[0].pages()[0],destinationA,destinationB+'?channel=whatsapp',true);
+    await panel.getByLabel('CTA identificado').selectOption('checkout:checkout-main');
+    await saveCta('Editar regra de CTA',destinationB,'100');
+    await clickCtas(contexts[1].pages()[0],destinationB,destinationB+'?channel=whatsapp',true);
+    await confirm('Desativar regra de CTA','Desativar regra de CTA','Regra de CTA desativada.');
+    await panel.getByLabel('CTA identificado').selectOption(':whatsapp-cta');
+    await confirm('Desativar regra de CTA','Desativar regra de CTA','Regra de CTA desativada.');
+    await clickCtas(contexts[0].pages()[0],copy+'/native-checkout',copy+'/native-whatsapp?test=1',false);
+    assert.equal((await db.query("SELECT count(*)::int n FROM administrative_change_audit WHERE relation_name='copy_cta_rules'")).rows[0].n,5);
 
     // The gateway does not own the SMTP credentials or consume the outbox.
     const before=(await db.query('SELECT id,host FROM incidents WHERE project_id=$1 ORDER BY id',[project])).rows;
-    assert.deepEqual(before.map(row=>row.host),['copy.test']);
+    assert.deepEqual(before.map(row=>row.host),['lp-clone-tawny.vercel.app']);
     await panel.goto(adminOrigin+'/admin/ui/novo/configuracoes/notificacoes');
     await panel.getByRole('combobox',{name:/^Provedor/}).selectOption('smtp');
     await panel.getByLabel('Host SMTP').fill('localhost');
@@ -312,7 +384,7 @@ test('detected copies: authenticated review, two HTTPS destinations, navigation 
     await alertPage.reload();
     const outbox=(await db.query(`SELECT i.host,a.attempts,h.outcome FROM alert_outbox a JOIN incidents i ON i.id=a.incident_id
       LEFT JOIN clone_delivery_attempts h ON h.outbox_id=a.id WHERE i.project_id=$1 ORDER BY a.id`,[project])).rows;
-    assert.deepEqual(outbox,[{host:'copy.test',attempts:0,outcome:null},{host:'fresh-copy.test',attempts:1,outcome:'ACCEPTED'}]);
+    assert.deepEqual(outbox,[{host:'lp-clone-tawny.vercel.app',attempts:0,outcome:null},{host:'fresh-copy.test',attempts:1,outcome:'ACCEPTED'}]);
     assert.equal(deliveries.length,1);
     console.log('REDIRECT_SMTP',JSON.stringify({attempts:outbox,accepted:deliveries.length,separateWorker:true}));
 

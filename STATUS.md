@@ -1,11 +1,11 @@
 # STATUS — AntiClone Personal
 
-## PR #88 — aceitação do redirecionamento, SMTP e CTA
-- A regra usa origem e caminho observados, desafio de confirmação e auditoria. O padrão do projeto fica na configuração do projeto.
-- A migration 071 guarda evidência operacional limitada. O painel distingue decisão enviada, relato do navegador e chegada ainda sem confirmação.
-- Validação em Chromium isolado: dois destinos HTTPS, edição sem reinício, fail-open, SMTP TLS em uma tentativa e troca de CTA com restauração do link nativo.
-- Revisão independente identificou e conferiu a correção da corrida entre relatos e decisões. CI do candidato depende de escrita no GitHub.
-- Matriz, execução isolada e janela de deploy condicionada à autorização em [ACEITACAO-PR88.md](docs/ACEITACAO-PR88.md).
+## PR #88 — consolidação operacional
+- Redirecionamento por URL observada, destino HTTPS normalizado, percentuais por classe e confirmação direta auditada. Uma regra por cópia prevalece sobre a política antiga no mesmo contexto.
+- CTA por link identificado na cópia, com edição e suspensão. A migração 072 acrescenta inventário limitado e regras versionadas.
+- Jornada isolada Chromium desktop/mobile: início de navegação em 88–128 ms, atraso fail-open, edição sem reinício e restauração dos dois links nativos.
+- Worker isolado: um SMTP aceito em uma tentativa para incidente novo, zero tentativas no anterior e nenhuma duplicata após recargas.
+- Publicação e CI oficial pendentes de autenticação GitHub. Homologação pública pendente. [Provas e procedimento](docs/ACEITACAO-PR88.md).
 
 ## Redirecionamento e alertas na homologação Dev
 - Público OPERATIONAL via mTLS e privado PILOT_OBSERVE. A LP oficial permaneceu em sua URL no Chromium.

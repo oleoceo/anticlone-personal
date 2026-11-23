@@ -333,7 +333,7 @@ test('distribution v1: persistent revisions, admin HTML/CSS, real browser layers
     await panel.getByLabel('Endpoint de telemetria').selectOption(pooledOrigin);
     await panel.getByRole('button',{name:'Publicar endereços de instalação',exact:true}).click();
     await panel.getByRole('button',{name:'Confirmar',exact:true}).click();
-    await panel.getByRole('region',{name:'Trecho HTML'}).locator('code').filter({hasText:pooledOrigin+'/r/v2/'}).waitFor();
+    await panel.getByRole('region',{name:'Trecho HEAD'}).locator('code').filter({hasText:pooledOrigin+'/r/v2/'}).waitFor();
     const aligned=(await readDistribution(db,siblingInstallation))!;
     assert.equal(aligned.version,implicit.distribution!.version+1);
     assert.deepEqual(new Set(Object.values(aligned.bases).map(url=>new URL(url).origin)),new Set([pooledOrigin]));
@@ -343,16 +343,17 @@ test('distribution v1: persistent revisions, admin HTML/CSS, real browser layers
     await select.selectOption(pooledOrigin);
     await panel.getByRole('button',{name:'Publicar endereços de instalação',exact:true}).click();
     await panel.getByRole('button',{name:'Confirmar',exact:true}).click();
-    const snippet=panel.getByRole('region',{name:'Trecho HTML'}).locator('code');
+    const snippet=panel.getByRole('region',{name:'Trecho HEAD'}).locator('code');
     await snippet.filter({hasText:pooledOrigin}).waitFor();
     const pooled = await distributionAdmin(db,request,pooledEnv);
     assert.ok(pooled.distribution?.paths);
     assert.deepEqual(new Set(Object.values(pooled.distribution.bases).map(url=>new URL(url).origin)),new Set([pooledOrigin]));
-    assert.equal(await snippet.textContent(),pooled.snippets?.html);
+    const installedHtml=[await snippet.textContent(),await panel.getByRole('region',{name:'Trecho BODY'}).locator('code').textContent()].join('\n');
+    assert.equal(installedHtml,pooled.snippets?.html);
     const demo=process.env.TELEMETRY_DEMO_DIR;
     if (demo) {
       await mkdir(demo,{recursive:true});
-      await writeFile(join(demo,'snippet-index.html.txt'),await snippet.textContent() ?? '');
+      await writeFile(join(demo,'snippet-index.html.txt'),installedHtml);
       await panel.screenshot({path:join(demo,'instalacao.png'),fullPage:true});
     }
     const pooledBundle = await upstream.request({url:pooled.distribution.bases.SCRIPT+'a.js',method:'GET',body:''});

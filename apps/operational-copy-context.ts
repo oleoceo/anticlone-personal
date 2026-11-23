@@ -1,5 +1,5 @@
 import type { PoolClient } from 'pg';
-import { copyPath } from './page-copy-contexts.js';
+import { validCopyPath } from './page-copy-contexts.js';
 import { configuredOrigin } from './detection.js';
 
 export async function isOfficialOrigin(client: PoolClient, origin: string) {
@@ -9,7 +9,7 @@ export async function isOfficialOrigin(client: PoolClient, origin: string) {
 
 export async function validateOperationalCopy(client: PoolClient, copyOrigin: unknown, copyPathname: unknown, acknowledged: unknown) {
   if (acknowledged!==true || typeof copyOrigin!=='string' || typeof copyPathname!=='string' ||
-      !copyPath.test(copyPathname)) throw new TypeError('explicit context required');
+      !validCopyPath(copyPathname)) throw new TypeError('explicit context required');
   try {
     if (!copyOrigin.startsWith('https://') || configuredOrigin(copyOrigin)!==copyOrigin) throw new TypeError();
   } catch { throw new TypeError('HTTPS context required'); }
