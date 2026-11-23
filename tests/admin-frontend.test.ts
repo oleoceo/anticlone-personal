@@ -1258,7 +1258,7 @@ test('React provisions an original LP and copy, then real gateway applies scoped
     await panel.getByRole('link', {name: 'Redirecionar página', exact: true}).click();
     await panel.getByText('Configuração anterior da LP', {exact:true}).click();
     await panel.getByLabel('Destino da página').fill(original + '/segura');
-    await panel.getByLabel('Direto ou desconhecido').selectOption('100');
+    await panel.getByRole('combobox', {name:'Direto ou desconhecido', exact:true}).selectOption('100');
     await panel.getByLabel('Habilitar nesta versão').check();
     await confirm('Revisar publicação', 'Política publicada. Versão 1.');
     await panel.getByLabel('Versão de redirecionamento').selectOption('1');
@@ -1283,7 +1283,7 @@ test('React provisions an original LP and copy, then real gateway applies scoped
     await panel.getByRole('link', {name: 'Políticas de proteção'}).click();
     assert.equal((await panel.reload())?.status(), 200);
     await panel.getByText('Configuração anterior da LP', {exact:true}).click();
-    await panel.getByLabel('Direto ou desconhecido').selectOption('0');
+    await panel.getByRole('combobox', {name:'Direto ou desconhecido', exact:true}).selectOption('0');
     await confirm('Revisar publicação', 'Política publicada. Versão 2.');
     await panel.getByText('Selecionar versão de entrada do projeto', {exact: true}).click();
     await panel.getByLabel('Versão publicada').selectOption('1');
@@ -1295,7 +1295,7 @@ test('React provisions an original LP and copy, then real gateway applies scoped
     await panel.getByRole('link', {name: 'Substituir CTAs'}).click();
     await panel.getByLabel('Superfície de CTA').fill('landing');
     await panel.getByLabel('Habilitar nesta versão').check();
-    await panel.getByLabel('Direto ou desconhecido').selectOption('100');
+    await panel.getByRole('combobox', {name:'Direto ou desconhecido', exact:true}).selectOption('100');
     await confirm('Revisar publicação', 'Política publicada. Versão 1.');
     await panel.getByText('Cadastrar destino aprovado', {exact: true}).click();
     for (const point of candidates) {
