@@ -6,7 +6,7 @@ A Visão Geral usa o horário de recebimento no gateway, em UTC, e oferece recor
 
 O Bootstrap congela os sinais declarados no primeiro contato disponível no `sessionStorage` daquela origem e mantém o mesmo identificador ao recarregar e voltar. Uma sessão inicialmente direta que recebe `utm_medium=cpc` depois continua direta. Uma nova sessão com click ID aceito ou mídia paga declarada é paga, mesmo com referência de busca. Google, Bing e DuckDuckGo reconhecidos viram orgânico na ausência de sinal pago. Outros hosts externos válidos viram referência. A ausência de sinal suficiente vira direto ou desconhecido. UTMs e click IDs não autenticam campanhas. O Core conserva seu papel de observação de contexto, enquanto a decisão e a coleta de sessões recebem os mesmos sinais iniciais do Bootstrap.
 
-O clique por elemento usa o marcador e a superfície validados no recibo. Para regras CTA 2.0, o vínculo com cópia e a versão da regra vêm do gateway. O alias é consultado na versão do último clique do elemento no recorte. O filtro por cópia exige projeto, LP, origem e caminho exatos. A primeira visita a uma cópia ainda fora do inventário pode produzir uma sessão sem vínculo com a cópia. Históricos sem vínculo permanecem nos totais mais amplos. Visualizações de página, chegada ao checkout e receita efetivamente recuperada ficam indisponíveis.
+O clique por elemento usa o marcador e a superfície validados no recibo. Para regras CTA 2.0, o vínculo com cópia e a versão da regra vêm do gateway. O alias é consultado na versão do último clique do elemento no recorte. O filtro por cópia exige projeto, LP, origem e caminho exatos. A primeira visita a uma cópia ainda fora do inventário pode produzir uma sessão sem vínculo com a cópia. Caminhos acima de 384 caracteres também ficam sem vínculo na sessão para respeitar o limite do corpo. Históricos sem vínculo permanecem nos totais mais amplos. Visualizações de página, chegada ao checkout e receita efetivamente recuperada ficam indisponíveis.
 
 ## Entrega de cliques
 
@@ -17,6 +17,10 @@ Os recibos expiram em 120 segundos e as observações são idempotentes por proj
 ## Estimativa
 
 **Configurar estimativa** usa as premissas versionadas do projeto. As premissas atuais são aplicadas aos cliques do recorte. Receita potencial é o produto dos cliques aceitos, da taxa de conversão e do ticket médio. O painel exibe moeda, taxa, ticket, versão, data e quantidade de cliques usada. Totais permanecem separados por moeda.
+
+## Prova controlada
+
+`tests/cta-observed-browser.test.ts` usa PostgreSQL 16, gateway HTTPS em duas origens locais, Bootstrap e Chromium reais. Na simulação em que o navegador recusa enfileirar o beacon antigo, três ativações em dois CTAs produziram três fatos, uma sessão com clique e R$ 15,00 em receita potencial. A repetição do primeiro evento foi aceita de forma idempotente. Os destinos controlados foram atingidos após Voltar e F5. O painel mostrou os mesmos contadores e a nova premissa, depois de salva e recarregada, resultou em R$ 60,00. O teste também prova as quatro classes, os sinais pagos por UTM, gclid e fbclid e a alocação paga de 0% com direto/desconhecido em 100%. `tests/cta-history.test.ts` cobre Chromium desktop e mobile com BFCache ligado e desligado.
 
 ## Publicação e rollback
 

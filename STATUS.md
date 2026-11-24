@@ -3,6 +3,7 @@
 ## F29/F30 — métricas observadas de CTA
 - Dev de referência: 108 recibos CTA emitidos e zero fatos de clique. Falha histórica localizada entre emissão e persistência.
 - Visão Geral com contagens, sessões distintas com clique, aliases por CTA e filtros independentes de diagnóstico.
+- Chromium e PostgreSQL 16: três cliques em dois CTAs, uma sessão com clique, replay idempotente e estimativa de R$ 15,00. Nova premissa persistiu e produziu R$ 60,00.
 - Migração aditiva 074 para sessões por cópia. Estimativas por projeto seguem premissas versionadas. [Contrato e rollback](docs/OBSERVED-CTA-METRICS.md).
 
 ## F21 — CTA após retorno pelo histórico
