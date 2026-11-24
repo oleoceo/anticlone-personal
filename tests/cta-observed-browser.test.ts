@@ -195,8 +195,8 @@ test('Chromium delivers CTA observations across origins when the old beacon cann
   await panel.getByLabel('Código do autenticador').fill(new TOTP({secret:Secret.fromBase32(secret)}).generate());
   await panel.getByRole('button',{name:'Entrar',exact:true}).click();
   await panel.getByRole('combobox',{name:'Projeto',exact:true}).selectOption(project);
-  await panel.getByLabel('LP',{exact:true}).selectOption(pageId);
-  await panel.getByLabel('Cópia',{exact:true}).selectOption(JSON.stringify([copy,'/copy']));
+  await panel.getByRole('combobox',{name:'LP',exact:true}).selectOption(pageId);
+  await panel.getByRole('combobox',{name:'Cópia',exact:true}).selectOption(JSON.stringify([copy,'/copy']));
   const points=panel.getByRole('region',{name:'Cliques por CTA'});
   await points.getByRole('rowheader',{name:'Básico'}).waitFor();
   await points.getByRole('rowheader',{name:'Completo'}).waitFor();

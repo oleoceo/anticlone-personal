@@ -3,7 +3,8 @@
 ## F30 — apresentação da Visão Geral
 - Quatro indicadores, origens em linhas, cliques por CTA e detalhes operacionais recolhíveis. A configuração mostra os fatores e o resultado da estimativa versionada.
 - [Capturas comparativas em Chromium desktop e mobile](docs/evidencias/visao-geral/README.md) com a mesma fixture nos dois builds.
-- Branch visual baseada no PR #91. Integração sujeita a revisão e CI no PR.
+- Lint, typecheck, build e quatro jornadas do painel passaram com Chromium e PostgreSQL 16 em desktop e mobile.
+- Revisão independente da interface favorável. [PR #92 e CI](https://github.com/oleoceo/anticlone-personal/pull/92), baseado no PR #91.
 
 ## F29/F30 — métricas observadas de CTA
 - Dev de referência: 108 recibos CTA emitidos e zero fatos de clique. Falha histórica localizada entre emissão e persistência.
