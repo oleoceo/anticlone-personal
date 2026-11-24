@@ -63,7 +63,7 @@ for(const width of [1440,390])test(`GS01-04/06/13/16/17: continuous operational 
   await panel.locator('#pages-form [name=page]').fill(lp.id);
   const distributionForm=panel.locator('#distribution-form');await distributionForm.locator('[name=project]').fill(project);await distributionForm.locator('[name=page]').fill(lp.id);
   const publication=await submit('#distribution-form','button[value=publish]','distribution',true);
-  const snippet=publication.snippets.html as string,css=publication.snippets.css as string;assert.match(snippet,/\/r\/v2\//);
+  const snippet=publication.snippets.html as string,css=publication.snippets.css as string;assert.ok(snippet.includes(process.env.RUNTIME_COMPACT_ALIASES === 'true' ? '/assets/' : '/r/v2/'));
   const dist=publication.distribution;const decisionUrl=dist.bases.TELEMETRY+dist.paths['entry-decision'];
   // Only synthetic owner/copy documents are supplied; assets, observations,
   // policies, decisions, redirects and SMTP use real servers and PostgreSQL.

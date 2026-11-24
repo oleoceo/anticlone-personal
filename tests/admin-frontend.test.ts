@@ -160,7 +160,9 @@ for (const width of [1440, 390]) {
     await action(page, 'Confirmar').click();
     await page.getByText('Revisão 1', {exact: true}).waitFor();
     const scripts = await page.getByRole('region', {name: 'Trecho HEAD'}).locator('code').innerText();
-    assert.match(scripts, /runtime\.frontend\.test\/r\/v2\/[^/]+\/a\.js/);
+    const source = scripts.match(/<script async src="([^"]+)"/)?.[1];
+    assert.ok(source?.startsWith('https://runtime.frontend.test'+distributionPrefix));
+    assert.ok(source.endsWith('/a.js'));
     assert.match(scripts, /\/c\.js/);
     assert.doesNotMatch(scripts, /\/(?:e|b\.js)"/);
     assert.match(await page.getByRole('region', {name: 'Trecho BODY'}).locator('code').innerText(), /\/m\.gif/);

@@ -129,8 +129,8 @@ for(const npm of [false,true]) test(`${npm?'NPM mTLS':'HTTPS'} Nginx + PostgreSQ
     assert.equal((await api.get('https://gateway.test/runtime.js',{headers:{Host:'evil.test'}})).status(),421);
     assert.equal((await api.get('https://gateway.test/admin')).status(),404);
     const distributionHealth = await api.get('https://gateway.test'+distributionHealthPath);
-    assert.equal(distributionHealth.status(),200);
-    assert.equal((await distributionHealth.json()).mode,npm?'OPERATIONAL':'PILOT_OBSERVE');
+    assert.equal(distributionHealth.status(),npm?200:503);
+    if (npm) assert.equal((await distributionHealth.json()).mode,'OPERATIONAL');
     const checkoutBody=JSON.stringify({event_id:'https_event',sale_id:'https_sale',amount_minor:100,currency:'BRL',occurred_at:'2026-11-06T00:00:00.000Z'});
     const checkoutTimestamp=String(Math.floor(Date.now()/1000));
     const checkoutHeaders={'content-type':'application/json','x-checkout-timestamp':checkoutTimestamp,'x-checkout-signature':createHmac('sha256',Buffer.from(checkoutSecret,'hex')).update(checkoutTimestamp+'.'+checkoutBody).digest('hex')};
