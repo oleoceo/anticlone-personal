@@ -174,13 +174,13 @@ for (const distributionMode of [false,true]) test('scoped browser observations i
     const browserDecision=page.waitForResponse(r=>r.url().endsWith('/entry-decision'));
     await page.goto(`http://localhost:${address.port}/outro-slug`); assert.equal((await response).status(),204); await browserDecision;
     await page.waitForFunction(()=>document.documentElement.dataset.ctaReady==='yes');
-    const clicked=await page.evaluate(()=>{const link=document.querySelector<HTMLAnchorElement>('a')!;let target='';window.addEventListener('click',event=>{target=link.href;event.preventDefault();},{once:true});link.click();return target;});
-    assert.equal(clicked,origin+'/health-checkout?utm_source=offer');
+    await page.getByRole('link',{name:'Checkout',exact:true}).click();
+    await page.waitForURL(origin+'/health-checkout?utm_source=offer');
     const attributedResponse=page.waitForResponse(r=>r.url().endsWith('/entry-decision'));
     await page.goto(`http://localhost:${address.port}/outro-slug?utm_source=ads&utm_campaign=spring&token=private`); await attributedResponse;
     await page.waitForFunction(()=>document.documentElement.dataset.ctaReady==='yes');
-    const attributed=await page.evaluate(()=>{const link=document.querySelector<HTMLAnchorElement>('a')!;let target='';window.addEventListener('click',event=>{target=link.href;event.preventDefault();},{once:true});link.click();return target;});
-    assert.equal(attributed,origin+'/health-checkout?utm_source=offer&utm_campaign=spring');
+    await page.getByRole('link',{name:'Checkout',exact:true}).click();
+    await page.waitForURL(origin+'/health-checkout?utm_source=offer&utm_campaign=spring');
     const incidents=await db.query('SELECT project_id,host FROM incidents ORDER BY project_id');
     assert.deepEqual(incidents.rows,[{project_id:'health',host:'localhost'}]);
     await deliverOne(db,'health',smtpAddress.port);
