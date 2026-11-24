@@ -3,18 +3,23 @@ import type { Pool } from 'pg';
 import { withProjectAdministrativeWrite } from './admin-project-write.js';
 
 // Internal persistence contract. Browser claims never authenticate a sale or external load.
-export type ObservedFact = {page:string;event:string;session:string;action:string;traffic:string;version:number|null;evidence:string};
+export type ObservedFact = {page:string;event:string;session:string;action:string;traffic:string;version:number|null;evidence:string;copyCta?:{origin:string;pathname:string;marker:string;surface:string;version:number}};
 export async function recordObservedFact(db:Pool, project:string, fact:ObservedFact) {
   if (!/^[a-f0-9]{32}$/.test(fact.session) || !['SESSION_OBSERVED','DECISION_PREPARED','PAGE_REDIRECT_ATTEMPT','CTA_CLICK_OBSERVED','CHECKOUT_HANDOFF_ATTEMPT'].includes(fact.action) || !['PAID_ATTRIBUTED','ORGANIC','REFERRAL','DIRECT_UNKNOWN'].includes(fact.traffic) || !['BROWSER_UNVERIFIED','GATEWAY_PREPARED'].includes(fact.evidence) || (fact.action==='DECISION_PREPARED') !== (fact.evidence==='GATEWAY_PREPARED') || (fact.version!==null && (!Number.isSafeInteger(fact.version) || fact.version<1))) throw new TypeError('invalid fact');
   return withProjectAdministrativeWrite(db,project,async client=>{
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1),47)',[project]);
     if(!await operationallyEligible(client,project,fact.page,true))throw new Error('inactive context');
-    const prior=await client.query('SELECT page_id,session_id,action,traffic_class,policy_version,evidence FROM observed_action_facts WHERE project_id=$1 AND event_id=$2',[project,fact.event]);
-    if(prior.rowCount){const row=prior.rows[0];if(row.page_id!==fact.page || row.session_id!==fact.session || row.action!==fact.action || row.traffic_class!==fact.traffic || row.policy_version!==fact.version || row.evidence!==fact.evidence)throw new TypeError('event conflict');return {duplicate:true};}
+    const prior=await client.query(`SELECT page_id,session_id,action,traffic_class,policy_version,evidence,COALESCE(to_jsonb(observed_action_facts)->'copy_cta','null'::jsonb)=$3::jsonb AS matches_copy FROM observed_action_facts WHERE project_id=$1 AND event_id=$2`,[project,fact.event,JSON.stringify(fact.copyCta ?? null)]);
+    if(prior.rowCount){const row=prior.rows[0];if(row.page_id!==fact.page || row.session_id!==fact.session || row.action!==fact.action || row.traffic_class!==fact.traffic || row.policy_version!==fact.version || row.evidence!==fact.evidence || !row.matches_copy)throw new TypeError('event conflict');return {duplicate:true};}
     await client.query("DELETE FROM observed_action_facts WHERE project_id=$1 AND received_at < clock_timestamp()-interval '7 days'",[project]);
     const count=await client.query("SELECT count(*)::int n FROM observed_action_facts WHERE project_id=$1 AND received_at>=clock_timestamp()-interval '7 days'",[project]);
     if(count.rows[0].n>=10000)throw new Error('fact capacity');
-    await client.query('INSERT INTO observed_action_facts(project_id,page_id,event_id,session_id,action,traffic_class,policy_version,evidence) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[project,fact.page,fact.event,fact.session,fact.action,fact.traffic,fact.version,fact.evidence]);
+    const values=[project,fact.page,fact.event,fact.session,fact.action,fact.traffic,fact.version,fact.evidence];
+    if (fact.copyCta) {
+      await client.query('INSERT INTO observed_action_facts(project_id,page_id,event_id,session_id,action,traffic_class,policy_version,evidence,copy_cta) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)',[...values,JSON.stringify(fact.copyCta)]);
+    } else {
+      await client.query('INSERT INTO observed_action_facts(project_id,page_id,event_id,session_id,action,traffic_class,policy_version,evidence) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',values);
+    }
     return {duplicate:false};
   });
 }

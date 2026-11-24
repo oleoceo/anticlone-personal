@@ -33,7 +33,7 @@ async function probeGateway(origin: string | undefined, minimumContract = 0): Pr
       res.on('end',()=>{
         try {
           const health=JSON.parse(body);
-          if (res.statusCode!==200 || health.status!=='ready' || (minimumContract && ![2,3,4].some(version=>String(version)===res.headers['x-anticlone-redirect-contract'] && version>=minimumContract))) return resolve('UNREACHABLE');
+          if (res.statusCode!==200 || health.status!=='ready' || (minimumContract && ![2,3,4,5].some(version=>String(version)===res.headers['x-anticlone-redirect-contract'] && version>=minimumContract))) return resolve('UNREACHABLE');
           resolve(health.mode==='OPERATIONAL' && health.action==='SCOPED_AUTHORIZATION_REQUIRED' ? 'OPERATIONAL' :
             ['LAB','PILOT_OBSERVE'].includes(health.mode) && health.action==='OBSERVE_ONLY' ? 'OBSERVATION_ONLY' : 'UNREACHABLE');
         } catch { resolve('UNREACHABLE'); }
@@ -86,10 +86,10 @@ export async function pageRedirectAdmin(db: Pool, input: unknown, env=process.en
   const gatewayOrigin=env.ADMIN_OPERATIONAL_GATEWAY_ORIGIN;
   if (action==='inspect-cta' || action==='confirm-cta' || action==='disable-cta') {
     if (action==='inspect-cta') {
-      const [inventory,ctaGateway]=await Promise.all([copyCtaAdmin(db,data,gatewayOrigin),checkGateway(gatewayOrigin,4)]);
+      const [inventory,ctaGateway]=await Promise.all([copyCtaAdmin(db,data,gatewayOrigin),checkGateway(gatewayOrigin,5)]);
       return {...inventory,ctaGateway};
     }
-    if (action==='confirm-cta' && await checkGateway(gatewayOrigin,4)!=='OPERATIONAL') {
+    if (action==='confirm-cta' && await checkGateway(gatewayOrigin,5)!=='OPERATIONAL') {
       throw new RedirectRuleConflict('REDIRECT_GATEWAY_UNAVAILABLE');
     }
     return copyCtaAdmin(db,data,gatewayOrigin);

@@ -78,8 +78,11 @@ if (legacyOrigin && legacyOrigin !== normalizedOrigin) throw new Error('legacy c
 // The operator controls this local experiment; requests never provide risk.
 const controlledOrigin = process.env.LAB_CONTROLLED_ORIGIN ? configuredOrigin(process.env.LAB_CONTROLLED_ORIGIN) : undefined;
 if (controlledOrigin && (!['127.0.0.1', 'localhost'].includes(new URL(controlledOrigin).hostname) || !['127.0.0.1', 'localhost'].includes(new URL(normalizedOrigin).hostname))) throw new Error('lab origins must be loopback');
-const bootstrap = readFileSync('runtime/bootstrap.js');
-const core = readFileSync('runtime/core.js');
+const discovery = readFileSync('runtime/cta-discovery.js','utf8');
+const runtimeWithDiscovery = (file:string) =>
+  Buffer.from(readFileSync('runtime/'+file,'utf8').replace('/* CTA_DISCOVERY */',()=>discovery));
+const bootstrap = runtimeWithDiscovery('bootstrap.js');
+const core = runtimeWithDiscovery('core.js');
 const inventoryScript = readFileSync('runtime/cta-inventory.js');
 const fallback = readFileSync('runtime/fallback.js');
 const maintainProjects = projectMaintenance(pool,process.env,project);
@@ -178,8 +181,8 @@ const handler: http.RequestListener = (req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Access-Control-Allow-Origin', '*'); res.setHeader('Cache-Control', 'no-store');
   if (req.method === 'GET' && req.url === '/healthz') {
-    void pool.query("SELECT to_regclass('page_redirect_rules') IS NOT NULL AS redirects,to_regclass('page_copy_contexts') IS NOT NULL AS diagnostics,to_regclass('copy_cta_rules') IS NOT NULL AS ctas").then(({rows}) => {
-      if (rows[0].redirects) res.setHeader('X-AntiClone-Redirect-Contract',rows[0].ctas ? '4' : rows[0].diagnostics ? '3' : '2');
+    void pool.query("SELECT to_regclass('page_redirect_rules') IS NOT NULL AS redirects,to_regclass('page_copy_contexts') IS NOT NULL AS diagnostics,to_regclass('copy_cta_rules') IS NOT NULL AS ctas,EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('copy_cta_rules') AND attname='allocation' AND NOT attisdropped) AS cta_allocations").then(({rows}) => {
+      if (rows[0].redirects) res.setHeader('X-AntiClone-Redirect-Contract',rows[0].cta_allocations ? '5' : rows[0].ctas ? '4' : rows[0].diagnostics ? '3' : '2');
       res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify({status:'ready', mode:process.env.GATEWAY_MODE==='OPERATIONAL'?'OPERATIONAL':mode.pilot ? 'PILOT_OBSERVE' : 'LAB', action:process.env.GATEWAY_MODE==='OPERATIONAL'?'SCOPED_AUTHORIZATION_REQUIRED':'OBSERVE_ONLY'}));
     }).catch(() => res.writeHead(503).end()); return;
   }

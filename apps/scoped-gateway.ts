@@ -45,6 +45,7 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>, collect
     if (req.method !== 'POST') { res.writeHead(405).end(); return true; }
     const decision = endpoint === 'entry-decision' || endpoint === 'cta-refresh';
     if (!['observe','observe/fallback','entry-decision','cta-refresh'].includes(endpoint) || !/^text\/plain(?:\s*;|$)/i.test(req.headers['content-type'] ?? '')) { res.writeHead(415).end(); return true; }
+    const incrementalInventory = endpoint==='observe' && /;\s*ac-inventory=2$/.test(req.headers['content-type'] ?? '');
     const chunks: Buffer[] = []; let size=0, rejected=false;
     req.on('data',(chunk:Buffer) => { size+=chunk.length; if (size>2048) { if (!rejected) res.writeHead(413).end(); rejected=true; chunks.length=0; } else if (!rejected) chunks.push(chunk); });
     req.on('end',() => {
@@ -110,7 +111,7 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>, collect
           }
           const original=context.urls[0];
           const approval=await currentApproval(client,context.project,context.page);
-          const scopedCta=operational ? await copyCtaDecision(client,{...context,origin,pathname:fields.pathname},fields.session,traffic.trafficClass) : null;
+          const scopedCta=operational ? await copyCtaDecision(client,{...context,origin,pathname:fields.pathname},fields.session,traffic.trafficClass,/;\s*ac-discovery=2(?=;|$)/.test(req.headers['content-type'] ?? '')) : null;
           if (!approval && !scopedCta) { if (!copyRule && operational) reason='APPROVAL_REQUIRED'; fallback(); return; }
           const authorization=operational && approval ? await operationalAuthorization(client,context.project,context.page,origin,fields.pathname) : null;
           const official=operational ? await client.query('SELECT 1 FROM protected_page_urls WHERE origin=$1 UNION ALL SELECT 1 FROM projects WHERE origin=$1',[origin]) : null;
@@ -168,7 +169,7 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>, collect
         const core = endpoint === 'observe';
         const keys=Object.keys(fields).sort().join(',');
         const inventory=core && keys==='ctas,origin,pathname';
-        if ((!inventory && keys !== (core ? 'origin,pathname,signals' : 'origin,pathname')) || typeof fields.origin !== 'string' || typeof fields.pathname !== 'string' || fields.pathname.length>1024) throw new TypeError('invalid');
+        if ((incrementalInventory && !inventory) || (!inventory && keys !== (core ? 'origin,pathname,signals' : 'origin,pathname')) || typeof fields.origin !== 'string' || typeof fields.pathname !== 'string' || fields.pathname.length>1024) throw new TypeError('invalid');
         const origin=configuredOrigin(fields.origin);
         if (!req.headers.origin || configuredOrigin(req.headers.origin)!==origin) throw new TypeError('invalid');
         const url=new URL(origin+fields.pathname);
@@ -187,7 +188,7 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>, collect
             if (!authorized && origin.startsWith('https:') && validCopyPath(url.pathname)) {
               const scope={...context,origin,pathname:url.pathname};
               await client.query("SET LOCAL statement_timeout='200ms'");
-              await rememberCopyCtas(client,scope,points);
+              await rememberCopyCtas(client,scope,points,incrementalInventory);
               await client.query('COMMIT');
             }
             res.writeHead(204).end();

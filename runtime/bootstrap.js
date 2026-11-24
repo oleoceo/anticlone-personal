@@ -1,6 +1,7 @@
 (() => {
   try {
     const distribution = null;
+    /* CTA_DISCOVERY */
     const source = document.currentScript && document.currentScript.src;
     if (!source) return;
     const endpoint = path => new URL(distribution?.paths?.[path] ?? path, distribution ? distribution.bases.TELEMETRY : source).href;
@@ -16,6 +17,7 @@
       } catch (_) { /* Untrusted message. */ }
     });
     const started = performance.now(), deadline = started + 150;
+    const discoveryVersion = typeof discoverCtas !== 'undefined' ? ';ac-discovery=2' : '';
     const scoped = !!distribution || new URL(source).pathname.startsWith('/i/');
     let visit, outcome, handoffElapsed;
     const initialEntryPath = location.pathname;
@@ -124,7 +126,7 @@
         const external = decision.externalDestinations ?? [];
         if (!Array.isArray(external) || external.length > 100 || external.some(url => typeof url !== 'string' || url.length > 2048)) return;
         for (const row of decision.mappings) {
-          if (!row || typeof row.marker !== 'string' || !/^[a-zA-Z0-9_-]{8,64}$/.test(row.marker) || (row.surface !== undefined && (typeof row.surface !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(row.surface))) || !['a','form'].includes(row.kind) || typeof row.destination !== 'string') return;
+          if (!row || typeof row.marker !== 'string' || !/^[a-zA-Z0-9_-]{8,64}$/.test(row.marker) || (row.surface !== undefined && (typeof row.surface !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(row.surface))) || !['a','form','button'].includes(row.kind) || row.kind==='button' && (typeof discoverCtas==='undefined' || !row.nativeDigest) || typeof row.destination !== 'string') return;
           const target = new URL(row.destination);
           if ((target.origin !== original.origin && (target.protocol !== 'https:' || !external.includes(target.href))) || target.username || target.password || (!row.nativeDigest && target.hash) || !['http:', 'https:'].includes(target.protocol)) return;
           if (row.nativeDigest !== undefined && (!/^[a-f0-9]{64}$/.test(row.nativeDigest) || target.protocol!=='https:')) return;
@@ -144,20 +146,24 @@
       } catch (_) { /* Keep original links. */ }
     };
     const entryFor = (node,mappings) => {
-      const entries = mappings.get(node.getAttribute('data-anticlone-point')) || [];
+      const entries = mappings.get(node.getAttribute('data-anticlone-point') ?? describe(node)?.marker) || [];
       const scope = node.closest('[data-anticlone-surface]')?.getAttribute('data-anticlone-surface');
       if (scope) return entries.find(item => item.surface === scope);
       const fallback = entries.filter(item => !item.requiresSurface);
       return fallback.length === 1 ? fallback[0] : null;
     };
+    const describe = node => typeof discoverCtas === 'undefined' ? null : discoverCtas.describe(node);
+    const selector = typeof discoverCtas === 'undefined' ? 'a[data-anticlone-point][href]' : discoverCtas.selector;
     const commercialLink = node => node.matches('[data-anticlone-price-minor],[data-anticlone-currency],[data-anticlone-offer]');
     const checkNativeLinks = () => {
       const snapshot = activeCtas;
       if (!snapshot || !validContext() || !crypto.subtle) return;
-      const nodes = document.querySelectorAll('a[data-anticlone-point][href]');
+      const nodes = typeof discoverCtas === 'undefined'
+        ? document.querySelectorAll(selector)
+        : discoverCtas.collect().filter(item=>item.unique && item.point.compatible).map(item=>item.node);
       if (nodes.length > 1000) return;
       for (const node of nodes) {
-        const entry = entryFor(node,snapshot.mappings), href = node.href;
+        const entry = entryFor(node,snapshot.mappings), href = describe(node)?.href ?? node.href;
         if (!entry?.nativeDigest || !href || href.length > 2048 || commercialLink(node)) continue;
         const cached = snapshot.checked.get(node);
         if (cached?.href === href && cached.entry === entry) continue;
@@ -179,32 +185,42 @@
         requestAnimationFrame(() => { nativeFrame = false; checkNativeLinks(); });
       });
       observer.observe(document.documentElement,{subtree:true,childList:true,attributes:true,
-        attributeFilter:['href','data-anticlone-point','data-anticlone-surface','data-anticlone-price-minor','data-anticlone-currency','data-anticlone-offer']});
+        attributeFilter:typeof discoverCtas !== 'undefined' ? discoverCtas.attributes : ['href','data-anticlone-point','data-anticlone-surface','data-anticlone-price-minor','data-anticlone-currency','data-anticlone-offer']});
     };
     const install = () => {
           document.addEventListener('click', event => {
             try {
               if (!(event.target instanceof Element)) return;
-              const node = event.target.closest('a[data-anticlone-point][href]');
+              const node = event.target.closest(selector);
               if (!node || !node.isConnected) return;
               const activate = currentEvent => {
                 if (currentEvent !== event) return;
                 try {
                   const snapshot = activeCtas;
                   if (!snapshot || Date.now() < snapshot.startedWall || Date.now() - snapshot.startedWall >= ctaTtlMs || performance.now() - snapshot.startedMono >= ctaTtlMs) { activeCtas = null; return; }
-                  if (event.defaultPrevented || !validContext() || location.pathname !== snapshot.pathname || !node.isConnected || !node.hasAttribute('href')) return;
-                  const marker = node.getAttribute('data-anticlone-point');
+                  if (event.defaultPrevented || !validContext() || location.pathname !== snapshot.pathname || !node.isConnected) return;
+                  const point = describe(node);
+                  const marker = node.getAttribute('data-anticlone-point') ?? point?.marker;
                   const scope = node.closest('[data-anticlone-surface]')?.getAttribute('data-anticlone-surface');
                   const entry = entryFor(node,snapshot.mappings);
-                  if (!entry || entry.kind !== 'a') return;
-                  const current = Array.from(document.querySelectorAll('[data-anticlone-point]'));
-                  if (current.length > 1000 || current.filter(item => item.getAttribute('data-anticlone-point') === marker && (!scope || item.closest('[data-anticlone-surface]')?.getAttribute('data-anticlone-surface') === scope)).length !== 1) return;
+                  if (!entry || entry.kind !== (node instanceof HTMLAnchorElement ? 'a' : 'button')) return;
+                  const current = Array.from(document.querySelectorAll(marker?.startsWith('auto-') ? selector : '[data-anticlone-point]'));
+                  if (current.length > 1000 || current.filter(item => (item.getAttribute('data-anticlone-point') ?? describe(item)?.marker) === marker && (!scope || item.closest('[data-anticlone-surface]')?.getAttribute('data-anticlone-surface') === scope)).length !== 1) return;
                   const previous = node.getAttribute('href');
                   if (entry.nativeDigest) {
                     const checked = snapshot.checked.get(node);
-                    if (!checked?.valid || checked.entry !== entry || checked.href !== node.href || commercialLink(node)) return;
+                    if (!checked?.valid || checked.entry !== entry || checked.href !== (point?.href ?? node.href) || commercialLink(node) || point && !point.compatible) return;
                   }
                   const replacement = entry.destination;
+                  if (point?.navigation) {
+                    if (!entry.nativeDigest || !event.isTrusted || event.button!==0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                    location.assign(replacement);
+                    event.preventDefault();
+                    event.stopImmediatePropagation();
+                    reportAction(snapshot.receipt, marker, entry.surface ?? null);
+                    return;
+                  }
+                  if (!(node instanceof HTMLAnchorElement) || previous===null) return;
                   node.setAttribute('href', replacement);
                   reportAction(snapshot.receipt, marker, entry.surface ?? null);
                   setTimeout(() => { if (node.getAttribute('href') === replacement) node.setAttribute('href', previous); }, 0);
@@ -219,6 +235,7 @@
     const core = document.createElement('script');
     core.src = new URL(distribution?.paths?.['core.js'] ?? 'core.js', distribution ? distribution.bases.SCRIPT : source).href;
     core.async = true;
+    if (typeof discoverCtas !== 'undefined') core.dataset.acCta = '2';
     // The deadline starts in the bootstrap. Core only collects observations.
     const startDecision = () => {
       try {
@@ -251,7 +268,7 @@
           inFlight = true; const id = ++sequence, wall = Date.now(), mono = performance.now(); lastAttempt = wall;
           controller = new AbortController();
           const requestController = controller, timeout = setTimeout(() => requestController.abort(), 5000);
-          fetch(endpoint('cta-refresh'), {method:'POST', headers:{'Content-Type':scoped ? 'text/plain;ac-cta=1' : 'text/plain'}, body:JSON.stringify({session,signals,pathname:initialPath}), cache:'no-store', signal:requestController.signal})
+          fetch(endpoint('cta-refresh'), {method:'POST', headers:{'Content-Type':scoped ? 'text/plain;ac-cta=1'+discoveryVersion : 'text/plain'}, body:JSON.stringify({session,signals,pathname:initialPath}), cache:'no-store', signal:requestController.signal})
             .then(response => { if (!response.ok) throw Error('unavailable'); return response.json(); })
             .then(decision => { if (id !== sequence || !validContext()) return; failed = false; backoff = refreshIntervalMs; activeCtas = null; observeCtaVersion(decision); if (decision && decision.action === 'REPLACE_CONVERSION') prepareCtas(decision, wall, mono); })
             .catch(() => { if (id === sequence) { activeCtas = null; failed = true; backoff = Math.min(backoff * 2, 240000); } })
@@ -264,7 +281,7 @@
         document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(true); });
         const entryWall = Date.now(), entryMono = performance.now(), entrySequence = sequence;
         if (scoped && location.protocol==='https:') visit=Array.from(crypto.getRandomValues(new Uint8Array(16)),x=>x.toString(16).padStart(2,'0')).join('');
-        fetch(endpoint('entry-decision'), { method:'POST', headers:{'Content-Type':visit ? 'text/plain;ac-visit='+visit+';ac-cta=1' : 'text/plain'}, body:JSON.stringify({session,signals,pathname:initialPath}), cache: 'no-store', credentials:'omit', priority:'high' })
+        fetch(endpoint('entry-decision'), { method:'POST', headers:{'Content-Type':visit ? 'text/plain;ac-visit='+visit+';ac-cta=1'+discoveryVersion : 'text/plain'}, body:JSON.stringify({session,signals,pathname:initialPath}), cache: 'no-store', credentials:'omit', priority:'high' })
           .then(response => { if (!response.ok) throw new Error('decision unavailable'); return response.json(); })
           .then(decision => {
             if (!validContext()) return;

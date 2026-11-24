@@ -14,6 +14,7 @@ import {chromium,type Browser,type Page} from 'playwright';
 import {TOTP,Secret} from 'otpauth';
 import {SMTPServer} from 'smtp-server';
 import {distributionAdmin} from '../apps/runtime-distribution.js';
+import {copyCtaDecision} from '../apps/copy-cta-rules.js';
 import {managePages} from '../apps/protected-pages.js';
 
 async function listen(server: ReturnType<typeof httpServer> | ReturnType<typeof httpsServer>) {
@@ -102,7 +103,7 @@ test('authenticated copy rules, native CTA restoration, 150 ms browser navigatio
       const probe=httpsRequest({hostname:'127.0.0.1',port:proxyPort,servername:browserHost,ca:tls.cert,path:'/healthz'},reply=>{
         let body='';reply.on('data',chunk=>body+=String(chunk));
         reply.on('end',()=>{
-          try {resolve(JSON.parse(body).mode==='OPERATIONAL' && reply.headers['x-anticlone-redirect-contract']==='4');}
+          try {resolve(JSON.parse(body).mode==='OPERATIONAL' && reply.headers['x-anticlone-redirect-contract']==='5');}
           catch {resolve(false);}
         });
       });
@@ -309,17 +310,31 @@ test('authenticated copy rules, native CTA restoration, 150 ms browser navigatio
       'static and dynamic CTA inventory');
     await panel.goto(projectPath+'/incidentes/'+incident.id+'/substituir-cta?lp='+pageId);
     await panel.getByLabel('Página clonada').selectOption(copy+'/');
-    await panel.getByLabel('CTA identificado').selectOption('checkout:checkout-main');
-    const saveCta=async (label:string, destination:string, percent:string)=>{
-      await panel.getByLabel('Novo destino do CTA').fill(destination);
-      await panel.getByLabel('Percentual do CTA').fill(percent);
+    await panel.getByLabel('checkout-main',{exact:true}).click();
+    const saveCta=async (label:string, destination:string, percentages:[string,string,string,string])=>{
+      await panel.getByLabel('Novo destino do CTA').filter({visible:true}).fill(destination);
+      for (const [index,name] of ['Tráfego pago atribuído','Orgânico','Referência','Direto ou desconhecido'].entries()) {
+        await panel.getByLabel(name,{exact:true}).filter({visible:true}).fill(percentages[index]);
+      }
       await panel.getByRole('button',{name:label,exact:true}).click();
       await panel.getByRole('dialog',{name:'Confirmar substituição de CTA'}).getByRole('button',{name:'Confirmo substituição de CTA'}).click();
       await panel.getByText('Regra de CTA salva e habilitada.',{exact:true}).waitFor();
     };
-    await saveCta('Ativar regra de CTA',destinationA.replace('https://',''), '100');
-    await panel.getByLabel('CTA identificado').selectOption(':whatsapp-cta');
-    await saveCta('Ativar regra de CTA',destinationB+'?channel=whatsapp','100');
+    await saveCta('Salvar e ativar',destinationA.replace('https://',''), ['100','0','53','100']);
+    await panel.getByLabel('whatsapp-cta',{exact:true}).click();
+    await saveCta('Salvar e ativar',destinationB+'?channel=whatsapp',['0','100','47','100']);
+    const client=await db.connect();
+    try {
+      const scope={project,page:pageId,origin:copy,pathname:'/'};
+      for (const [traffic,expected] of [
+        ['PAID_ATTRIBUTED',['checkout-main']],['ORGANIC',['whatsapp-cta']],['DIRECT_UNKNOWN',['whatsapp-cta','checkout-main']],
+      ] as const) {
+        const decision=await copyCtaDecision(client,scope,'ab'.repeat(16),traffic,true);
+        assert.deepEqual(decision?.mappings.map(item=>item.marker),expected);
+      }
+      const rules=await client.query('SELECT marker,allocation FROM copy_cta_rules WHERE project_id=$1 ORDER BY version',[project]);
+      assert.deepEqual(rules.rows.map(item=>item.allocation.REFERRAL),[53,47]);
+    } finally { client.release(); }
     const clickCtas=async(visitor:Page, checkout:string, whatsapp:string, active:boolean)=>{
       const received=visitor.waitForResponse(response=>response.url()===entry);
       await visitor.goto(copy+'/');
@@ -337,14 +352,34 @@ test('authenticated copy rules, native CTA restoration, 150 ms browser navigatio
       console.log('COPY_CTA',JSON.stringify({checkout,whatsapp,action:payload.action}));
     };
     await clickCtas(contexts[0].pages()[0],destinationA,destinationB+'?channel=whatsapp',true);
-    await panel.getByLabel('CTA identificado').selectOption('checkout:checkout-main');
-    await saveCta('Editar regra de CTA',destinationB,'100');
+    await until(async()=> (await db.query(`SELECT count(DISTINCT copy_cta->>'marker')::int AS count
+      FROM observed_action_facts WHERE project_id=$1 AND copy_cta->>'pathname'='/'`,[project])).rows[0].count===2,
+    'browser action receipts by CTA and copy path');
+    await panel.getByRole('button',{name:'Atualizar CTAs identificados'}).click();
+    await panel.getByText('Execução observada no runtime',{exact:false}).first().waitFor();
+    await panel.getByLabel('checkout-main',{exact:true}).click();
+    await saveCta('Editar regra',destinationB,['100','0','53','100']);
     await clickCtas(contexts[1].pages()[0],destinationB,destinationB+'?channel=whatsapp',true);
+    await panel.getByLabel('checkout-main',{exact:true}).click();
     await confirm('Desativar regra de CTA','Desativar regra de CTA','Regra de CTA desativada.');
-    await panel.getByLabel('CTA identificado').selectOption(':whatsapp-cta');
+    await panel.getByLabel('whatsapp-cta',{exact:true}).click();
     await confirm('Desativar regra de CTA','Desativar regra de CTA','Regra de CTA desativada.');
     await clickCtas(contexts[0].pages()[0],copy+'/native-checkout',copy+'/native-whatsapp?test=1',false);
     assert.equal((await db.query("SELECT count(*)::int n FROM administrative_change_audit WHERE relation_name='copy_cta_rules'")).rows[0].n,5);
+
+    // Simulate a record written by the previous executable after the additive migration.
+    await db.query(`INSERT INTO copy_cta_rules(project_id,page_id,copy_origin,copy_pathname,surface,marker,version,
+      url_generation,config_generation,native_url,native_digest,destination,percent,enabled)
+      SELECT project_id,page_id,copy_origin,copy_pathname,surface,marker,6,
+        url_generation,config_generation,native_url,native_digest,destination,100,true
+      FROM copy_cta_rules WHERE project_id=$1 AND version=1`,[project]);
+    const legacyClient=await db.connect();
+    try {
+      for (const traffic of ['PAID_ATTRIBUTED','ORGANIC','REFERRAL','DIRECT_UNKNOWN']) {
+        const decision=await copyCtaDecision(legacyClient,{project,page:pageId,origin:copy,pathname:'/'},'ab'.repeat(16),traffic);
+        assert.deepEqual(decision?.mappings.map(item=>[item.marker,item.destination]),[['checkout-main',destinationA]]);
+      }
+    } finally { legacyClient.release(); }
 
     // The gateway does not own the SMTP credentials or consume the outbox.
     const before=(await db.query('SELECT id,host FROM incidents WHERE project_id=$1 ORDER BY id',[project])).rows;

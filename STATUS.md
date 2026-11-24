@@ -238,3 +238,9 @@
 - O proprietário confirmou o recebimento do incidente 10 na caixa de entrada durante a homologação Dev. A mensagem anterior trazia apenas uma observação não verificada e o host.
 - O provedor SMTP gera HTML e texto em português, com contexto do incidente e rota relativa do Admin Dev. LP depende de recibo recente que a associe ao projeto e host.
 - Validação reproduzível em `tests/smtp-provider.test.ts`: conteúdo, escaping, triagem, isolamento, TLS, histórico e retry. Aplicação ao Dev e integração dependem de aprovação.
+
+### Descoberta e substituição de CTA por cópia
+- Branch feature/cta-discovery sobre 88dc70a. Cartões por CTA, alocação por classe e migração aditiva 073.
+- Compatibilidade, implantação e rollback em [Descoberta e substituição de CTA](docs/COPY-CTA-DISCOVERY.md).
+- Ensaios locais com Chromium e PostgreSQL. A LP pública foi exercitada com respostas isoladas no navegador e destinos de teste.
+- O bootstrap congelado da cópia recebeu políticas compatíveis com seu código. Deploy e merge dependem de etapa posterior.
