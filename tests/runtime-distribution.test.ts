@@ -375,7 +375,7 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
     await panel.getByRole('button',{name:'Publicar nova revisão',exact:true}).click();
     await panel.getByRole('button',{name:'Confirmar',exact:true}).click();
     const snippet=panel.getByRole('region',{name:'Trecho HEAD'}).locator('code');
-    await snippet.filter({hasText:pooledOrigin}).waitFor();
+    await snippet.filter({hasText:pooledOrigin+'/assets/'}).waitFor();
     const pooled = await distributionAdmin(db,request,pooledEnv);
     assert.ok(pooled.distribution?.paths);
     assert.deepEqual(new Set(Object.values(pooled.distribution.bases).map(url=>new URL(url).origin)),new Set([pooledOrigin]));
