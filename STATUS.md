@@ -3,6 +3,8 @@
 ## F21 — CTA após retorno pelo histórico
 - O Bootstrap solicita decisão nova ao restaurar do BFCache, sem o cooldown de cinco segundos de uma visita bem-sucedida. Mantém backoff em falhas e destino nativo até validar a política e o digest.
 - Prova em Chromium desktop e Pixel 7 emulado com BFCache ligado/desligado, três retornos, edição, suspensão, divergência de digest e falha de rede. Ver `tests/cta-history.test.ts`.
+- No laboratório, o SHA base levou 4,21–4,82 s após restaurar do BFCache. O arquivo congelado reproduziu clique nativo e levou 4,01–4,64 s. A correção levou 149–190 ms na execução de referência.
+- Revisão independente `/root/review` sem achados no delta do runtime. CI e SHA no [PR #90](https://github.com/oleoceo/anticlone-personal/pull/90).
 - Cópias com Bootstrap remoto recebem a correção ao carregar o script atualizado. A cópia com `/js/a.js` local precisa receber um novo Bootstrap.
 
 ## PR #88 — consolidação operacional

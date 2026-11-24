@@ -19,7 +19,6 @@ test('CTA rules are renewed on real Chromium history navigation', {timeout: 6000
     .replace('/* CTA_DISCOVERY */', () => readFileSync('runtime/cta-discovery.js','utf8'));
   let version = 1, enabled = true, mode = 'normal', entries = 0, refreshes = 0;
   let onHeld: (() => void) | undefined;
-  let clone: string, original: string;
   const server = createServer({key:readFileSync(key),cert:readFileSync(cert)}, (req,res) => {
     const path = req.url;
     if (path === '/runtime.js') {
@@ -49,8 +48,8 @@ test('CTA rules are renewed on real Chromium history navigation', {timeout: 6000
   await new Promise<void>(resolve => server.listen(0,'127.0.0.1',resolve));
   t.after(() => { server.closeAllConnections(); server.close(); });
   const port = (server.address() as AddressInfo).port;
-  clone = 'https://localhost:'+port;
-  original = 'https://127.0.0.1:'+port;
+  const clone = 'https://localhost:'+port;
+  const original = 'https://127.0.0.1:'+port;
 
   for (const cache of [true,false]) {
     const browser = await chromium.launch({
