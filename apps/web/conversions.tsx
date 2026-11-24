@@ -78,13 +78,13 @@ export function Conversions({api, project, page, subview, setGuard}: {
   const crumbs = [{label: 'Meus Projetos', path: projectsPath}, {label: project.name, path: projectPath(project.id)},
     {label: page.name, path: pagePath(project.id, page.id)},
     {label: 'Conversões', path: subview ? root : undefined, search}];
-  if (subview) crumbs.push({label: subview === 'estimativa' ? 'Estimativa de resultados' : 'Vínculos comerciais', path: '', search: ''});
+  if (subview) crumbs.push({label: subview === 'estimativa' ? 'Configuração da estimativa' : 'Vínculos comerciais', path: '', search: ''});
   return <>
     <Breadcrumbs items={crumbs}/>
     <Back to={subview ? root : pagePath(project.id, page.id)} search={subview ? search : undefined}>
       {subview ? 'Voltar para Conversões' : 'Voltar para ' + page.name}
     </Back>
-    <Heading title={subview === 'estimativa' ? 'Estimativa de resultados' : subview === 'vinculos' ? 'Vínculos comerciais' : 'Conversões'}
+    <Heading title={subview === 'estimativa' ? 'Configuração da estimativa' : subview === 'vinculos' ? 'Vínculos comerciais' : 'Conversões'}
       description={project.name + ' · ' + page.name}/>
     {!subview && <div className="action-links">
       <Link className="button primary" {...nav.link(root + '/estimativa', search)}>Configurar estimativa</Link>
@@ -134,17 +134,26 @@ function Results({data, showAssumptions = false}: {data: Observations; showAssum
   const clicks = data.rows.filter(row => row.action === 'CTA_CLICK_OBSERVED').reduce((total, row) => total + row.events, 0);
   const estimate = data.estimate;
   const rounded = estimate ? (BigInt(estimate.amount_minor_numerator) + BigInt(estimate.denominator / 2)) / BigInt(estimate.denominator) : null;
-  return <dl className="review">
-    <dt>Cliques observados</dt><dd>{clicks}</dd>
-    {showAssumptions && <>
-      <dt>Ticket médio aplicado</dt><dd>{data.assumptions ? money(data.assumptions.ticket_minor, data.assumptions.currency) : 'Sem configuração'}</dd>
-      <dt>Taxa de conversão aplicada</dt><dd>{data.assumptions ? amountInput(String(data.assumptions.conversion_basis_points), 2) + '%' : 'Sem configuração'}</dd>
-    </>}
-    <dt>Receita potencial estimada</dt><dd>{estimate ? money(rounded, estimate.currency) : 'Indisponível'}</dd>
-    <dt>Premissas da estimativa</dt><dd>{data.assumptions ?
-      <>Versão {data.assumptions.version} · {formatDate(data.assumptions.configured_at)}</> : 'Sem configuração'}</dd>
-    {!showAssumptions && <><dt>Receita recuperada comprovada</dt><dd>Indisponível</dd></>}
-  </dl>;
+  const assumptions = data.assumptions;
+  return <>
+    {showAssumptions ? <>
+      <p className="estimate-equation">Cliques × Conversão estimada × Ticket médio = Valor estimado recuperado</p>
+      <div className="estimate-highlight estimate-result">
+        <p>{estimate && assumptions ? <>
+          {estimate.eligible_observed_clicks.toLocaleString('pt-BR')} × {amountInput(String(assumptions.conversion_basis_points), 2)}% × {money(assumptions.ticket_minor, assumptions.currency)}
+        </> : 'Sem estimativa para esta LP no período'}</p>
+        {estimate && <strong>{money(rounded, estimate.currency)}</strong>}
+        <small className="estimate-note">Estimativa, não vendas confirmadas</small>
+      </div>
+    </> : <dl className="review">
+      <dt>Cliques nos CTAs</dt><dd>{clicks}</dd>
+      <dt>Valor estimado recuperado</dt><dd><span>{estimate ? money(rounded, estimate.currency) : 'Sem estimativa'}</span>
+        <small className="estimate-note">Estimativa, não vendas confirmadas</small></dd>
+      <dt>Receita recuperada comprovada</dt><dd>Indisponível</dd>
+    </dl>}
+    <p className="muted">{assumptions ?
+      <>Versão {assumptions.version} · {formatDate(assumptions.configured_at)}</> : 'Sem configuração'}</p>
+  </>;
 }
 
 function Estimate({api, project, assumptions, refresh, setGuard}: {
@@ -155,8 +164,8 @@ function Estimate({api, project, assumptions, refresh, setGuard}: {
   const precision = exponent(currency);
   const firstPrecision = assumptions ? exponent(assumptions.currency) : null;
   return <section className="panel form-panel">
-    <h2>Premissas do projeto</h2>
-    <p>O ticket médio e a taxa são compartilhados por todas as LPs do projeto.</p>
+    <h2>Moeda, ticket e conversão</h2>
+    <p>Esta configuração vale para todas as LPs do projeto.</p>
     {assumptions && <p className="muted">Versão {assumptions.version} · {formatDate(assumptions.configured_at)}</p>}
     {operation.notice()}
     <form onSubmit={event => {
@@ -166,7 +175,7 @@ function Estimate({api, project, assumptions, refresh, setGuard}: {
         ticket = parseAmount(value(fields, 'ticket'), precision ?? 0, 1e12);
         rate = parseAmount(value(fields, 'rate'), 2, 10_000);
       } catch (error) { operation.setError(error); return; }
-      operation.review('Salvar premissas da estimativa', <p>{money(String(ticket), currency)} · {amountInput(String(rate), 2)}%</p>,
+      operation.review('Salvar configuração da estimativa', <p>{money(String(ticket), currency)} · {amountInput(String(rate), 2)}%</p>,
         async () => {
           const result = await api.request<Assumptions>('observed-metrics', {action: 'configure', project, ticket, rate, currency});
           refresh();
@@ -180,9 +189,9 @@ function Estimate({api, project, assumptions, refresh, setGuard}: {
       <label>{precision === null ? 'Ticket médio em unidades menores' : 'Ticket médio'}
         <input name="ticket" inputMode="decimal" autoComplete="off" required maxLength={24}
           defaultValue={assumptions ? amountInput(assumptions.ticket_minor, firstPrecision ?? 0) : ''}/></label>
-      <label>Taxa de conversão (%)<input name="rate" inputMode="decimal" autoComplete="off" required maxLength={8}
+      <label>Conversão estimada (%)<input name="rate" inputMode="decimal" autoComplete="off" required maxLength={8}
         defaultValue={assumptions ? amountInput(String(assumptions.conversion_basis_points), 2) : ''}/></label>
-      <button type="submit" className="primary" disabled={operation.busy}>Revisar premissas</button>
+      <button type="submit" className="primary" disabled={operation.busy}>Revisar e salvar</button>
     </form>
   </section>;
 }

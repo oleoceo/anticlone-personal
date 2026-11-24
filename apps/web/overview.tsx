@@ -110,26 +110,32 @@ export function Overview({api, projects}: {api: AdminApi; projects: Project[]}) 
   const premises = new Map(report.data?.estimate_assumptions?.map(row => [row.project, row] as const));
   const count=(value: number|null|undefined, pending: boolean)=>value?.toLocaleString('pt-BR') ?? (pending ? 'Consultando' : 'Indisponível');
   const needsPage=rows.filter(row=>row.state?.state==='ACTIVE' && row.state.pages.length===0);
+  const loadingReport = report.pending || (inventory.pending && !validScope);
+  const metricValue = (value: number | null | undefined) =>
+    loadingReport ? '—' : count(report.error === undefined ? value : undefined, false);
+  const eligibleClicks = report.data?.estimate_projects?.reduce((sum, row) => sum + row.clicks, 0) ?? 0;
+  const assumption = project && premises.get(project.id);
   return <>
-    <Heading title="Visão Geral" description="Projetos, sinais observados e resultados comerciais."
+    <Heading title="Visão Geral"
       actions={<div className="action-links">
         <Link className="button primary" {...nav.link(projects.length ? projectsPath : offerPath)}>
           {projects.length ? 'Ver projetos' : 'Proteger oferta'}</Link>
-        {project && estimatePage && <Link className="button"
-          {...nav.link(conversionsPath(project.id,estimatePage.id)+'/estimativa','?dias='+days)}>Configurar estimativa</Link>}
         <button type="button" onClick={() => {
           setUntil(Date.now()); inventory.revalidate(); installation.revalidate(); alerts.revalidate();
-        }}>Atualizar visão geral</button>
+        }}>Atualizar</button>
       </div>}/>
     <section className="filters overview-filters" aria-label="Filtros da visão geral">
       <label>Projeto<select value={project?.id ?? ''} onChange={event => change('projeto', event.target.value)}>
-        <option value="">Todos os projetos</option>{projects.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+        <option value="">Todos os projetos</option>{projects.map(item => {
+          const state = rows.find(row => row.project.id === item.id)?.state?.state;
+          return <option key={item.id} value={item.id}>{item.name}{state && state !== 'ACTIVE' ? ' · ' + (labels[state] ?? state) : ''}</option>;
+        })}
       </select></label>
-      <label>LP das métricas<select disabled={!project || inventory.pending} value={metricPageId ?? ''} onChange={event => change('lp',event.target.value)}>
+      <label>LP<select disabled={!project || inventory.pending} value={metricPageId ?? ''} onChange={event => change('lp',event.target.value)}>
         <option value="">Todas as LPs</option>{pages.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
         {metricPageId && !metricPage && <option value={metricPageId}>LP indisponível</option>}
       </select></label>
-      <label>Cópia das métricas<select disabled={!metricPage} value={copyValue} onChange={event => change('copia',event.target.value)}>
+      <label>Cópia<select disabled={!metricPage} value={copyValue} onChange={event => change('copia',event.target.value)}>
         <option value="">Todas as cópias</option>{copies.map(({origin,pathname}) => {
           const value = JSON.stringify([origin,pathname]);
           return <option key={value} value={value}>{origin + pathname}</option>;
@@ -137,154 +143,179 @@ export function Overview({api, projects}: {api: AdminApi; projects: Project[]}) 
         {copyValue && !copies.some(({origin,pathname}) => JSON.stringify([origin,pathname]) === copyValue) &&
           <option value={copyValue}>{copyOrigin}{copyPath}</option>}
       </select></label>
-      <label>Período dos resultados<select value={days} onChange={event => change('dias', event.target.value)}>
+      <label>Período<select value={days} onChange={event => change('dias', event.target.value)}>
         <option value="1">Últimas 24 horas</option><option value="7">Últimos 7 dias</option>
       </select></label>
     </section>
     {!validScope && !inventory.pending && <p role="status">Selecione um projeto e uma LP válidos para consultar este recorte.</p>}
-    <dl className="overview-metrics">
-      <div><dt>Projetos ativos</dt><dd>{count(projectCount,inventory.pending)}</dd></div>
-      <div><dt>LPs ativas</dt><dd>{count(activePages,inventory.pending)}</dd></div>
-      <div><dt>Incidentes no histórico retornado</dt><dd>{count(incidentCount,inventory.pending)}</dd></div>
-      <div><dt>Sessões observadas</dt><dd>{count(sessions,report.pending)}</dd></div>
-      <div><dt>Cliques observados em CTAs</dt><dd>{count(clicks,report.pending)}</dd></div>
-      <div><dt>Sessões distintas com clique</dt><dd>{count(report.data?.click_sessions,report.pending)}</dd></div>
+    <dl className="overview-metrics" aria-busy={loadingReport}>
+      <div><dt>Sessões registradas</dt><dd>{metricValue(sessions)}</dd></div>
+      <div><dt>Cliques nos CTAs</dt><dd>{metricValue(clicks)}</dd></div>
+      <div><dt>Sessões com clique</dt><dd>{metricValue(report.data?.click_sessions)}</dd></div>
+      <div className="estimate-highlight"><dt>Valor estimado recuperado</dt><dd>{loadingReport ? '—' :
+        report.error !== undefined || !observations ? 'Indisponível' : report.data?.estimated_revenue?.length ?
+          report.data.estimated_revenue.map(item => <span key={item.currency}>{money(
+            (BigInt(item.amount_minor_numerator) + BigInt(item.denominator / 2)) / BigInt(item.denominator), item.currency)}</span>) :
+          'Sem estimativa'}</dd><dd className="estimate-caption"><small>Estimativa, não vendas confirmadas</small></dd></div>
     </dl>
-    <div className="dashboard-workspace"><Activity key={copyValue ? 'copy' : 'general'} copyScoped={!!copyValue} observations={report.pending || inventory.pending && !validScope ? undefined : observations ?? null} error={report.error} from={from} until={until}/>
-    <section className="panel">
-      <div className="panel-heading"><h2>Instalações e alertas</h2><Link {...nav.link(healthPath)}>Saúde e operações</Link></div>
-      {needsPage.map(row=><div className="panel-heading" key={row.project.id}>
-        <p>{row.project.name} ainda precisa da primeira LP.</p>
-        <Link className="button" {...nav.link(newPagePath(row.project.id))}>Cadastrar LP</Link>
-      </div>)}
-      {project && <label>LP para diagnóstico<select value={page?.id ?? ''} onChange={event => change('diagnostico', event.target.value)}>
-        <option value="">Selecione</option>{inventory.data?.[0]?.state?.pages.map(item =>
-          <option key={item.id} value={item.id}>{item.name}</option>)}
-      </select></label>}
-      {!project ? <p>Selecione um projeto nos filtros para consultar suas instalações e alertas.</p> : <>
-        {alerts.error !== undefined ? <Failure error={alerts.error} retry={alerts.revalidate}/> : alerts.pending ? <Loading/> :
-          <p>{alerts.data?.state === 'AVAILABLE' ? quantity(alerts.data.items.length, 'alerta', 'alertas') + ' no recorte de revisão' : 'Revisão de alertas indisponível'}</p>}
-        {!!alerts.data?.items.length && <Link {...nav.link(settingsPath + '/notificacoes', '?projeto=' + project.id)}>Revisar alertas deste projeto</Link>}
-        {page ? <>
-          {installation.error !== undefined ? <Failure error={installation.error} retry={installation.revalidate}/> :
-            installation.pending ? <Loading/> : installation.data && <div>
-              <p><strong>{publicationLabel(installation.data)}</strong> · {
-                labels[installation.data.diagnostic?.status ?? ''] ?? 'Sem diagnóstico de camadas'}</p>
-              {installation.data.verification.issue && <p className="muted">{installationMessages[installation.data.verification.issue]}</p>}
-            </div>}
-          <Link className="button" {...nav.link(installPath(project.id, page.id))}>Abrir diagnóstico de {page.name}</Link>
-        </> : <p>Selecione uma LP para consultar a instalação.</p>}
-      </>}
-    </section></div>
-    <div className="operation-grid overview-panels">
-    {!report.pending && observations && <TrafficOrigins observations={observations}/>}
-    <section className="panel">
-      <h2>Resultados do período</h2>
-      {report.error !== undefined ? <Failure error={report.error} retry={report.revalidate}/> :
-        report.pending ? <Loading/> : report.data && <dl className="review">
-          <dt>Cliques considerados na estimativa</dt><dd>{count(report.data.estimate_projects?.reduce((sum,row) => sum + row.clicks,0),false)}</dd>
-          <dt>Receita potencial estimada</dt><dd>{report.data.estimated_revenue?.length ?
-            report.data.estimated_revenue.map(item => <div key={item.currency}>{money(
-              (BigInt(item.amount_minor_numerator) + BigInt(item.denominator / 2)) / BigInt(item.denominator), item.currency)}</div>) :
-            'Sem estimativa no período'}</dd>
-          <dt>Vendas reportadas</dt><dd>{report.data.currencies?.length ? report.data.currencies.map(item =>
-            <div key={item.currency}>{item.reported_sales} {item.reported_sales === 1 ? 'venda' : 'vendas'} · {
-              money(item.reported_amount_minor, item.currency, commerceExponents[item.currency] ?? null)}</div>) : copyValue ? 'Indisponíveis por cópia' : 'Sem vendas reportadas no período'}</dd>
-          <dt>Receita efetivamente recuperada</dt><dd>Indisponível</dd>
-        </dl>}
-      <p className="muted">Receita potencial = cliques observados × taxa de conversão estimada × ticket médio. Visualizações de página e chegada ao checkout estão indisponíveis.</p>
-    </section>
+    {report.error !== undefined && <Failure error={report.error} retry={report.retry}/>}
+    <div className="dashboard-workspace">
+      <Activity key={copyValue ? 'copy' : 'general'} copyScoped={!!copyValue} observations={loadingReport ? undefined : observations ?? null} error={report.error} from={from} until={until}/>
+      <TrafficOrigins observations={loadingReport ? undefined : report.error === undefined ? observations ?? null : null}/>
     </div>
-    {!report.pending && report.data && observations && scope.length > 0 && <section className="panel" aria-labelledby="finance-projects">
-      <h2 id="finance-projects">Estimativa por projeto</h2>
-      <div className="finance-table-wrap" tabIndex={0} role="region" aria-label="Detalhamento das estimativas">
-        <table className="activity-table finance-table"><thead><tr>
-          <th scope="col">Projeto</th><th scope="col">Cliques observados</th><th scope="col">Premissas</th><th scope="col">Receita potencial</th>
-        </tr></thead><tbody>{scope.map(item => {
-          const estimate = estimates.get(item.id);
-          const assumption = premises.get(item.id);
-          const projectClicks = clicksByProject.get(item.id) ?? 0;
-          const projectPages = rows.find(row => row.project.id === item.id)?.state?.pages;
-          const candidate = metricPage ?? projectPages?.find(lp => lp.enabled && lp.lifecycle_state === 'ACTIVE') ?? projectPages?.[0];
-          return <tr key={item.id}>
-            <th scope="row">{item.name}</th><td data-heading="Cliques observados">{count(projectClicks,false)}</td>
-            <td data-heading="Premissas"><span>{assumption ? <>{money(assumption.ticket_minor, assumption.currency)} · {(assumption.rate / 100).toLocaleString('pt-BR', {maximumFractionDigits:2})}% · v{assumption.version}</> : 'Sem premissas'}</span>
-              {assumption && <small>{formatDate(assumption.configured_at)}</small>}
-              {candidate && <small><Link {...nav.link(conversionsPath(item.id, candidate.id) + '/estimativa', '?dias=' + days)}>Configurar estimativa de {item.name}</Link></small>}
-            </td>
-            <td data-heading="Receita potencial">{estimate ? <>Estimativa {money((BigInt(estimate.numerator) + 5000n) / 10000n, estimate.currency)}</> :
-              projectClicks ? 'Faltam premissas' : 'Sem cliques'}</td>
-          </tr>;
-        })}</tbody></table>
-      </div>
-    </section>}
-    {!!report.data?.cta_points?.length && <section className="panel" aria-labelledby="cta-metrics">
+    {!loadingReport && report.error === undefined && observations && <section className="panel cta-metrics" aria-labelledby="cta-metrics">
       <h2 id="cta-metrics">Cliques por CTA</h2>
-      <p className="muted">Mesmo período do filtro. Uma sessão pode clicar em vários CTAs.</p>
-      <div className="finance-table-wrap" tabIndex={0} role="region" aria-label="Detalhamento por CTA">
-        <table className="activity-table finance-table"><thead><tr>
-          <th scope="col">CTA</th><th scope="col">Projeto e LP</th><th scope="col">Cópia</th>
-          <th scope="col">Origem do tráfego</th><th scope="col">Cliques</th><th scope="col">Sessões com clique</th>
-        </tr></thead><tbody>{report.data.cta_points.map(point => {
-          const item = rows.find(row => row.project.id === point.project_id);
-          const lp = item?.state?.pages.find(page => page.id === point.page_id);
-          return <tr key={JSON.stringify([point.project_id,point.page_id,point.copy_origin,point.copy_path,point.marker,point.surface,point.traffic_class])}>
-            <th scope="row">{point.alias ?? point.marker}{point.surface && <small>{point.surface}</small>}</th>
-            <td data-heading="Projeto e LP">{item?.project.name ?? point.project_id} · {lp?.name ?? 'LP indisponível'}</td>
-            <td data-heading="Cópia">{point.copy_origin}{point.copy_path}</td>
-            <td data-heading="Origem do tráfego">{trafficLabels[point.traffic_class]}</td>
-            <td data-heading="Cliques">{count(point.clicks,false)}</td>
-            <td data-heading="Sessões com clique">{count(point.sessions,false)}</td>
-          </tr>;
-        })}</tbody></table>
-      </div>
+      {report.data?.cta_points?.length ? <>
+        <p className="muted">Uma sessão pode clicar em vários CTAs.</p>
+        <div className="finance-table-wrap" tabIndex={0} role="region" aria-label="Detalhamento por CTA">
+          <table className="activity-table finance-table overview-table"><thead><tr>
+            <th scope="col">CTA</th><th scope="col">Projeto e LP</th><th scope="col">Cópia</th>
+            <th scope="col">Origem do tráfego</th><th scope="col">Cliques</th><th scope="col">Sessões com clique</th>
+          </tr></thead><tbody>{report.data.cta_points.map(point => {
+            const item = rows.find(row => row.project.id === point.project_id);
+            const lp = item?.state?.pages.find(page => page.id === point.page_id);
+            return <tr key={JSON.stringify([point.project_id,point.page_id,point.copy_origin,point.copy_path,point.marker,point.surface,point.traffic_class])}>
+              <th scope="row">{point.alias ?? point.marker}{point.surface && <small>{point.surface}</small>}</th>
+              <td data-heading="Projeto e LP">{item?.project.name ?? point.project_id} · {lp?.name ?? 'LP indisponível'}</td>
+              <td data-heading="Cópia">{point.copy_origin}{point.copy_path}</td>
+              <td data-heading="Origem do tráfego">{overviewTrafficLabels[point.traffic_class]}</td>
+              <td data-heading="Cliques">{count(point.clicks,false)}</td>
+              <td data-heading="Sessões com clique">{count(point.sessions,false)}</td>
+            </tr>;
+          })}</tbody></table>
+        </div>
+      </> : <p className="muted">Sem cliques vinculados a um CTA neste período.</p>}
     </section>}
-    <section className="panel">
-      <h2>Projetos e investigações</h2>
-      <p className="muted">O histórico de incidentes segue o recorte retornado pelo servidor.</p>
-      {inventory.pending ? <Loading/> : inventory.data?.length ? <ul className="plain evidence-list">
-        {inventory.data.map(row => <li key={row.project.id}>
-          <div className="panel-heading"><strong>{row.project.name}</strong>
-            <Link {...nav.link(projectPath(row.project.id))}>Administrar oferta</Link></div>
-          <p>{row.state ? (labels[row.state.state] ?? row.state.state) + ' · ' +
-            quantity(row.state.pages.filter(item => item.enabled && item.lifecycle_state === 'ACTIVE').length,
-              'LP habilitada e ativa no cadastro', 'LPs habilitadas e ativas no cadastro') :
-            'Cadastro de LPs indisponível'}</p>
-          {row.incidents ? <>
-            <p>{quantity(row.incidents.length, 'incidente', 'incidentes')} no histórico retornado</p>
-            {row.incidents.slice(0, 3).map(item => <div key={item.incident_id}>
-              <Link {...nav.link(incidentPath(row.project.id, item.incident_id))}>{item.host}</Link> · {reviewStates[item.status] ?? item.status}
-            </div>)}
-          </> : <p>Consulta de incidentes indisponível.</p>}
-        </li>)}</ul> : <p>Nenhum projeto cadastrado.</p>}
+    <section className="panel overview-estimate" aria-labelledby="overview-estimate">
+      <div className="panel-heading">
+        <h2 id="overview-estimate">Configuração da estimativa</h2>
+        {project && estimatePage && <Link className="button"
+          {...nav.link(conversionsPath(project.id, estimatePage.id) + '/estimativa', '?dias=' + days)}>Configurar estimativa</Link>}
+      </div>
+      <p className="estimate-equation">Cliques × Conversão estimada × Ticket médio = Valor estimado recuperado</p>
+      {loadingReport ? <Loading/> : report.error === undefined && observations && <>
+        <p className="muted">{quantity(eligibleClicks, 'clique considerado', 'cliques considerados')} na estimativa.</p>
+        {project && (assumption ? <dl className="estimate-assumptions">
+          <div><dt>Ticket médio</dt><dd>{money(assumption.ticket_minor, assumption.currency)}</dd></div>
+          <div><dt>Conversão estimada</dt><dd>{(assumption.rate / 100).toLocaleString('pt-BR', {maximumFractionDigits: 2})}%</dd></div>
+          <div><dt>Configuração em uso</dt><dd>Versão {assumption.version} · {formatDate(assumption.configured_at)}</dd></div>
+        </dl> : <p className="muted">Sem configuração para este projeto.</p>)}
+        {!project && scope.length > 0 && <details className="overview-details">
+          <summary>Estimativa por projeto</summary>
+          <div className="finance-table-wrap" tabIndex={0} role="region" aria-label="Detalhamento das estimativas">
+            <table className="activity-table finance-table overview-table"><thead><tr>
+              <th scope="col">Projeto</th><th scope="col">Cliques nos CTAs</th><th scope="col">Configuração</th><th scope="col">Valor estimado</th>
+            </tr></thead><tbody>{scope.map(item => {
+              const estimate = estimates.get(item.id);
+              const assumption = premises.get(item.id);
+              const projectClicks = clicksByProject.get(item.id) ?? 0;
+              const projectPages = rows.find(row => row.project.id === item.id)?.state?.pages;
+              const candidate = projectPages?.find(lp => lp.enabled && lp.lifecycle_state === 'ACTIVE') ?? projectPages?.[0];
+              return <tr key={item.id}>
+                <th scope="row">{item.name}</th><td data-heading="Cliques nos CTAs">{count(projectClicks,false)}</td>
+                <td data-heading="Configuração"><div><span>{assumption ? <>{money(assumption.ticket_minor, assumption.currency)} · {(assumption.rate / 100).toLocaleString('pt-BR', {maximumFractionDigits:2})}% · v{assumption.version}</> : 'Sem configuração'}</span>
+                  {assumption && <small>{formatDate(assumption.configured_at)}</small>}
+                  {candidate && <small><Link {...nav.link(conversionsPath(item.id, candidate.id) + '/estimativa', '?dias=' + days)}>Configurar estimativa de {item.name}</Link></small>}
+                </div></td>
+                <td data-heading="Valor estimado">{estimate ? <>Estimativa {money((BigInt(estimate.numerator) + 5000n) / 10000n, estimate.currency)}</> :
+                  projectClicks ? 'Falta configuração' : 'Sem cliques'}</td>
+              </tr>;
+            })}</tbody></table>
+          </div>
+        </details>}
+      </>}
     </section>
+    <details className="panel overview-details" open={filters.has('diagnostico') || undefined}>
+      <summary>Saúde, instalações e investigações</summary>
+      <dl className="overview-health">
+        <div><dt>Projetos ativos</dt><dd>{count(projectCount,inventory.pending)}</dd></div>
+        <div><dt>LPs ativas</dt><dd>{count(activePages,inventory.pending)}</dd></div>
+        <div><dt>Possíveis cópias detectadas</dt><dd>{count(incidentCount,inventory.pending)}</dd></div>
+      </dl>
+      <section className="panel">
+        <div className="panel-heading"><h2>Instalações e alertas</h2><Link {...nav.link(healthPath)}>Saúde e operações</Link></div>
+        {needsPage.map(row=><div className="panel-heading" key={row.project.id}>
+          <p>{row.project.name} ainda precisa da primeira LP.</p>
+          <Link className="button" {...nav.link(newPagePath(row.project.id))}>Cadastrar LP</Link>
+        </div>)}
+        {project && <label>LP para diagnóstico<select value={page?.id ?? ''} onChange={event => change('diagnostico', event.target.value)}>
+          <option value="">Selecione</option>{inventory.data?.[0]?.state?.pages.map(item =>
+            <option key={item.id} value={item.id}>{item.name}</option>)}
+        </select></label>}
+        {!project ? <p>Selecione um projeto nos filtros para consultar suas instalações e alertas.</p> : <>
+          {alerts.error !== undefined ? <Failure error={alerts.error} retry={alerts.revalidate}/> : alerts.pending ? <Loading/> :
+            <p>{alerts.data?.state === 'AVAILABLE' ? quantity(alerts.data.items.length, 'alerta', 'alertas') + ' no recorte de revisão' : 'Revisão de alertas indisponível'}</p>}
+          {!!alerts.data?.items.length && <Link {...nav.link(settingsPath + '/notificacoes', '?projeto=' + project.id)}>Revisar alertas deste projeto</Link>}
+          {page ? <>
+            {installation.error !== undefined ? <Failure error={installation.error} retry={installation.revalidate}/> :
+              installation.pending ? <Loading/> : installation.data && <div>
+                <p><strong>{publicationLabel(installation.data)}</strong> · {
+                  labels[installation.data.diagnostic?.status ?? ''] ?? 'Sem diagnóstico de camadas'}</p>
+                {installation.data.verification.issue && <p className="muted">{installationMessages[installation.data.verification.issue]}</p>}
+              </div>}
+            <Link className="button" {...nav.link(installPath(project.id, page.id))}>Abrir diagnóstico de {page.name}</Link>
+          </> : <p>Selecione uma LP para consultar a instalação.</p>}
+        </>}
+      </section>
+      <section className="panel">
+        <h2>Projetos e investigações</h2>
+        <p className="muted">O histórico de incidentes segue o recorte retornado pelo servidor.</p>
+        {inventory.pending ? <Loading/> : inventory.data?.length ? <ul className="plain evidence-list">
+          {inventory.data.map(row => <li key={row.project.id}>
+            <div className="panel-heading"><strong>{row.project.name}</strong>
+              <Link {...nav.link(projectPath(row.project.id))}>Administrar oferta</Link></div>
+            <p>{row.state ? (labels[row.state.state] ?? row.state.state) + ' · ' +
+              quantity(row.state.pages.filter(item => item.enabled && item.lifecycle_state === 'ACTIVE').length,
+                'LP habilitada e ativa no cadastro', 'LPs habilitadas e ativas no cadastro') :
+              'Cadastro de LPs indisponível'}</p>
+            {row.incidents ? <>
+              <p>{quantity(row.incidents.length, 'possível cópia detectada', 'possíveis cópias detectadas')}</p>
+              {row.incidents.slice(0, 3).map(item => <div key={item.incident_id}>
+                <Link {...nav.link(incidentPath(row.project.id, item.incident_id))}>{item.host}</Link> · {reviewStates[item.status] ?? item.status}
+              </div>)}
+            </> : <p>Consulta de incidentes indisponível.</p>}
+          </li>)}</ul> : <p>Nenhum projeto cadastrado.</p>}
+      </section>
+      <section className="panel">
+        <h2>Vendas e dados disponíveis</h2>
+        {loadingReport ? <Loading/> : report.error === undefined && report.data && <dl className="review">
+            <dt>Vendas reportadas</dt><dd>{report.data.currencies?.length ? report.data.currencies.map(item =>
+              <div key={item.currency}>{item.reported_sales} {item.reported_sales === 1 ? 'venda' : 'vendas'} · {
+                money(item.reported_amount_minor, item.currency, commerceExponents[item.currency] ?? null)}</div>) : copyValue ? 'Indisponíveis por cópia' : 'Sem vendas reportadas no período'}</dd>
+            <dt>Receita efetivamente recuperada</dt><dd>Indisponível</dd>
+          </dl>}
+        <p className="muted">Visualizações de página e chegada ao checkout estão indisponíveis.</p>
+      </section>
+    </details>
   </>;
 }
 
-function TrafficOrigins({observations}: {observations: Observation[]}) {
+const overviewTrafficLabels = {...trafficLabels, REFERRAL: 'Outros sites'};
+
+function TrafficOrigins({observations}: {observations?: Observation[] | null}) {
   const byClass = new Map<string, number>();
-  for (const row of observations) if (row.action === 'SESSION_OBSERVED') {
+  for (const row of observations ?? []) if (row.action === 'SESSION_OBSERVED') {
     byClass.set(row.traffic_class, (byClass.get(row.traffic_class) ?? 0) + row.events);
   }
   const total = [...byClass.values()].reduce((sum, count) => sum + count, 0);
   return <section className="panel" aria-labelledby="traffic-origins">
     <h2 id="traffic-origins">Origem do tráfego</h2>
-    <p><strong>{total.toLocaleString('pt-BR')}</strong> sessões observadas</p>
-    <dl className="traffic-breakdown">{Object.entries(trafficLabels).map(([id, label]) => {
-      const count = byClass.get(id) ?? 0;
-      return <div key={id}>
-        <dt>{label}</dt>
-        <dd><strong>{count.toLocaleString('pt-BR')}</strong>
-          <small>{(total ? count / total : 0).toLocaleString('pt-BR', {style:'percent',maximumFractionDigits:1})}</small>
-          <meter aria-label={label} min={0} max={Math.max(1,total)} value={count}/></dd>
-      </div>;
-    })}</dl>
-    <p className="muted">A classificação usa os sinais declarados no início da sessão. Uma UTM posterior mantém a classificação inicial.</p>
+    {observations === undefined ? <Loading/> : observations === null ? <p className="muted">Origens indisponíveis.</p> :
+      total ? <dl className="traffic-breakdown">{Object.entries(overviewTrafficLabels).map(([id, label]) => {
+        const count = byClass.get(id) ?? 0;
+        return <div key={id}>
+          <dt>{label}</dt>
+          <dd><strong>{count.toLocaleString('pt-BR')}</strong>
+            <small>{(count / total).toLocaleString('pt-BR', {style: 'percent', maximumFractionDigits: 1})}</small></dd>
+          <dd className="traffic-meter"><meter aria-label={label} min={0} max={total} value={count}/></dd>
+        </div>;
+      })}</dl> : <p className="muted">Sem sessões neste período.</p>}
+    <p className="muted">Origem indicada pelos sinais da visita. UTMs não comprovam a plataforma.</p>
   </section>;
 }
 
 const activityTypes = {
-  SESSION_OBSERVED: 'Sessões observadas', CTA_CLICK_OBSERVED: 'Cliques de CTA',
+  SESSION_OBSERVED: 'Sessões registradas', CTA_CLICK_OBSERVED: 'Cliques nos CTAs',
   PAGE_REDIRECT_ATTEMPT: 'Tentativas de redirecionamento', CHECKOUT_HANDOFF_ATTEMPT: 'Tentativas de encaminhamento ao checkout',
 } as const;
 
@@ -315,10 +346,10 @@ function Activity({observations, error, from, until, copyScoped}: {observations?
       </select></label>
       <label>Origem declarada<select value={traffic} onChange={event => setTraffic(event.target.value)}>
         <option value="">Todas as origens</option>
-        {Object.entries(trafficLabels).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+        {Object.entries(overviewTrafficLabels).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
       </select></label>
     </div>
-    {error !== undefined ? <p className="muted">A atividade está indisponível.</p> : observations === undefined ? <Loading/> :
+    {error !== undefined ? <p className="muted">A atividade está indisponível.</p> : observations === undefined ? <Loading/> : observations === null ? <p className="muted">Atividade indisponível.</p> :
       total === 0 ? <p className="empty">Sem registros para a métrica e a origem selecionadas.</p> : <>
         <p><strong>{total.toLocaleString('pt-BR')}</strong> · {activityTypes[metric]}</p>
         {table ? <table className="activity-table"><thead><tr><th scope="col">Dia (UTC)</th><th scope="col">Registros</th></tr></thead>
@@ -326,7 +357,7 @@ function Activity({observations, error, from, until, copyScoped}: {observations?
         </table> : <ActivityChart data={data} label={activityTypes[metric]}/>}
       </>}
     {copyScoped && <p className="muted">Sessões e cliques incluem apenas registros vinculados a esta cópia.</p>}
-    <p className="muted">Horários em UTC. Sinais de navegador não identificam pessoas nem confirmam chegada ou venda.</p>
+    <p className="muted">Horários em UTC. Uma sessão não identifica uma pessoa.</p>
   </section>;
 }
 
@@ -334,14 +365,14 @@ function ActivityChart({data, label}: {data: {day: string; count: number}[]; lab
   const max = Math.max(1, ...data.map(point => point.count));
   const points = data.map((point, index) => ({
     ...point,
-    x: data.length === 1 ? 360 : 50 + index * 648 / (data.length - 1),
+    x: data.length === 1 ? 360 : 50 + index * 630 / (data.length - 1),
     y: 168 - 138 * point.count / max,
   }));
   const coordinates = points.map(point => point.x + ',' + point.y).join(' ');
   const values = points.map(({day, count}) => day + ': ' + count).join('; ');
   return <svg className="activity-chart" viewBox="0 0 720 202" role="img" aria-label={label + ' por dia em UTC. ' + values}>
-    <line x1="50" y1="30" x2="698" y2="30" className="activity-guide"/>
-    <line x1="50" y1="168" x2="698" y2="168" className="activity-guide"/>
+    <line x1="50" y1="30" x2="680" y2="30" className="activity-guide"/>
+    <line x1="50" y1="168" x2="680" y2="168" className="activity-guide"/>
     <text x="40" y="35" textAnchor="end">{max.toLocaleString('pt-BR')}</text>
     <text x="40" y="172" textAnchor="end">0</text>
     <polygon points={`${points[0].x},168 ${coordinates} ${points.at(-1)!.x},168`} className="activity-fill"/>
