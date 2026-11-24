@@ -3,18 +3,24 @@ import {Link, useLocation, useNavigate} from 'react-router-dom';
 import {AdminApi, type Project, type ProjectState} from './admin-api';
 import {conversionsPath, incidentPath, installPath, newPagePath, offerPath, projectPath, projectsPath, settingsPath, useContextNavigation} from './navigation';
 import {commerceExponents, money} from './conversions';
-import {trafficLabels} from './operations';
+import {formatDate, trafficLabels} from './operations';
 import {labels, Failure, Heading, Loading, useQuery} from './ui';
 import type {Incident} from './protection-contracts';
 import {healthPath, installationMessages, publicationLabel, type InstallationStatus} from './installation-status';
 
 type Observation = {project_id: string; action: string; traffic_class: string; events: number; day: string};
+type Copy = {origin: string; pathname: string};
+type Point = {project_id: string; page_id: string; copy_origin: string; copy_path: string;
+  marker: string; surface: string; alias?: string; traffic_class: keyof typeof trafficLabels; clicks: number; sessions: number};
 type OverviewReport = {
+  click_sessions: number | null;
+  copies: Copy[];
+  cta_points: Point[];
   observations: Observation[] | null;
   currencies: {currency: string; reported_sales: number; reported_amount_minor: string | null}[] | null;
   estimated_revenue: {currency: string; amount_minor_numerator: string; denominator: number}[] | null;
-  estimate_projects?: {project: string; currency: string; numerator: string}[];
-  estimate_assumptions?: {project: string; currency: string; ticket_minor: string; rate: number; version: string}[];
+  estimate_projects?: {project: string; clicks: number; currency: string; numerator: string}[];
+  estimate_assumptions?: {project: string; currency: string; ticket_minor: string; rate: number; version: string; configured_at: string}[];
 };
 const reviewStates: Record<string, string> = {unverified: 'Não verificado', investigating: 'Em investigação',
   confirmed_copy: 'Cópia confirmada', false_positive: 'Falso positivo'};
@@ -33,10 +39,6 @@ export function Overview({api, projects}: {api: AdminApi; projects: Project[]}) 
   const days = filters.get('dias') === '1' ? 1 : 7;
   const [until, setUntil] = useState(Date.now);
   const from = until - days * dayMs;
-  const key = project?.id ?? 'all';
-  const report = useQuery(key + ':' + days + ':' + until, signal =>
-    api.request<OverviewReport>('commerce', {action: 'report', activity: true, ...(project ? {project: project.id} : {}),
-      from: new Date(from).toISOString(), until: new Date(until).toISOString()}, signal));
   const scope = project ? [project] : projects;
   const inventory = useQuery(JSON.stringify(scope.map(item => item.id)), async signal => {
     const rows = [];
@@ -53,8 +55,20 @@ export function Overview({api, projects}: {api: AdminApi; projects: Project[]}) 
     }
     return rows;
   });
-  const pageId = filters.get('lp');
-  const page = project && inventory.data?.[0]?.state?.pages.find(item => item.id === pageId);
+  const pages = project ? inventory.data?.[0]?.state?.pages ?? [] : [];
+  const page = pages.find(item => item.id === filters.get('diagnostico'));
+  const metricPageId = filters.get('lp');
+  const metricPage = pages.find(item => item.id === metricPageId);
+  const copyOrigin = filters.get('origem');
+  const copyPath = filters.get('copia');
+  const estimatePage = metricPage ?? pages.find(lp => lp.enabled && lp.lifecycle_state === 'ACTIVE') ?? pages[0];
+  const copyValue = copyOrigin && copyPath ? JSON.stringify([copyOrigin,copyPath]) : '';
+  const validScope = (!filters.get('projeto') || project) && (!metricPageId || metricPage) &&
+    ((!copyOrigin && !copyPath) || (copyValue && metricPage));
+  const report = useQuery(validScope ? JSON.stringify([project?.id,metricPage?.id,copyValue,from,until]) : '', signal =>
+    api.request<OverviewReport>('commerce', {action:'report',activity:true,...(project ? {project:project.id} : {}),
+      ...(metricPage ? {page:metricPage.id} : {}),...(copyValue ? {copyOrigin,copyPath} : {}),
+      from:new Date(from).toISOString(),until:new Date(until).toISOString()}, signal));
   const installation = useQuery(page && project ? project.id + ':' + page.id : '', signal =>
     api.request<InstallationStatus>('distribution', {action: 'inspect', project: project!.id, page: page!.id}, signal));
   const alerts = useQuery(project?.id ?? '', signal => api.request<{state: string; items: unknown[]}>(
@@ -62,7 +76,19 @@ export function Overview({api, projects}: {api: AdminApi; projects: Project[]}) 
   function change(name: string, value: string) {
     if (value) filters.set(name, value);
     else filters.delete(name);
-    if (name === 'projeto') filters.delete('lp');
+    if (name === 'projeto') {
+      filters.delete('lp');
+      filters.delete('diagnostico');
+    }
+    if (['projeto','lp','copia'].includes(name)) {
+      filters.delete('origem');
+      filters.delete('copia');
+    }
+    if (name === 'copia' && value) {
+      const [origin, pathname] = JSON.parse(value) as [string,string];
+      filters.set('origem',origin);
+      filters.set('copia',pathname);
+    }
     void navigate({pathname: location.pathname, search: filters.toString()}, {state: location.state, replace: true});
   }
   const observations = report.data?.observations;
@@ -78,15 +104,19 @@ export function Overview({api, projects}: {api: AdminApi; projects: Project[]}) 
     clicksByProject.set(row.project_id, (clicksByProject.get(row.project_id) ?? 0) + row.events);
   }
   const clicks = observations?.reduce((sum, row) => sum + (row.action === 'CTA_CLICK_OBSERVED' ? row.events : 0), 0);
+  const sessions = observations?.reduce((sum,row) => sum + (row.action === 'SESSION_OBSERVED' ? row.events : 0), 0);
+  const copies = report.data?.copies ?? [];
   const estimates = new Map(report.data?.estimate_projects?.map(row => [row.project, row] as const));
   const premises = new Map(report.data?.estimate_assumptions?.map(row => [row.project, row] as const));
-  const count=(value: number|null|undefined, pending: boolean)=>value ?? (pending ? 'Consultando' : 'Indisponível');
+  const count=(value: number|null|undefined, pending: boolean)=>value?.toLocaleString('pt-BR') ?? (pending ? 'Consultando' : 'Indisponível');
   const needsPage=rows.filter(row=>row.state?.state==='ACTIVE' && row.state.pages.length===0);
   return <>
     <Heading title="Visão Geral" description="Projetos, sinais observados e resultados comerciais."
       actions={<div className="action-links">
         <Link className="button primary" {...nav.link(projects.length ? projectsPath : offerPath)}>
           {projects.length ? 'Ver projetos' : 'Proteger oferta'}</Link>
+        {project && estimatePage && <Link className="button"
+          {...nav.link(conversionsPath(project.id,estimatePage.id)+'/estimativa','?dias='+days)}>Configurar estimativa</Link>}
         <button type="button" onClick={() => {
           setUntil(Date.now()); inventory.revalidate(); installation.revalidate(); alerts.revalidate();
         }}>Atualizar visão geral</button>
@@ -95,24 +125,39 @@ export function Overview({api, projects}: {api: AdminApi; projects: Project[]}) 
       <label>Projeto<select value={project?.id ?? ''} onChange={event => change('projeto', event.target.value)}>
         <option value="">Todos os projetos</option>{projects.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
       </select></label>
+      <label>LP das métricas<select disabled={!project || inventory.pending} value={metricPageId ?? ''} onChange={event => change('lp',event.target.value)}>
+        <option value="">Todas as LPs</option>{pages.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+        {metricPageId && !metricPage && <option value={metricPageId}>LP indisponível</option>}
+      </select></label>
+      <label>Cópia das métricas<select disabled={!metricPage} value={copyValue} onChange={event => change('copia',event.target.value)}>
+        <option value="">Todas as cópias</option>{copies.map(({origin,pathname}) => {
+          const value = JSON.stringify([origin,pathname]);
+          return <option key={value} value={value}>{origin + pathname}</option>;
+        })}
+        {copyValue && !copies.some(({origin,pathname}) => JSON.stringify([origin,pathname]) === copyValue) &&
+          <option value={copyValue}>{copyOrigin}{copyPath}</option>}
+      </select></label>
       <label>Período dos resultados<select value={days} onChange={event => change('dias', event.target.value)}>
         <option value="1">Últimas 24 horas</option><option value="7">Últimos 7 dias</option>
       </select></label>
     </section>
+    {!validScope && !inventory.pending && <p role="status">Selecione um projeto e uma LP válidos para consultar este recorte.</p>}
     <dl className="overview-metrics">
       <div><dt>Projetos ativos</dt><dd>{count(projectCount,inventory.pending)}</dd></div>
       <div><dt>LPs ativas</dt><dd>{count(activePages,inventory.pending)}</dd></div>
       <div><dt>Incidentes no histórico retornado</dt><dd>{count(incidentCount,inventory.pending)}</dd></div>
-      <div><dt>Cliques de CTA no período</dt><dd>{count(clicks,report.pending)}</dd></div>
+      <div><dt>Sessões observadas</dt><dd>{count(sessions,report.pending)}</dd></div>
+      <div><dt>Cliques observados em CTAs</dt><dd>{count(clicks,report.pending)}</dd></div>
+      <div><dt>Sessões distintas com clique</dt><dd>{count(report.data?.click_sessions,report.pending)}</dd></div>
     </dl>
-    <div className="dashboard-workspace"><Activity observations={report.pending ? undefined : observations} error={report.error} from={from} until={until}/>
+    <div className="dashboard-workspace"><Activity key={copyValue ? 'copy' : 'general'} copyScoped={!!copyValue} observations={report.pending || inventory.pending && !validScope ? undefined : observations ?? null} error={report.error} from={from} until={until}/>
     <section className="panel">
       <div className="panel-heading"><h2>Instalações e alertas</h2><Link {...nav.link(healthPath)}>Saúde e operações</Link></div>
       {needsPage.map(row=><div className="panel-heading" key={row.project.id}>
         <p>{row.project.name} ainda precisa da primeira LP.</p>
         <Link className="button" {...nav.link(newPagePath(row.project.id))}>Cadastrar LP</Link>
       </div>)}
-      {project && <label>LP para diagnóstico<select value={page?.id ?? ''} onChange={event => change('lp', event.target.value)}>
+      {project && <label>LP para diagnóstico<select value={page?.id ?? ''} onChange={event => change('diagnostico', event.target.value)}>
         <option value="">Selecione</option>{inventory.data?.[0]?.state?.pages.map(item =>
           <option key={item.id} value={item.id}>{item.name}</option>)}
       </select></label>}
@@ -127,8 +172,7 @@ export function Overview({api, projects}: {api: AdminApi; projects: Project[]}) 
                 labels[installation.data.diagnostic?.status ?? ''] ?? 'Sem diagnóstico de camadas'}</p>
               {installation.data.verification.issue && <p className="muted">{installationMessages[installation.data.verification.issue]}</p>}
             </div>}
-          <div className="action-links"><Link className="button" {...nav.link(installPath(project.id, page.id))}>Abrir diagnóstico de {page.name}</Link>
-            <Link {...nav.link(conversionsPath(project.id, page.id) + '/estimativa', '?dias=' + days)}>Configurar premissas</Link></div>
+          <Link className="button" {...nav.link(installPath(project.id, page.id))}>Abrir diagnóstico de {page.name}</Link>
         </> : <p>Selecione uma LP para consultar a instalação.</p>}
       </>}
     </section></div>
@@ -138,18 +182,17 @@ export function Overview({api, projects}: {api: AdminApi; projects: Project[]}) 
       <h2>Resultados do período</h2>
       {report.error !== undefined ? <Failure error={report.error} retry={report.revalidate}/> :
         report.pending ? <Loading/> : report.data && <dl className="review">
-          <dt>Cliques de CTA observados</dt><dd>{observations?.filter(row => row.action === 'CTA_CLICK_OBSERVED')
-            .reduce((total, row) => total + row.events, 0) ?? 'Indisponíveis'}</dd>
+          <dt>Cliques considerados na estimativa</dt><dd>{count(report.data.estimate_projects?.reduce((sum,row) => sum + row.clicks,0),false)}</dd>
           <dt>Receita potencial estimada</dt><dd>{report.data.estimated_revenue?.length ?
             report.data.estimated_revenue.map(item => <div key={item.currency}>{money(
               (BigInt(item.amount_minor_numerator) + BigInt(item.denominator / 2)) / BigInt(item.denominator), item.currency)}</div>) :
             'Sem estimativa no período'}</dd>
           <dt>Vendas reportadas</dt><dd>{report.data.currencies?.length ? report.data.currencies.map(item =>
             <div key={item.currency}>{item.reported_sales} {item.reported_sales === 1 ? 'venda' : 'vendas'} · {
-              money(item.reported_amount_minor, item.currency, commerceExponents[item.currency] ?? null)}</div>) : 'Sem vendas reportadas no período'}</dd>
-          <dt>Receita recuperada comprovada</dt><dd>Indisponível</dd>
+              money(item.reported_amount_minor, item.currency, commerceExponents[item.currency] ?? null)}</div>) : copyValue ? 'Indisponíveis por cópia' : 'Sem vendas reportadas no período'}</dd>
+          <dt>Receita efetivamente recuperada</dt><dd>Indisponível</dd>
         </dl>}
-      <p className="muted">Estimativas usam as premissas atuais dos projetos que têm configuração e cliques no período. O total geral de vendas inclui eventos reportados sem vínculo de projeto.</p>
+      <p className="muted">Receita potencial = cliques observados × taxa de conversão estimada × ticket médio. Visualizações de página e chegada ao checkout estão indisponíveis.</p>
     </section>
     </div>
     {!report.pending && report.data && observations && scope.length > 0 && <section className="panel" aria-labelledby="finance-projects">
@@ -160,15 +203,38 @@ export function Overview({api, projects}: {api: AdminApi; projects: Project[]}) 
         </tr></thead><tbody>{scope.map(item => {
           const estimate = estimates.get(item.id);
           const assumption = premises.get(item.id);
-          const count = clicksByProject.get(item.id) ?? 0;
-          const candidate = rows.find(row => row.project.id === item.id)?.state?.pages.find(lp => lp.enabled && lp.lifecycle_state === 'ACTIVE');
+          const projectClicks = clicksByProject.get(item.id) ?? 0;
+          const projectPages = rows.find(row => row.project.id === item.id)?.state?.pages;
+          const candidate = metricPage ?? projectPages?.find(lp => lp.enabled && lp.lifecycle_state === 'ACTIVE') ?? projectPages?.[0];
           return <tr key={item.id}>
-            <th scope="row">{item.name}</th><td data-heading="Cliques observados">{count}</td>
+            <th scope="row">{item.name}</th><td data-heading="Cliques observados">{count(projectClicks,false)}</td>
             <td data-heading="Premissas"><span>{assumption ? <>{money(assumption.ticket_minor, assumption.currency)} · {(assumption.rate / 100).toLocaleString('pt-BR', {maximumFractionDigits:2})}% · v{assumption.version}</> : 'Sem premissas'}</span>
-              {candidate && <small><Link {...nav.link(conversionsPath(item.id, candidate.id) + '/estimativa', '?dias=' + days)}>Configurar premissas de {item.name}</Link></small>}
+              {assumption && <small>{formatDate(assumption.configured_at)}</small>}
+              {candidate && <small><Link {...nav.link(conversionsPath(item.id, candidate.id) + '/estimativa', '?dias=' + days)}>Configurar estimativa de {item.name}</Link></small>}
             </td>
             <td data-heading="Receita potencial">{estimate ? <>Estimativa {money((BigInt(estimate.numerator) + 5000n) / 10000n, estimate.currency)}</> :
-              count ? 'Faltam premissas' : 'Sem cliques'}</td>
+              projectClicks ? 'Faltam premissas' : 'Sem cliques'}</td>
+          </tr>;
+        })}</tbody></table>
+      </div>
+    </section>}
+    {!!report.data?.cta_points?.length && <section className="panel" aria-labelledby="cta-metrics">
+      <h2 id="cta-metrics">Cliques por CTA</h2>
+      <p className="muted">Mesmo período do filtro. Uma sessão pode clicar em vários CTAs.</p>
+      <div className="finance-table-wrap" tabIndex={0} role="region" aria-label="Detalhamento por CTA">
+        <table className="activity-table finance-table"><thead><tr>
+          <th scope="col">CTA</th><th scope="col">Projeto e LP</th><th scope="col">Cópia</th>
+          <th scope="col">Origem do tráfego</th><th scope="col">Cliques</th><th scope="col">Sessões com clique</th>
+        </tr></thead><tbody>{report.data.cta_points.map(point => {
+          const item = rows.find(row => row.project.id === point.project_id);
+          const lp = item?.state?.pages.find(page => page.id === point.page_id);
+          return <tr key={JSON.stringify([point.project_id,point.page_id,point.copy_origin,point.copy_path,point.marker,point.surface,point.traffic_class])}>
+            <th scope="row">{point.alias ?? point.marker}{point.surface && <small>{point.surface}</small>}</th>
+            <td data-heading="Projeto e LP">{item?.project.name ?? point.project_id} · {lp?.name ?? 'LP indisponível'}</td>
+            <td data-heading="Cópia">{point.copy_origin}{point.copy_path}</td>
+            <td data-heading="Origem do tráfego">{trafficLabels[point.traffic_class]}</td>
+            <td data-heading="Cliques">{count(point.clicks,false)}</td>
+            <td data-heading="Sessões com clique">{count(point.sessions,false)}</td>
           </tr>;
         })}</tbody></table>
       </div>
@@ -203,24 +269,26 @@ function TrafficOrigins({observations}: {observations: Observation[]}) {
   const total = [...byClass.values()].reduce((sum, count) => sum + count, 0);
   return <section className="panel" aria-labelledby="traffic-origins">
     <h2 id="traffic-origins">Origem do tráfego</h2>
-    {total ? <dl className="traffic-breakdown">{Object.entries(trafficLabels).map(([id, label]) => {
+    <p><strong>{total.toLocaleString('pt-BR')}</strong> sessões observadas</p>
+    <dl className="traffic-breakdown">{Object.entries(trafficLabels).map(([id, label]) => {
       const count = byClass.get(id) ?? 0;
       return <div key={id}>
         <dt>{label}</dt>
-        <dd><strong>{(count / total).toLocaleString('pt-BR', {style:'percent',maximumFractionDigits:1})}</strong>
-          <meter aria-label={label} min={0} max={total} value={count}/></dd>
+        <dd><strong>{count.toLocaleString('pt-BR')}</strong>
+          <small>{(total ? count / total : 0).toLocaleString('pt-BR', {style:'percent',maximumFractionDigits:1})}</small>
+          <meter aria-label={label} min={0} max={Math.max(1,total)} value={count}/></dd>
       </div>;
-    })}</dl> : <p>Sem sinais de sessão no período selecionado.</p>}
-    <p className="muted">Distribuição por origem declarada nos sinais de sessão do período.</p>
+    })}</dl>
+    <p className="muted">A classificação usa os sinais declarados no início da sessão. Uma UTM posterior mantém a classificação inicial.</p>
   </section>;
 }
 
 const activityTypes = {
-  SESSION_OBSERVED: 'Sinais de sessão', CTA_CLICK_OBSERVED: 'Cliques de CTA',
+  SESSION_OBSERVED: 'Sessões observadas', CTA_CLICK_OBSERVED: 'Cliques de CTA',
   PAGE_REDIRECT_ATTEMPT: 'Tentativas de redirecionamento', CHECKOUT_HANDOFF_ATTEMPT: 'Tentativas de encaminhamento ao checkout',
 } as const;
 
-function Activity({observations, error, from, until}: {observations?: Observation[] | null; error: unknown; from: number; until: number}) {
+function Activity({observations, error, from, until, copyScoped}: {observations?: Observation[] | null; error: unknown; from: number; until: number; copyScoped: boolean}) {
   const [metric, setMetric] = useState<keyof typeof activityTypes>('SESSION_OBSERVED');
   const [traffic, setTraffic] = useState('');
   const [table, setTable] = useState(false);
@@ -243,7 +311,7 @@ function Activity({observations, error, from, until}: {observations?: Observatio
       </div></div>
     <div className="filters activity-filters">
       <label>Métrica<select value={metric} onChange={event => setMetric(event.target.value as typeof metric)}>
-        {Object.entries(activityTypes).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+        {Object.entries(activityTypes).filter(([id]) => !copyScoped || id === 'SESSION_OBSERVED' || id === 'CTA_CLICK_OBSERVED').map(([id, label]) => <option key={id} value={id}>{label}</option>)}
       </select></label>
       <label>Origem declarada<select value={traffic} onChange={event => setTraffic(event.target.value)}>
         <option value="">Todas as origens</option>
@@ -257,6 +325,7 @@ function Activity({observations, error, from, until}: {observations?: Observatio
           <tbody>{data.map(({day, count}) => <tr key={day}><th scope="row">{day}</th><td>{count.toLocaleString('pt-BR')}</td></tr>)}</tbody>
         </table> : <ActivityChart data={data} label={activityTypes[metric]}/>}
       </>}
+    {copyScoped && <p className="muted">Sessões e cliques incluem apenas registros vinculados a esta cópia.</p>}
     <p className="muted">Horários em UTC. Sinais de navegador não identificam pessoas nem confirmam chegada ou venda.</p>
   </section>;
 }

@@ -109,9 +109,23 @@
       }
       return target.href;
     };
+    // CORS keeps the receipt bound to the document Origin. Keepalive lets
+    // the observation outlive the document without blocking navigation.
+    const observe = (path, payload) => {
+      try {
+        void fetch(endpoint(path), {method:'POST', headers:{'Content-Type':'text/plain'},
+          body:JSON.stringify(payload), credentials:'omit', keepalive:true}).catch(() => {});
+      } catch (_) { /* Observation never gates navigation. */ }
+    };
     const reportAction = (receipt, marker, surface) => {
       if (typeof receipt !== 'string') return;
-      try { const hex=Array.from(crypto.getRandomValues(new Uint8Array(16)),x=>x.toString(16).padStart(2,'0')).join(''); const event=[hex.slice(0,8),hex.slice(8,12),hex.slice(12,16),hex.slice(16,20),hex.slice(20)].join('-'); navigator.sendBeacon(endpoint('observed-action'), new Blob([JSON.stringify({receipt,event,marker,surface})],{type:'text/plain'})); } catch (_) { /* Observation never gates navigation. */ }
+      try {
+        const hex = Array.from(crypto.getRandomValues(new Uint8Array(16)), x => x.toString(16).padStart(2,'0')).join('');
+        const event = [hex.slice(0,8),hex.slice(8,12),hex.slice(12,16),hex.slice(16,20),hex.slice(20)].join('-');
+        const payload = {receipt,event,marker,surface};
+        if (marker !== null) observe('observed-action', payload);
+        else navigator.sendBeacon(endpoint('observed-action'), new Blob([JSON.stringify(payload)], {type:'text/plain'}));
+      } catch (_) { /* Observation never gates navigation. */ }
     };
     const operationalContextMatches = decision => {
       const context=decision.operationalContext;
@@ -214,15 +228,15 @@
                   const replacement = entry.destination;
                   if (point?.navigation) {
                     if (!entry.nativeDigest || !event.isTrusted || event.button!==0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                    reportAction(snapshot.receipt, marker, entry.surface ?? null);
                     location.assign(replacement);
                     event.preventDefault();
                     event.stopImmediatePropagation();
-                    reportAction(snapshot.receipt, marker, entry.surface ?? null);
                     return;
                   }
                   if (!(node instanceof HTMLAnchorElement) || previous===null) return;
                   node.setAttribute('href', replacement);
-                  reportAction(snapshot.receipt, marker, entry.surface ?? null);
+                  if (event.isTrusted) reportAction(snapshot.receipt, marker, entry.surface ?? null);
                   setTimeout(() => { if (node.getAttribute('href') === replacement) node.setAttribute('href', previous); }, 0);
                 } catch (_) { /* Preserve the page on incompatible DOM implementations. */ }
               };
@@ -325,7 +339,8 @@
             reportEntry('REDIRECT_HANDOFF');
             reportAction(decision.observationReceipt, null, null);
           }).catch(() => { reportEntry('RUNTIME_ERROR'); cancelRedirect(); });
-        if (scoped) { try { navigator.sendBeacon(endpoint('observed-session'), new Blob([JSON.stringify({session,signals})],{type:'text/plain'})); } catch (_) { /* Passive metrics never block navigation. */ } }
+        if (scoped) observe('observed-session', {session,signals,
+          ...(initialPath.length <= 384 ? {pathname:initialPath} : {})});
       } catch (_) { cancelRedirect(); }
     };
     startDecision();

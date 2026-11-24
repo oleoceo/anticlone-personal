@@ -1,5 +1,10 @@
 # STATUS — AntiClone Personal
 
+## F29/F30 — métricas observadas de CTA
+- Dev de referência: 108 recibos CTA emitidos e zero fatos de clique. Falha histórica localizada entre emissão e persistência.
+- Visão Geral com contagens, sessões distintas com clique, aliases por CTA e filtros independentes de diagnóstico.
+- Migração aditiva 074 para sessões por cópia. Estimativas por projeto seguem premissas versionadas. [Contrato e rollback](docs/OBSERVED-CTA-METRICS.md).
+
 ## F21 — CTA após retorno pelo histórico
 - O Bootstrap solicita decisão nova ao restaurar do BFCache, sem o cooldown de cinco segundos de uma visita bem-sucedida. Mantém backoff em falhas e destino nativo até validar a política e o digest.
 - Prova em Chromium desktop e Pixel 7 emulado com BFCache ligado/desligado, três retornos, edição, suspensão, divergência de digest e falha de rede. Ver `tests/cta-history.test.ts`.

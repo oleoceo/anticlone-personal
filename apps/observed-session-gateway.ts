@@ -1,4 +1,4 @@
-import {recordCopyBrowserOutcome} from './page-copy-contexts.js';
+import {copyContextsInstalled,recordCopyBrowserOutcome,validCopyPath} from './page-copy-contexts.js';
 import {observeReceiptAction} from './observed-receipts.js';
 import type {Pool} from 'pg';
 import type {IncomingMessage,ServerResponse} from 'node:http';
@@ -25,7 +25,7 @@ export function observedSessionGateway(db:Pool){
    const fields=input as Record<string,unknown>;
    const diagnostic=match[2]==='observed-action' && Object.hasOwn(fields,'phase');
    if ((diagnostic ? ++diagnostics : ++count)>120) {res.writeHead(429).end();return;}
-   if(match[2]==='observed-session' && (Object.keys(fields).sort().join(',')!=='session,signals'||typeof fields.session!=='string'||!/^[a-f0-9]{32}$/.test(fields.session)))throw new TypeError();
+   if(match[2]==='observed-session' && (!['session,signals','pathname,session,signals'].includes(Object.keys(fields).sort().join(','))||typeof fields.session!=='string'||!/^[a-f0-9]{32}$/.test(fields.session)))throw new TypeError();
    const origin=configuredOrigin(req.headers.origin??'');
    const installed=(await db.query("SELECT to_regclass('observed_action_facts') IS NOT NULL installed")).rows[0].installed;
    if(!installed){res.writeHead(204).end();return;}
@@ -37,9 +37,22 @@ export function observedSessionGateway(db:Pool){
    }
    const traffic=classifyTraffic(fields.signals,origin);
    const session=fields.session as string;
-   const hex=createHash('sha256').update(context.project+'|'+context.page+'|'+session).digest('hex').slice(0,32);
+   const pathname=fields.pathname;
+   if(pathname!==undefined && (typeof pathname!=='string'||!validCopyPath(pathname)))throw new TypeError();
+   const knownCopy=typeof pathname==='string' && await copyContextsInstalled(db) &&
+     (await db.query(`SELECT 1 FROM page_copy_contexts c
+       WHERE project_id=$1 AND page_id=$2 AND copy_origin=$3 AND copy_pathname=$4
+       AND observed_at>=clock_timestamp()-interval '30 days'
+       AND NOT EXISTS (SELECT 1 FROM protected_page_urls WHERE origin=c.copy_origin)
+       AND NOT EXISTS (SELECT 1 FROM projects WHERE origin=c.copy_origin)
+       AND EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid='observed_action_facts'::regclass
+         AND attname='session_copy' AND NOT attisdropped)`,[context.project,context.page,origin,pathname])).rowCount;
+   const sessionCopy=knownCopy && typeof pathname==='string' ? {origin,pathname} : undefined;
+   const hash=createHash('sha256').update(context.project+'|'+context.page+'|'+session);
+   if(sessionCopy)hash.update(JSON.stringify(sessionCopy));
+   const hex=hash.digest('hex').slice(0,32);
    const event=[hex.slice(0,8),hex.slice(8,12),hex.slice(12,16),hex.slice(16,20),hex.slice(20)].join('-');
-   await recordObservedFact(db,context.project,{page:context.page,event,session,action:'SESSION_OBSERVED',traffic:traffic.trafficClass,version:null,evidence:'BROWSER_UNVERIFIED'});
+   await recordObservedFact(db,context.project,{page:context.page,event,session,action:'SESSION_OBSERVED',traffic:traffic.trafficClass,version:null,evidence:'BROWSER_UNVERIFIED',sessionCopy});
    res.writeHead(204).end();
   })().catch((error:unknown)=>res.writeHead(error instanceof TypeError||error instanceof SyntaxError?400:503).end());});return true;
  };
