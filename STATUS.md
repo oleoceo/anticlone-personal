@@ -1,5 +1,10 @@
 # STATUS — AntiClone Personal
 
+## F21 — CTA após retorno pelo histórico
+- O Bootstrap solicita decisão nova ao restaurar do BFCache, sem o cooldown de cinco segundos de uma visita bem-sucedida. Mantém backoff em falhas e destino nativo até validar a política e o digest.
+- Prova em Chromium desktop e Pixel 7 emulado com BFCache ligado/desligado, três retornos, edição, suspensão, divergência de digest e falha de rede. Ver `tests/cta-history.test.ts`.
+- Cópias com Bootstrap remoto recebem a correção ao carregar o script atualizado. A cópia com `/js/a.js` local precisa receber um novo Bootstrap.
+
 ## PR #88 — consolidação operacional
 - Redirecionamento por URL observada, destino HTTPS normalizado, percentuais por classe e confirmação direta auditada. Uma regra por cópia prevalece sobre a política antiga no mesmo contexto.
 - CTA por link identificado na cópia, com edição e suspensão. A migração 072 acrescenta inventário limitado e regras versionadas.

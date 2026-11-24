@@ -181,9 +181,9 @@ test('CTA refresh preserves independent mapping and expires locally', {timeout:9
     const heldRequest=new Promise<void>(resolve=>{firstHeld=resolve;}), releaseRequest=new Promise<void>(resolve=>{firstRelease=resolve;});
     await mobile.route('**/cta-refresh',async route=>{if (++calls===1) {firstHeld(); await releaseRequest; await route.abort().catch(()=>{});} else await route.continue();});
     await mobile.clock.fastForward(60000); await heldRequest;
-    await mobile.evaluate(()=>{window.dispatchEvent(new PageTransitionEvent('pagehide',{persisted:true})); window.dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true}));});
     const retry=mobile.waitForResponse(r=>r.url().endsWith('/cta-refresh'));
-    await mobile.clock.fastForward(5000); await retry; firstRelease(); await mobile.clock.runFor(1);
+    await mobile.evaluate(()=>{window.dispatchEvent(new PageTransitionEvent('pagehide',{persisted:true})); window.dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true}));});
+    await retry; firstRelease(); await mobile.clock.runFor(1);
     assert.equal(calls,2); assert.equal(await mobileClick('basic001'),clone+'/native-basic'); await mobile.clock.runFor(1);
     assert.equal(await mobileClick('premium1'),original+'/official-premium'); await mobile.clock.runFor(1);
     await mobile.unroute('**/cta-refresh');
@@ -210,7 +210,6 @@ test('CTA refresh preserves independent mapping and expires locally', {timeout:9
     coreRelease(); await delayedCore.waitForFunction(()=>document.documentElement.dataset.core==='loaded');
     const resumedCta=delayedCore.waitForResponse(r=>r.url().endsWith('/cta-refresh'));
     await delayedCore.evaluate(()=>window.dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true})));
-    await delayedCore.clock.fastForward(5000);
     assert.equal((await (await resumedCta).json()).action,'REPLACE_CONVERSION');
     assert.equal(delayedCore.url(),clone+'/clone');
     await delayedCore.close();
