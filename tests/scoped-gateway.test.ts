@@ -32,7 +32,7 @@ for (const distributionMode of [false,true]) test('scoped browser observations i
   const telemetryBase=(id:string)=>distributions.get(id)?.bases.TELEMETRY ?? 'http://127.0.0.1:3000/i/'+id+'/';
   const fixture=createServer((req,res) => {
     const path=req.url?.split('?')[0];
-    if(path==='/shared-checkout'){res.writeHead(200,{'content-type':'text/html'}).end('<h1>Checkout destination</h1>');return;}
+    if(path==='/shared-checkout'||path==='/health-checkout'){res.writeHead(200,{'content-type':'text/html'}).end('<h1>Checkout destination</h1>');return;}
     const id=path==='/entry-one' ? entryOne : path==='/entry-two' ? entryTwo : path==='/financas' ? finance : health;
     res.writeHead(200,{'content-type':'text/html'}).end(`<div data-anticlone-surface="main"><a data-anticlone-point="shared01" href="/checkout">Checkout</a><a data-anticlone-point="second01" href="/checkout-two">Second offer</a><a data-anticlone-point="whats001" href="/wa-synthetic">Synthetic WhatsApp</a></div><script src="${scriptBase(id)}runtime.js"></script><script src="${scriptBase(id)}fallback.js"></script>`);
   }).listen(0,'127.0.0.1');
