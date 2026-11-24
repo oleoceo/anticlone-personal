@@ -161,7 +161,7 @@ for (const width of [1440, 390]) {
     await page.getByText('Revisão 1', {exact: true}).waitFor();
     const scripts = await page.getByRole('region', {name: 'Trecho HEAD'}).locator('code').innerText();
     const source = scripts.match(/<script async src="([^"]+)"/)?.[1];
-    assert.ok(source?.startsWith('https://runtime.frontend.test'+distributionPrefix));
+    assert.ok(source && source.startsWith('https://runtime.frontend.test'+distributionPrefix));
     assert.ok(source.endsWith('/a.js'));
     assert.match(scripts, /\/c\.js/);
     assert.doesNotMatch(scripts, /\/(?:e|b\.js)"/);
