@@ -12,6 +12,7 @@ import {test, type TestContext} from 'node:test';
 import {TOTP, Secret} from 'otpauth';
 import {Pool} from 'pg';
 import {chromium, type Page} from 'playwright';
+const distributionPrefix = process.env.RUNTIME_COMPACT_ALIASES === 'true' ? '/assets/' : '/r/v2/';
 import {createAdminServer} from '../apps/admin-auth.js';
 import {join} from 'node:path';
 import {commerceAdmin, commerceSigningInput, commerceWebhook, provisionCommerceSender, receiveCommerce} from '../apps/commerce.js';
@@ -1332,7 +1333,7 @@ test('React provisions an original LP and copy, then real gateway applies scoped
     await authorize(2);
     await capture(panel, '07-politica-cta');
     for (const point of candidates) {
-      const decision = visit.waitForResponse(response => response.url().startsWith(gatewayOrigin + '/r/v2/') && response.url().endsWith('/g'));
+      const decision = visit.waitForResponse(response => response.url().startsWith(gatewayOrigin + distributionPrefix) && response.url().endsWith('/g'));
       await visit.goto(copy + '/lp');
       assert.equal((await (await decision).json()).action, 'REPLACE_CONVERSION');
       const cta = visit.locator('[data-anticlone-point="' + point.marker + '"]');
@@ -1354,7 +1355,7 @@ test('React provisions an original LP and copy, then real gateway applies scoped
     await confirm('Revisar aprovação', /^Aprovação registrada\./);
     await authorize(3);
     for (const point of candidates) {
-      const decision=visit.waitForResponse(response=>response.url().startsWith(gatewayOrigin+'/r/v2/') && response.url().endsWith('/g'));
+      const decision=visit.waitForResponse(response=>response.url().startsWith(gatewayOrigin+distributionPrefix) && response.url().endsWith('/g'));
       await visit.goto(copy+'/lp');
       assert.equal((await (await decision).json()).action,'REPLACE_CONVERSION');
       await visit.locator('[data-anticlone-point="'+point.marker+'"]').click();

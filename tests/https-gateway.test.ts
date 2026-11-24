@@ -1,3 +1,4 @@
+import {distributionHealthPath} from '../apps/telemetry-origins.js';
 import {distributionAdmin} from '../apps/runtime-distribution.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -66,7 +67,7 @@ for(const npm of [false,true]) test(`${npm?'NPM mTLS':'HTTPS'} Nginx + PostgreSQ
   }
 
   const scopedPage=(await db.query('SELECT id FROM protected_pages WHERE installation_id=$1',[scopedInstallation])).rows[0].id;
-  const distributed=await distributionAdmin(db,{action:'publish',project:'https',page:scopedPage},{RUNTIME_PUBLIC_ORIGIN:'https://gateway.test'});assert.ok(distributed.distribution);assert.ok(distributed.snippets);
+  const distributed=await distributionAdmin(db,{action:'publish',project:'https',page:scopedPage},{...process.env,RUNTIME_PUBLIC_ORIGIN:'https://gateway.test'});assert.ok(distributed.distribution);assert.ok(distributed.snippets);
   await writeFile(gatewayEnv,Object.entries({PGOPTIONS:options,DATABASE_URL:process.env.TEST_DATABASE_URL,PROJECT_ID:'https',SMTP_PORT:'1',PORT:'3000',GATEWAY_MODE:'PILOT_OBSERVE',GATEWAY_TRANSPORT:'HTTPS_PROXY',PUBLIC_GATEWAY_HOST:'gateway.test',PILOT_ORIGINS:'["https://owner.test"]',CHECKOUT_WEBHOOK_SECRET:checkoutSecret}).map(([key,value])=>`${key}=${value}`).join('\n'),{mode:0o600});
   execFileSync('openssl',['req','-x509','-newkey','rsa:2048','-nodes','-keyout',join(dir,'privkey.pem'),'-out',join(dir,'fullchain.pem'),'-days','1','-subj','/CN=gateway.test','-addext','subjectAltName=DNS:gateway.test'],{stdio:'ignore'});
   if(!npm){
@@ -127,6 +128,9 @@ for(const npm of [false,true]) test(`${npm?'NPM mTLS':'HTTPS'} Nginx + PostgreSQ
     assert.equal((await api.get('https://gateway.test/healthz',{headers:{'X-Forwarded-For':'garbage','X-Forwarded-Proto':'http','Forwarded':'for=evil','X-Forwarded-Host':'evil'}})).status(),200);
     assert.equal((await api.get('https://gateway.test/runtime.js',{headers:{Host:'evil.test'}})).status(),421);
     assert.equal((await api.get('https://gateway.test/admin')).status(),404);
+    const distributionHealth = await api.get('https://gateway.test'+distributionHealthPath);
+    assert.equal(distributionHealth.status(),200);
+    assert.equal((await distributionHealth.json()).mode,npm?'OPERATIONAL':'PILOT_OBSERVE');
     const checkoutBody=JSON.stringify({event_id:'https_event',sale_id:'https_sale',amount_minor:100,currency:'BRL',occurred_at:'2026-11-06T00:00:00.000Z'});
     const checkoutTimestamp=String(Math.floor(Date.now()/1000));
     const checkoutHeaders={'content-type':'application/json','x-checkout-timestamp':checkoutTimestamp,'x-checkout-signature':createHmac('sha256',Buffer.from(checkoutSecret,'hex')).update(checkoutTimestamp+'.'+checkoutBody).digest('hex')};

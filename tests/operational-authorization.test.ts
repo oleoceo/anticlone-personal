@@ -153,7 +153,7 @@ test('operational v2 + MFA/CSRF admin: HTTPS publication, rotation, PAGE/CTA, su
       assert.equal(result.status(),200);return await result.json() as {distribution:Distribution;snippets:{html:string};diagnostic:{status:string}};
     };
     for(const p of pages){
-      const published=await publication(p,'publish');assert.ok(published.distribution.bases.SCRIPT.includes('/r/v2/'));
+      const published=await publication(p,'publish');assert.ok(published.distribution.bases.SCRIPT.includes(process.env.RUNTIME_COMPACT_ALIASES === 'true' ? '/assets/' : '/r/v2/'));
       assert.deepEqual((await publication(p,'inspect')).distribution,published.distribution);
       distributions.set(p.page,published.distribution);snippets.set(p.page,published.snippets.html);
     }

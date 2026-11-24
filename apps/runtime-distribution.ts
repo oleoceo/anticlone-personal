@@ -1,5 +1,5 @@
-import {listTelemetryOrigins, telemetryOriginForPublication} from './telemetry-origins.js';
-import { randomUUID } from 'node:crypto';
+import {listedTelemetryOrigin, listTelemetryOrigins, telemetryOriginForPublication} from './telemetry-origins.js';
+import { randomBytes, randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import { assertProjectAdministrativeWrite, assertPageAdministrativeWrite } from './admin-project-write.js';
 import {runControlledCheck,verificationPolicy,validVerifierImage,type VerificationSpec,type ControlledCheck} from './installation-verifier.js';
@@ -8,7 +8,7 @@ export const distributionRoles = ['SCRIPT','TELEMETRY','STATIC_ASSETS'] as const
 type Role = typeof distributionRoles[number];
 export type Distribution = {installation:string; version:number; bases:Record<Role,string>;paths?:Record<string,string>};
 export const neutralPaths:Record<string,string>={'runtime.js':'a.js','core.js':'b.js','fallback.js':'c.js','observe':'e','observe/fallback':'f','entry-decision':'g','cta-refresh':'h','observed-session':'j','observed-action':'k','html.gif':'m.gif','css.gif':'n.gif','cta-inventory.js':'p.js'};
-type AliasRow = {alias:string;installation_id:string;version:number;role:Role;origin:string;contract_version:number};
+type AliasRow = {alias:string;public_token?:string|null;installation_id:string;version:number;role:Role;origin:string;contract_version:number};
 
 export class DistributionBlocked extends TypeError {
   constructor(readonly code: string) { super(code); }
@@ -50,14 +50,16 @@ function verifierConfiguration(env: NodeJS.ProcessEnv) {
 }
 
 export async function installationPrerequisites(db: Pick<Pool,'query'>, env=process.env) {
-  const schema = (await db.query<{distribution: boolean; rotation: boolean; verifier: boolean; activity: boolean; receipts: boolean}>(`
+  const schema = (await db.query<{distribution: boolean; rotation: boolean; verifier: boolean; activity: boolean; receipts: boolean; compact: boolean}>(`
     SELECT to_regclass('runtime_aliases') IS NOT NULL AND to_regclass('page_installation_signals') IS NOT NULL
       AND to_regclass('runtime_distributions') IS NOT NULL AS distribution,
       EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('runtime_distributions')
         AND attname='publication_reason' AND NOT attisdropped) AS rotation,
       to_regclass('controlled_installation_checks') IS NOT NULL AS verifier,
       to_regclass('runtime_alias_activity') IS NOT NULL AS activity,
-      to_regclass('investigation_receipts') IS NOT NULL AS receipts`)).rows[0];
+      to_regclass('investigation_receipts') IS NOT NULL AS receipts,
+      EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('runtime_aliases')
+        AND attname='public_token' AND NOT attisdropped) AS compact`)).rows[0];
   const {origins,issues} = configuredOrigins(env);
   const publicationIssues: {code: string; role?: Role}[] = schema.distribution
     ? issues : [{code:'DISTRIBUTION_SCHEMA_MISSING'}, ...issues];
@@ -77,7 +79,7 @@ function fromRows(rows:AliasRow[]):Distribution|null {
   if (rows.length!==3 || new Set(rows.map(row=>row.role)).size!==3) return null;
   return {installation:rows[0].installation_id,version:rows[0].version,
     ...(rows[0].contract_version===2?{paths:neutralPaths}:{}),
-    bases:Object.fromEntries(rows.map(row=>[row.role,row.origin+(row.contract_version===2?'/r/v2/':'/d/v1/')+row.alias+'/'])) as Record<Role,string>};
+    bases:Object.fromEntries(rows.map(row=>[row.role,row.origin+(row.public_token ? '/assets/'+row.public_token : (row.contract_version===2?'/r/v2/':'/d/v1/')+row.alias)+'/'])) as Record<Role,string>};
 }
 export async function readDistribution(db:Pool|PoolClient,installation:string,version?:number) {
   const rows=await db.query<AliasRow>(`SELECT a.*,d.contract_version FROM runtime_aliases a JOIN runtime_distributions d USING(installation_id,version) WHERE a.installation_id=$1 AND a.version=COALESCE($2,(SELECT max(version) FROM runtime_distributions WHERE installation_id=$1)) ORDER BY role`,[installation,version??null]);
@@ -155,13 +157,14 @@ async function readOrPublish(db: Pool, data: {project:string;page:string;action:
       for (const role of distributionRoles) origins[role] = explicit ? selected : new URL(persisted![role]).origin;
     }
     const unavailable = {code:'TELEMETRY_ORIGIN_UNAVAILABLE'};
-    const blockedDefault = Object.values(defaults).some(origin => registered.has(origin) && registered.get(origin) !== 'OPERATIONAL');
+    const requiresCheck = (origin: string) => registered.has(origin) || listedTelemetryOrigin(origin,env);
+    const blockedDefault = Object.values(defaults).some(origin => requiresCheck(origin) && registered.get(origin) !== 'OPERATIONAL');
     const defaultsReady = !publicationIssues.length && !blockedDefault;
     const issues = selected ? distributionRoles.flatMap(role => {
       const code = runtimeOriginIssue(origins[role],env);
       return code ? [{code,role}] : [];
     }) : [...publicationIssues];
-    const pooled = new Set(Object.values(origins).filter(origin => registered.has(origin)));
+    const pooled = new Set(Object.values(origins).filter(requiresCheck));
     if (selected) pooled.add(selected);
     if ([...pooled].some(origin => registered.get(origin) !== 'OPERATIONAL')) issues.push(unavailable);
     const publication = {ready:!issues.length,defaultsReady,issues,rotationAvailable:schema.rotation,changesRequired:false};
@@ -177,7 +180,23 @@ async function readOrPublish(db: Pool, data: {project:string;page:string;action:
         const version=(distribution?.version ?? 0)+1;
         if(schema.rotation) await client.query('INSERT INTO runtime_distributions(installation_id,version,publication_reason) VALUES($1,$2,$3)',[page.installation_id,version,data.action]);
         else await client.query('INSERT INTO runtime_distributions(installation_id,version) VALUES($1,$2)',[page.installation_id,version]);
-        for (const role of distributionRoles) await client.query('INSERT INTO runtime_aliases(alias,installation_id,version,role,origin) VALUES($1,$2,$3,$4,$5)',[randomUUID(),page.installation_id,version,role,origins[role]]);
+        for (const role of distributionRoles) {
+          const values = [randomUUID(),page.installation_id,version,role,origins[role]];
+          if (schema.compact && env.RUNTIME_COMPACT_ALIASES === 'true') {
+            // 128 random bits, encoded without padding. Retry only a public-token collision.
+            let inserted = false;
+            for (let attempt = 0; attempt < 3 && !inserted; attempt++) {
+              const token = randomBytes(16).toString('base64url');
+              const result = await client.query(`INSERT INTO runtime_aliases(alias,installation_id,version,role,origin,public_token)
+                VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT (public_token) WHERE public_token IS NOT NULL DO NOTHING`,
+              [...values,token]);
+              inserted = result.rowCount === 1;
+            }
+            if (!inserted) throw new Error('distribution token allocation failed');
+          } else {
+            await client.query('INSERT INTO runtime_aliases(alias,installation_id,version,role,origin) VALUES($1,$2,$3,$4,$5)',values);
+          }
+        }
         distribution=await readDistribution(client,page.installation_id,version);
       }
     }

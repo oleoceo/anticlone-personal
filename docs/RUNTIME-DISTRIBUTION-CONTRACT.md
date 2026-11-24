@@ -80,7 +80,7 @@ Validacao corretiva final local do codigo 4691f4cc620c79b22b9621bbc0548ada5c3626
 Bloqueio externo da CI em 2026-11-10: run 42829199298, SHA 53a42bee7693f47c2df31768550271f229b6079e, job validate-repo encerrou em 2 s sem steps/logs. Anotacao GitHub: The job was not started because recent account payments have failed or your spending limit needs to be increased. Reproduzir com gh run view 42829199298 --json jobs e gh api repos/oleoceo/anticlone-personal/check-runs/129874451747/annotations. Nao e falha de teste do codigo e nao existe CI verde para esta correcao. Intervencao de faturamento/limite depende do proprietario; nao alterar custos nem contornar o gate. Provas locais nao substituem a CI exigida. O PR permanece draft; consultar checks do SHA final apos normalizacao da conta.
 Decisao posterior do proprietario para o fechamento do PR #64: executar integralmente CI local gratuita no WSL/Linux como gate escolhido nesta revisao, mantendo Actions BLOCKED e PR Draft. O HEAD48a9541 passou105/0/0 em Node22 com workflow completo. Teste operacional ampliado une v2, painel MFA/CSRF, rotacao/autorizacao/suspensao, PAGE/CTA reais sem reescrita e falhas; apps/runtime/infra nao mudaram. Runner, resultado integral do novo HEAD e evidencias acessiveis descritos em LOCAL-CI.md. F08 permanece BLOCKED; nenhum status remoto verde e alegado.
 
-## Pool de origens de telemetria (067–068)
+## Pool de origens de telemetria (067–068, procedimento anterior à 075)
 
 Em Configurações → Integrações → Endpoints de telemetria, cadastre a origem
 HTTPS completa de cada domínio próprio. O cadastro usa `telemetry_origins` e
@@ -112,3 +112,46 @@ com `proxy_ssl_name` e `Host` upstream fixos no hostname canônico
 `PUBLIC_GATEWAY_HOST` da instância. O certificado interno, os pins, a instância
 e o PostgreSQL Dev são compartilhados pelo fluxo. A conclusão do gate e o
 teste no hostname real continuam necessários para cada ingresso.
+
+## Aliases compactos e cadastro de domínios (075)
+
+Para a mesma função de Bootstrap, os formatos públicos são:
+
+| Revisão | Exemplo |
+|---|---|
+| v1 histórica | `https://assets.example.com/d/v1/8ce06c96-03bb-46ed-a9a9-916006c36bdd/runtime.js` |
+| v2 histórica | `https://assets.example.com/r/v2/8ce06c96-03bb-46ed-a9a9-916006c36bdd/a.js` |
+| compacta | `https://assets.example.com/assets/I2Fz7aURhvkqwkSqBywnXQ/a.js` |
+
+A 075 é aditiva. Cada papel recebe 128 bits aleatórios do gerador criptográfico
+do Node, codificados em 22 caracteres base64url. O índice único cobre todos os
+tokens públicos e uma colisão é tentada novamente dentro da transação de
+publicação. O UUID segue como chave interna de recibos e atividade. As três
+rotas de cada revisão continuam vinculadas à LP, aos papéis e às origens
+persistidas. O token é um identificador público. O contrato de resposta v2
+e o mapa de recursos permanecem iguais.
+
+Após habilitar `RUNTIME_COMPACT_ALIASES=true` no ambiente privado do admin,
+novas revisões usam o formato compacto. A primeira publicação e alterações
+de origem geram a revisão automaticamente. Para trocar os caminhos de uma LP
+com a mesma origem, use **Publicar nova revisão** no histórico da instalação.
+Consultar e republicar sem mudança de origem preservam a revisão atual.
+Cada base compacta economiza 12 bytes no hostname equivalente, ou 36 bytes
+nas três bases injetadas no Bootstrap antes da compressão. O arquivo do
+Bootstrap e os scripts exigidos pela instalação são os mesmos.
+
+A migração limpa os resultados antigos de verificação. O painel passa a testar
+DNS, certificado HTTPS e prontidão operacional pela mesma regra de ingresso
+do Bootstrap compacto, com o caminho reservado
+`/assets/0000000000000000000001/a.js`. O probe confirma que a rota chega a
+um Gateway operacional com a 075. A conferência privada do upstream efetivo
+e o smoke dos três papéis confirmam a instância e a distribuição da LP. A
+verificação é pontual. Revalide após alterações de ingresso, DNS ou TLS.
+
+A seleção de um domínio adicional exige cadastro, autorização privada,
+habilitação e verificação operacional; a API confere esses requisitos na
+transação. Cadastre adicionais pelo pool, inclusive quando planejar usá-los
+como padrão em configuração privada. Os padrões existentes continuam sob
+responsabilidade do operador, que comprova seu ingresso antes de habilitar o
+formato compacto. Desativar um endpoint impede novas publicações nele e
+preserva as revisões anteriores. Veja o [procedimento NPM](NPM-VPS-RUNBOOK.md#11-adicionar-um-domínio-de-distribuição).

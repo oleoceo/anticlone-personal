@@ -448,3 +448,64 @@ sem P0/P1/P2 pendente; typecheck/diff-check próprios PASS. SHA256 dos arquivos:
 HTTP610E382D, host4D7657A0, localizaçãoDBF5A988, envelopeB869A316, helper97B53B8E,
 testeE611115A, integração20686122. Não declarar publicação ou homologação externa
 com base nessas provas. Sem VPS/Cloudflare/NPM existentes, deploy ou merge.
+
+## 11. Adicionar um domínio de distribuição
+
+O painel registra e diagnostica cada origem e habilita sua seleção após
+verificação. DNS, certificado público, NPM e allowlist privada exigem operação
+autorizada. O procedimento foi conferido no template da imagem NPM 2.13.7
+disponível no laboratório. Confira a versão e o `nginx -T` efetivos no
+ambiente autorizado antes de aplicar. [Configuração avançada do NPM](https://nginxproxymanager.com/advanced-config/)
+
+1. Em **Configurações → Integrações → Endpoints de telemetria**, cadastre
+   `https://<hostname>`. Publique os registros DNS para o ingresso autorizado
+   e provisione certificado público para o nome. Preserve a política DNS-only
+   ou Full (strict) e a fronteira de origem do ambiente aplicável.
+2. No NPM, prepare um Proxy Host separado, com somente o novo hostname,
+   esquema de upstream HTTPS, o mesmo endereço privado e a mesma porta do
+   Gateway atual, certificado público do novo nome, Force SSL e Cache Assets desativado. Confira
+   se o hook global `server_proxy.conf` interfere nas rotas ou no mTLS. Copie para
+   Advanced os includes exclusivos da distribuição. No fragmento de servidor,
+   os guards `$host` e `$http_host` usam o **novo hostname externo**.
+   No fragmento de localização, `proxy_ssl_name` e `proxy_set_header Host`
+   usam o **hostname canônico atual do Gateway**. Preserve certificado cliente,
+   CA, verificação de certificado, headers sanitizados, limites e timeouts.
+   O fallback gerado pelo NPM deve permanecer sem credencial mTLS. Preserve
+   os guards administrativos e o acesso ao painel apenas por túnel SSH.
+3. No mapa HTTP já incluído, acrescente uma entrada para o novo hostname
+   com a mesma chave de cliente. Reutilize as mesmas zonas de taxa e
+   concorrência nos dois vhosts para que o orçamento seja compartilhado.
+   Preserve o conteúdo preexistente do hook. No Dev, derive os includes da
+   configuração efetiva do Host 13, com upstream da bridge na porta 13003,
+   namespace de limites Dev, caminhos TLS privados e `$realip_remote_addr`.
+   O renderer em `infra/npm/dev` foi escrito para o Host 13.
+4. Valide o candidato isoladamente com `nginx -t` e confira o diff de
+   `nginx -T` antes do reload autorizado. Confirme que somente os vhosts
+   esperados e o mapa mudaram. Teste ambos os hostnames, TLS público, a
+   rota compacta reservada, aliases antigos, rejeição de rotas administrativas
+   e limite compartilhado. Preserve o listener, o pin e o health check do
+   monitor mTLS atual. Guarde a versão anterior dos fragmentos e da configuração.
+5. Inclua o novo endereço exato em `RUNTIME_TELEMETRY_POOL_ORIGINS` no
+   ambiente privado do admin e carregue a configuração pelo processo
+   existente. No painel, clique **Verificar endpoint**. Quando constar
+   **Operacional**, selecione-o na **Instalação** da LP e publique uma revisão.
+   DNS, TLS e rota têm pendências distintas no painel. Valide os trechos
+   publicados em uma LP de teste antes de instalar em uma página real.
+
+**Sequência da primeira publicação compacta.** Aplique a migration 075 em
+transação com escritas administrativas pausadas e substitua o admin antigo
+antes de reabrir publicação, para que somente o novo probe grave resultados.
+Atualize o Gateway e as regras de ingresso em todos os vhosts, inclusive
+os padrões já configurados. Confira as rotas históricas, o monitor e a
+prontidão pelo caminho reservado em cada padrão. Revalide os endpoints
+cadastrados e só então habilite `RUNTIME_COMPACT_ALIASES=true` no admin.
+A LP original permanece fora deste procedimento de preparação.
+
+**Rollback.** Retire a flag para voltar a emitir URLs v2 e desative no painel
+um domínio com problema para bloquear novas revisões. Preserve o Gateway
+compatível, a 075, o proxy e o DNS dos endereços já instalados enquanto houver
+consumidores compactos. Antes de emitir ou compartilhar qualquer endereço compacto é possível
+restaurar os fragmentos anteriores e a versão anterior da aplicação,
+mantendo a migração aditiva. Se for necessário trocar a origem de uma LP
+de teste, emita outra revisão sobre um domínio saudável e substitua seus
+trechos sob autorização. Alterar a seleção no painel afeta futuras revisões.

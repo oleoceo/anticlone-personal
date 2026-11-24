@@ -1,10 +1,10 @@
-import {checkTelemetryEndpoint, listTelemetryOrigins, telemetryOriginAdmin} from '../apps/telemetry-origins.js';
+import {checkTelemetryEndpoint, distributionHealthPath, listTelemetryOrigins, telemetryOriginAdmin} from '../apps/telemetry-origins.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID,scryptSync} from 'node:crypto';
 import {mkdir,mkdtemp,readFile,readdir,rm,writeFile} from 'node:fs/promises';
 import {createServer,type RequestListener} from 'node:http';
-import {request as httpsRequest} from 'node:https';
+import {createServer as createHttpsServer, request as httpsRequest} from 'node:https';
 import {once} from 'node:events';
 import type {AddressInfo} from 'node:net';
 import {tmpdir} from 'node:os';
@@ -40,7 +40,7 @@ test('endpoint readiness requires DNS, HTTPS and the operational health reply',a
   ] as const;
   for(const [probe,expected] of probes){
     assert.equal(await checkTelemetryEndpoint(origin,async request=>{
-      assert.deepEqual(request,{url:origin+'/healthz',method:'GET',body:''});
+      assert.deepEqual(request,{url:origin+distributionHealthPath,method:'GET',body:''});
       if(probe instanceof Error)throw probe;
       return {status:probe.status,headers:{'content-type':'application/json'},body:Buffer.from('body' in probe?probe.body:'')};
     }),expected);
@@ -53,14 +53,14 @@ async function sharedMtlsIngress(origins: readonly string[], dispatch: RequestLi
   const boundary=gatewayBoundary(env);
   const server=npmServer(env,(req,res)=>{
     if(!boundary(req,res))return;
-    if(req.url==='/healthz'){
+    if(req.url===distributionHealthPath){
       res.writeHead(200,{'content-type':'application/json'}).end('{"status":"ready","mode":"OPERATIONAL","action":"SCOPED_AUTHORIZATION_REQUIRED"}');
     }else dispatch(req,res);
   }).listen(0,'127.0.0.1');
   await once(server,'listening');
   const port=(server.address() as AddressInfo).port;
   const [ca,cert,key]=await Promise.all(['server.crt','proxy.crt','proxy.key'].map(file=>readFile(join(dir,file))));
-  return {
+  const ingress = {
     // Reproduces the ingress contract: approved external vhosts share one mTLS upstream and canonical Host/SNI.
     request({url,method,body}:VerificationRequest,origin?:string):Promise<VerificationResponse>{
       const target=new URL(url);
@@ -79,9 +79,30 @@ async function sharedMtlsIngress(origins: readonly string[], dispatch: RequestLi
         req.on('error',reject);req.end(body);
       });
     },
+  };
+  const edges = await Promise.all(origins.map(async origin => {
+    const edge = createHttpsServer({key:await readFile(env.NPM_TLS_KEY_FILE),cert:ca}, async (req,res) => {
+      if (req.method !== 'GET' && req.method !== 'POST') {res.writeHead(405).end();return;}
+      const chunks:Buffer[] = [];
+      for await (const chunk of req) chunks.push(chunk);
+      try {
+        const reply = await ingress.request({url:origin+req.url,method:req.method,body:Buffer.concat(chunks).toString()},req.headers.origin);
+        res.writeHead(reply.status, reply.headers).end(reply.body);
+      } catch {
+        res.writeHead(502).end();
+      }
+    }).listen(0,'127.0.0.1');
+    await once(edge,'listening');
+    return {edge,rule:'MAP '+new URL(origin).hostname+' 127.0.0.1:'+(edge.address() as AddressInfo).port};
+  }));
+  return {
+    ...ingress,
+    resolverRules:edges.map(({rule})=>rule).join(','),
     async close(){
-      server.closeAllConnections();
-      await new Promise<void>(resolve=>server.close(()=>resolve()));
+      for (const listener of [...edges.map(({edge})=>edge),server]) {
+        listener.closeAllConnections();
+        await new Promise<void>(resolve=>listener.close(()=>resolve()));
+      }
       await rm(dir,{recursive:true,force:true});
     },
   };
@@ -96,7 +117,7 @@ test('distribution origins: one host defaults, explicit role assignment, private
   assert.throws(()=>distributionOrigins({}));
 });
 
-test('distribution v1: persistent revisions, admin HTML/CSS, real browser layers, independent fallback and compatibility',{timeout:90000},async()=>{
+test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTPS and real browser layers',{timeout:90000},async()=>{
   assert.ok(process.env.TEST_DATABASE_URL);
   const root=new Pool({connectionString:process.env.TEST_DATABASE_URL});
   const schema='distribution_'+randomUUID().replaceAll('-','');
@@ -118,8 +139,10 @@ test('distribution v1: persistent revisions, admin HTML/CSS, real browser layers
   const gateway=createServer((req,res)=>{if(!distributed(req,res))dispatch(req,res);}).listen(0,'127.0.0.1');
   await once(gateway,'listening');
   const base='http://127.0.0.1:'+(gateway.address() as AddressInfo).port;
-  const env={RUNTIME_PUBLIC_ORIGIN:base};
+  const env={RUNTIME_PUBLIC_ORIGIN:base,RUNTIME_COMPACT_ALIASES:'true'};
   const beforeEnv=process.env.RUNTIME_PUBLIC_ORIGIN;
+  const beforeCompact=process.env.RUNTIME_COMPACT_ALIASES;
+  process.env.RUNTIME_COMPACT_ALIASES='true';
   const beforePool=process.env.RUNTIME_TELEMETRY_POOL_ORIGINS;
   process.env.RUNTIME_PUBLIC_ORIGIN=base;
   const salt='0123456789abcdef0123456789abcdef',secret='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
@@ -318,6 +341,13 @@ test('distribution v1: persistent revisions, admin HTML/CSS, real browser layers
       if(!distributed(req,res))dispatch(req,res);
     });
     const upstream=ingress;
+    // Preserve a v2 revision on the first HTTPS origin across the migration.
+    await telemetryOriginAdmin(db,{action:'verify',origin:pooledOrigin},pooledEnv,async()=> 'OPERATIONAL');
+    const oldHttps = (await distributionAdmin(db,{...request,action:'publish',telemetryOrigin:pooledOrigin},pooledEnv)).distribution!;
+    assert.match(oldHttps.bases.SCRIPT,/\/r\/v2\//);
+    await db.query(await readFile('infra/075_compact_distribution_aliases.sql','utf8'));
+    await assert.rejects(distributionAdmin(db,{...request,action:'rotate',telemetryOrigin:pooledOrigin},pooledEnv),
+      {code:'TELEMETRY_ORIGIN_UNAVAILABLE'});
     for (const origin of [pooledOrigin,secondary]) {
       await telemetryOriginAdmin(db,{action:'verify',origin},pooledEnv,origin=>checkTelemetryEndpoint(origin,upstream.request));
     }
@@ -333,7 +363,7 @@ test('distribution v1: persistent revisions, admin HTML/CSS, real browser layers
     await panel.getByLabel('Endpoint de telemetria').selectOption(pooledOrigin);
     await panel.getByRole('button',{name:'Publicar endereços de instalação',exact:true}).click();
     await panel.getByRole('button',{name:'Confirmar',exact:true}).click();
-    await panel.getByRole('region',{name:'Trecho HEAD'}).locator('code').filter({hasText:pooledOrigin+'/r/v2/'}).waitFor();
+    await panel.getByRole('region',{name:'Trecho HEAD'}).locator('code').filter({hasText:pooledOrigin+'/assets/'}).waitFor();
     const aligned=(await readDistribution(db,siblingInstallation))!;
     assert.equal(aligned.version,implicit.distribution!.version+1);
     assert.deepEqual(new Set(Object.values(aligned.bases).map(url=>new URL(url).origin)),new Set([pooledOrigin]));
@@ -341,7 +371,8 @@ test('distribution v1: persistent revisions, admin HTML/CSS, real browser layers
     await panel.goto(installationPath);
     const select=panel.getByLabel('Endpoint de telemetria');
     await select.selectOption(pooledOrigin);
-    await panel.getByRole('button',{name:'Publicar endereços de instalação',exact:true}).click();
+    await panel.getByText('Diagnóstico avançado e histórico de revisões', {exact:true}).click();
+    await panel.getByRole('button',{name:'Publicar nova revisão',exact:true}).click();
     await panel.getByRole('button',{name:'Confirmar',exact:true}).click();
     const snippet=panel.getByRole('region',{name:'Trecho HEAD'}).locator('code');
     await snippet.filter({hasText:pooledOrigin}).waitFor();
@@ -424,6 +455,24 @@ test('distribution v1: persistent revisions, admin HTML/CSS, real browser layers
     await snippet.filter({hasText:secondary}).waitFor();
     const next=(await distributionAdmin(db,request,pooledEnv)).distribution!;
     assert.equal((await upstream.request({url:next.bases.TELEMETRY+'e',method:'POST',body:input},origin)).status,204);
+    const httpsBrowser=await chromium.launch({args:['--host-resolver-rules='+upstream.resolverRules,'--no-proxy-server']});
+    try {
+      const httpsPage=await httpsBrowser.newPage({ignoreHTTPSErrors:true});
+      for (const revision of [oldHttps,pooled.distribution,next]) {
+        const script = revision.bases.SCRIPT+'a.js';
+        const response = await httpsPage.goto(script);
+        assert.equal(response?.status(),200);
+        assert.ok((await response!.text()).includes(revision.bases.TELEMETRY));
+      }
+      for (const revision of [pooled.distribution,next]) {
+        const tokens=Object.values(revision.bases).map(base=>new URL(base).pathname);
+        assert.equal(new Set(tokens).size,3);
+        for (const token of tokens) assert.match(token,/^\/assets\/[A-Za-z0-9_-]{22}\/$/);
+        assert.equal((await httpsPage.goto(revision.bases.TELEMETRY+'a.js'))?.status(),404);
+      }
+    } finally {
+      await httpsBrowser.close();
+    }
     await panel.goto(settings);
     const endpoint=panel.getByRole('listitem').filter({has:panel.getByText(pooledOrigin,{exact:true})});
     await endpoint.getByText('Operacional',{exact:true}).waitFor();
@@ -443,6 +492,11 @@ test('distribution v1: persistent revisions, admin HTML/CSS, real browser layers
     assert.equal(siblingState.selectedTelemetryOrigin,pooledOrigin);
     await telemetryOriginAdmin(db,{action:'set-enabled',origin:pooledOrigin,enabled:true},pooledEnv);
     assert.equal((await listTelemetryOrigins(db,pooledEnv)).items[0].state,'UNVERIFIED');
+    const rollback = await distributionAdmin(db,{...request,action:'rotate',telemetryOrigin:secondary},
+      {...pooledEnv,RUNTIME_COMPACT_ALIASES:'false'});
+    assert.match(rollback.distribution!.bases.SCRIPT,/\/r\/v2\//);
+    assert.deepEqual(await readDistribution(db,installation,next.version),next);
+    assert.equal((await upstream.request({url:next.bases.SCRIPT+'a.js',method:'GET',body:''})).status,200);
     for(const target of ['http://127.0.0.1/','http://169.254.169.254/','https://unapproved.test/'])await assert.rejects(distributionAdmin(db,{...request,action:'verify',url:target},env),TypeError);
     await assert.rejects(db.query('UPDATE runtime_aliases SET origin=$1 WHERE installation_id=$2',[base,installation]));
     await db.query("UPDATE projects SET lifecycle_state='PAUSED' WHERE id='one'");
@@ -453,6 +507,7 @@ test('distribution v1: persistent revisions, admin HTML/CSS, real browser layers
     assert.equal(await page.getByRole('link',{name:'Checkout'}).getAttribute('href'),'/checkout');
   }finally{
     if(beforeEnv===undefined)delete process.env.RUNTIME_PUBLIC_ORIGIN;else process.env.RUNTIME_PUBLIC_ORIGIN=beforeEnv;
+    if(beforeCompact===undefined)delete process.env.RUNTIME_COMPACT_ALIASES;else process.env.RUNTIME_COMPACT_ALIASES=beforeCompact;
     if(beforePool===undefined)delete process.env.RUNTIME_TELEMETRY_POOL_ORIGINS;else process.env.RUNTIME_TELEMETRY_POOL_ORIGINS=beforePool;
     await ingress?.close();
     await browser.close();for(const server of [site,gateway,admin]){server.close();await once(server,'close');}

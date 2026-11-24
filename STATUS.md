@@ -263,3 +263,9 @@
 - Compatibilidade, implantação e rollback em [Descoberta e substituição de CTA](docs/COPY-CTA-DISCOVERY.md).
 - Ensaios locais com Chromium e PostgreSQL. A LP pública foi exercitada com respostas isoladas no navegador e destinos de teste.
 - O bootstrap congelado da cópia recebeu políticas compatíveis com seu código. Deploy e merge dependem de etapa posterior.
+
+## F07 — domínios de distribuição e aliases compactos
+- Base Dev PR #92, `d55fbb7`. Cadastro reaproveitado com diagnóstico na rota compacta, bloqueio de publicação e autorização privada.
+- Migration 075 e flag privada de emissão. Tokens públicos de 128 bits; revisões históricas preservadas.
+- Chromium/PostgreSQL focal 3/3 em duas origens HTTPS sintéticas. Nginx, regressões e revisão do SHA final ficam registrados no PR.
+- Publicação e rollback em `docs/NPM-VPS-RUNBOOK.md` §11. Homologação externa depende do proprietário.

@@ -5,6 +5,13 @@ import {formData, formatDate, useOperation, value, type SetGuard} from './operat
 import {Failure, Loading, useQuery} from './ui';
 
 type AffectedPage = {project: string; projectName: string; page: string; pageName: string; lastRevision: number; historical: boolean};
+const endpointSteps: Partial<Record<keyof typeof telemetryEndpointLabels, string>> = {
+  NOT_AUTHORIZED: 'Provisione DNS, certificado e Proxy Host. Peça a inclusão do endereço no ambiente privado do admin.',
+  UNVERIFIED: 'Com DNS, HTTPS e Proxy Host prontos, execute a verificação.',
+  DNS_FAILED: 'Confira os registros públicos do hostname e repita a verificação.',
+  HTTPS_FAILED: 'Confira o certificado, a cadeia TLS e o acesso HTTPS na porta 443.',
+  GATEWAY_NOT_READY: 'Confira a rota de diagnóstico da distribuição, o upstream mTLS e o modo operacional do gateway.',
+};
 type Entry = {origin: string; enabled: boolean; authorized: boolean; state: keyof typeof telemetryEndpointLabels;
   checkedAt: string | null; affectedPages: AffectedPage[]};
 type Pool = {installed: boolean; verificationAvailable: boolean; items: Entry[]};
@@ -15,7 +22,7 @@ export function TelemetryOrigins({api, setGuard}: {api: AdminApi; setGuard: SetG
   const [formVersion, resetForm] = useState(0);
   return <section className="panel" aria-labelledby="telemetry-origins-title">
     <h2 id="telemetry-origins-title">Endpoints de telemetria</h2>
-    <p>Cadastre domínios próprios para servir a instalação e receber os sinais das LPs. Depois de provisionar e autorizar o endereço, valide DNS, HTTPS e o gateway para selecioná-lo em novas revisões.</p>
+    <p>Cadastre domínios próprios para servir a instalação e receber os sinais das LPs. O cadastro registra o endereço no painel. DNS, HTTPS, Proxy Host e autorização privada são configurados pelo operador.</p>
     {operation.notice()}
     {query.error !== undefined ? <Failure error={query.error} retry={query.revalidate}/> : !query.data ? <Loading/> :
       !query.data.installed ? <p>O banco ainda precisa da migração de endpoints.</p> : <>
@@ -37,6 +44,7 @@ export function TelemetryOrigins({api, setGuard}: {api: AdminApi; setGuard: SetG
         {query.data.items.length === 0 ? <p className="empty">Nenhum endpoint cadastrado.</p> :
           <ul className="plain page-list">{query.data.items.map(item => <li key={item.origin}>
             <div><strong>{item.origin}</strong><small>{telemetryEndpointLabels[item.state]}</small>
+              {endpointSteps[item.state] && <small>{endpointSteps[item.state]}</small>}
               {item.checkedAt && <small>Última verificação · {formatDate(item.checkedAt)}</small>}
               {item.affectedPages.length > 0 && <details>
                 <summary>LPs afetadas ({item.affectedPages.length})</summary>
