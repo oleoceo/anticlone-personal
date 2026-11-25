@@ -1,5 +1,11 @@
 # STATUS — AntiClone Personal
 
+## F17/F20 — disponibilidade das regras por cópia no Dev
+- A revisão 2 da FlowMembers publica telemetria em `static-layer.com`. O Admin em `6d00d0c` exigia o host de controle `protect.leoceo.online` nas duas confirmações e retornava `TELEMETRY_MISMATCH`.
+- As confirmações usam a telemetria publicada e validam o contrato operacional. Endpoints alternativos exigem pool autorizada e revalidação transacional. O painel mostra o impedimento junto ao botão.
+- O E2E histórico usava o mesmo host em ambos os lados. O DNS do Node falha localmente para o host sintético anterior. A fixture usa agora um endereço HTTPS resolvível pelos dois processos.
+- A checagem do FlowMembers real é de leitura. As confirmações, o checkout sintético, a persistência e o prazo de 150 ms são cobertos pela jornada isolada em Chromium.
+
 ## F07 — seleção de endpoints por função na Instalação
 - Base PR #93 `0e3e1967`, sucessora documental da release Dev `50e290c2`.
 - A Instalação publica um domínio para os três papéis ou um mapa por papel; a pool operacional é revalidada na transação.

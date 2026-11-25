@@ -7,6 +7,7 @@ import { copyRedirectAdmission } from '../apps/page-redirect-rules.js';
 import { pageRedirectAdmin } from '../apps/page-redirect-admin.js';
 import { managePages } from '../apps/protected-pages.js';
 import { listCopyContexts, recordCopyBrowserOutcome, recordCopyDecision } from '../apps/page-copy-contexts.js';
+import { rememberCopyCtas } from '../apps/copy-cta-rules.js';
 import { distributionAdmin } from '../apps/runtime-distribution.js';
 
 test('scoped redirect activation, revision and deactivation preserve the other LP', async () => {
@@ -22,7 +23,11 @@ test('scoped redirect activation, revision and deactivation preserve the other L
     const project='owned', original='https://owner.test', gateway='https://gateway.test';
     const env={RUNTIME_PUBLIC_ORIGIN:gateway,ADMIN_OPERATIONAL_GATEWAY_ORIGIN:gateway};
     let mode:'OPERATIONAL'|'OBSERVATION_ONLY'='OBSERVATION_ONLY';
-    const run=(body:object)=>pageRedirectAdmin(db,{project,...body},env,async()=>mode);
+    const probes: [string|undefined, number|undefined, boolean|undefined][]=[];
+    const run=(body:object)=>pageRedirectAdmin(db,{project,...body},env,async (origin,contract,pooled)=>{
+      probes.push([origin,contract,pooled]);
+      return mode;
+    });
     await db.query('INSERT INTO projects(id,name,origin) VALUES($1,$1,$2)',[project,original]);
     const firstResult=await managePages(db,{project,action:'create',name:'First',url:original+'/'});
     const secondResult=await managePages(db,{project,action:'create',name:'Second',url:original+'/second'});
@@ -145,6 +150,52 @@ test('scoped redirect activation, revision and deactivation preserve the other L
     assert.equal((await inspect(first)).rules?.rules.find(rule=>rule.copy_pathname==='/second-copy')?.copy_is_official,true);
     assert.equal((await db.query("SELECT count(*)::int AS n FROM administrative_change_audit WHERE relation_name='page_redirect_rules'")).rows[0].n,6);
     await assert.rejects(db.query('DELETE FROM project_redirect_destinations'),/immutable/);
+
+    for (const filename of ['072_copy_cta_rules.sql','073_copy_cta_allocations.sql']) {
+      await db.query(await readFile('infra/'+filename,'utf8'));
+    }
+    const telemetry='https://telemetry.test';
+    Object.assign(env,{RUNTIME_TELEMETRY_POOL_ORIGINS:telemetry});
+    await db.query(`INSERT INTO telemetry_origins(origin,check_status,checked_at) VALUES($1,'OPERATIONAL',clock_timestamp())`,[telemetry]);
+    await distributionAdmin(db,{project,page:second,action:'publish',roleOrigins:{SCRIPT:telemetry,TELEMETRY:telemetry,STATIC_ASSETS:telemetry}},env);
+    const pooled=await inspect(second);
+    assert.equal(pooled.issue,null);
+    assert.equal(pooled.rulesGateway,'OPERATIONAL');
+    assert.deepEqual(probes.at(-1),[telemetry,3,true]);
+    const cta=await run({page:second,action:'inspect-cta',copyUrl:'https://new-copy.test/'});
+    assert.ok('ctaGateway' in cta);
+    assert.equal(cta.ctaGateway,'OPERATIONAL');
+    assert.deepEqual(probes.at(-1),[telemetry,5,true]);
+    await db.query(`INSERT INTO page_copy_contexts(project_id,page_id,copy_origin,copy_pathname)
+      VALUES($1,$2,'https://new-copy.test','/')`,[project,second]);
+    const point={marker:'checkout01',surface:'landing',native_url:'https://new-copy.test/',native_digest:'a'.repeat(64)};
+    const inventoryClient=await db.connect();
+    try {
+      await rememberCopyCtas(inventoryClient,{project,page:second,origin:'https://new-copy.test',pathname:'/'},[point]);
+    } finally { inventoryClient.release(); }
+    const ctaConfirmation={action:'confirm-cta',page:second,copyUrl:'https://new-copy.test/',revision:0,
+      urlGeneration:pooled.urlGeneration,configGeneration:pooled.configGeneration,destination:overrideDestination,
+      allocation,marker:point.marker,surface:point.surface,nativeDigest:point.native_digest,displayName:'Checkout'};
+    const pooledConfirmation={...confirmation,page:second,copyUrl:'https://new-copy.test/',urlGeneration:pooled.urlGeneration,configGeneration:pooled.configGeneration};
+    const disableEndpoint=()=>db.query('UPDATE telemetry_origins SET enabled=false WHERE origin=$1',[telemetry]);
+    await assert.rejects(pageRedirectAdmin(db,{project,...pooledConfirmation},env,async()=>{
+      await disableEndpoint();
+      return 'OPERATIONAL';
+    }),/REDIRECT_RUNTIME_REQUIRED/);
+    assert.equal((await inspect(second)).issue,'TELEMETRY_DISABLED');
+    await assert.rejects(run(pooledConfirmation),/REDIRECT_GATEWAY_UNAVAILABLE/);
+    await db.query(`UPDATE telemetry_origins SET enabled=true,checked_at=clock_timestamp() WHERE origin=$1`,[telemetry]);
+    await run(pooledConfirmation);
+    await run(ctaConfirmation);
+    assert.deepEqual(probes.at(-1),[telemetry,5,true]);
+    const savedCta=await run({page:second,action:'inspect-cta',copyUrl:ctaConfirmation.copyUrl});
+    assert.ok('ctaRules' in savedCta);
+    assert.equal(savedCta.ctaRules[0]?.enabled,true);
+    assert.equal(savedCta.ctaRules[0]?.destination,overrideDestination);
+    assert.equal((await copyRedirectAdmission(db,secondInstallation,'https://new-copy.test','/'))?.admitted,true);
+    Object.assign(env,{RUNTIME_TELEMETRY_POOL_ORIGINS:''});
+    assert.equal((await inspect(second)).issue,'TELEMETRY_NOT_AUTHORIZED');
+    await assert.rejects(run({...pooledConfirmation,revision:1}),/REDIRECT_GATEWAY_UNAVAILABLE/);
 
   } finally {
     await db.end();

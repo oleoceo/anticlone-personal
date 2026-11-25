@@ -14,13 +14,35 @@ import { PageConflict } from './protected-pages.js';
 import { projectDestination, RedirectRuleConflict, redirectRuleSettings, saveRedirectRule } from './page-redirect-rules.js';
 import { readDistribution } from './runtime-distribution.js';
 
-type Gateway = 'OPERATIONAL' | 'OBSERVATION_ONLY' | 'UNREACHABLE' | 'UNCONFIGURED';
-async function probeGateway(origin: string | undefined, minimumContract = 0): Promise<Gateway> {
-  let url: URL;
+import {listTelemetryOrigins, telemetryOriginForPublication} from './telemetry-origins.js';
+import {publicHttpsBroker} from './installation-verifier.js';
+
+type Gateway = 'OPERATIONAL' | 'OBSERVATION_ONLY' | 'UNREACHABLE' | 'UNCONFIGURED' | 'INCOMPATIBLE';
+function gatewayUrl(origin: string | undefined) {
   try {
-    url=new URL(origin ?? '');
-    if (url.origin!==origin || url.protocol!=='https:' || url.username || url.password) return 'UNCONFIGURED';
-  } catch { return 'UNCONFIGURED'; }
+    const url=new URL(origin ?? '');
+    if (url.origin===origin && url.protocol==='https:' && !url.username && !url.password) return url;
+  } catch { /* Unconfigured or invalid origin. */ }
+}
+
+async function probeGateway(origin: string | undefined, minimumContract = 0, pooled = false): Promise<Gateway> {
+  const url=gatewayUrl(origin);
+  if (!url) return 'UNCONFIGURED';
+  const classify = (status: number | undefined, contract: unknown, body: string): Gateway => {
+    const health=JSON.parse(body);
+    if (status!==200 || health.status!=='ready') return 'UNREACHABLE';
+    if (['LAB','PILOT_OBSERVE'].includes(health.mode) && health.action==='OBSERVE_ONLY') return 'OBSERVATION_ONLY';
+    if (health.mode!=='OPERATIONAL' || health.action!=='SCOPED_AUTHORIZATION_REQUIRED') return 'UNREACHABLE';
+    if (minimumContract && ![2,3,4,5].some(version=>String(version)===contract && version>=minimumContract)) return 'INCOMPATIBLE';
+    return 'OPERATIONAL';
+  };
+  if (pooled) {
+    try {
+      const get=publicHttpsBroker(undefined,AbortSignal.timeout(1500),{responseLimit:1024});
+      const response=await get({url:new URL('/healthz',url).href,method:'GET',body:''});
+      return classify(response.status,response.headers['x-anticlone-redirect-contract'],response.body.toString());
+    } catch { return 'UNREACHABLE'; }
+  }
   return new Promise(resolve=>{
     const req=request(new URL('/healthz',url),{agent:false,signal:AbortSignal.timeout(1500)},res=>{
       let body='';
@@ -32,16 +54,26 @@ async function probeGateway(origin: string | undefined, minimumContract = 0): Pr
       res.on('error',()=>resolve('UNREACHABLE'));
       res.on('end',()=>{
         try {
-          const health=JSON.parse(body);
-          if (res.statusCode!==200 || health.status!=='ready' || (minimumContract && ![2,3,4,5].some(version=>String(version)===res.headers['x-anticlone-redirect-contract'] && version>=minimumContract))) return resolve('UNREACHABLE');
-          resolve(health.mode==='OPERATIONAL' && health.action==='SCOPED_AUTHORIZATION_REQUIRED' ? 'OPERATIONAL' :
-            ['LAB','PILOT_OBSERVE'].includes(health.mode) && health.action==='OBSERVE_ONLY' ? 'OBSERVATION_ONLY' : 'UNREACHABLE');
+          resolve(classify(res.statusCode,res.headers['x-anticlone-redirect-contract'],body));
         } catch { resolve('UNREACHABLE'); }
       });
     });
     req.on('error',()=>resolve('UNREACHABLE'));
     req.end();
   });
+}
+
+async function copyGatewayOrigin(db: Pool, project: string, page: string, env: NodeJS.ProcessEnv) {
+  if (!gatewayUrl(env.ADMIN_OPERATIONAL_GATEWAY_ORIGIN)) return {issue:'CONTROL_GATEWAY_UNCONFIGURED'};
+  const {rows:[row]}=await db.query(`SELECT installation_id FROM protected_pages
+    WHERE project_id=$1 AND id=$2 AND deleted_at IS NULL`,[project,page]);
+  const distribution=row && await readDistribution(db,row.installation_id);
+  if (!distribution) return {};
+  const origin=new URL(distribution.bases.TELEMETRY).origin;
+  if (origin===env.ADMIN_OPERATIONAL_GATEWAY_ORIGIN) return {origin};
+  const {items}=await listTelemetryOrigins(db,env);
+  const state=items.find(item=>item.origin===origin)?.state ?? 'NOT_REGISTERED';
+  return state==='OPERATIONAL' ? {origin} : {issue:'TELEMETRY_'+state};
 }
 
 async function readScope(client: PoolClient, project: string, page: string, gatewayOrigin: string | undefined) {
@@ -65,7 +97,7 @@ async function readScope(client: PoolClient, project: string, page: string, gate
   const schema=(await client.query("SELECT to_regprocedure('invalidate_page_entry_binding()') IS NOT NULL AS ready")).rows[0];
   const issue=!schema.ready ? 'REDIRECT_SCHEMA_REQUIRED' : !row.enabled || row.page_state!=='ACTIVE' || row.project_state!=='ACTIVE' ? 'LP_INACTIVE' :
     urls.length!==1 ? 'LP_URL_REQUIRED' : !distribution ? 'RUNTIME_NOT_PUBLISHED' :
-    gatewayOrigin && new URL(distribution.bases.TELEMETRY).origin!==gatewayOrigin ? 'TELEMETRY_MISMATCH' :
+    new URL(distribution.bases.TELEMETRY).origin!==gatewayOrigin ? 'TELEMETRY_MISMATCH' :
     null;
   const entryIssue=!entry?.enabled ? null : entry.stealth_version!==2 ? 'LEGACY_STEALTH' :
     Object.values(entry.allocation).every(percent=>percent===0) ? 'ZERO_ALLOCATION' :
@@ -84,15 +116,22 @@ export async function pageRedirectAdmin(db: Pool, input: unknown, env=process.en
     return {available:catalog.rows[0].ready as boolean,projectDefault:catalog.rows[0].ready ? await projectDestination(db,project) : null};
   }
   const gatewayOrigin=env.ADMIN_OPERATIONAL_GATEWAY_ORIGIN;
+  const scopedCopy=['inspect','inspect-cta','confirm-cta','confirm-copy'].includes(String(action));
+  if (scopedCopy && (typeof page!=='string' || !/^[a-f0-9-]{36}$/i.test(page))) throw new TypeError('invalid page scope');
+  const selection=scopedCopy && typeof page==='string' ? await copyGatewayOrigin(db,project,page,env) : {};
+  const copyOrigin=selection.origin;
+  const pooled=!!copyOrigin && copyOrigin!==gatewayOrigin;
+  const checkCopy=(contract:number)=>copyOrigin ? checkGateway(copyOrigin,contract,pooled) : Promise.resolve('UNCONFIGURED' as const);
+  const recheckPool=pooled ? (client: PoolClient, origin: string)=>telemetryOriginForPublication(client,origin,env) : undefined;
   if (action==='inspect-cta' || action==='confirm-cta' || action==='disable-cta') {
     if (action==='inspect-cta') {
-      const [inventory,ctaGateway]=await Promise.all([copyCtaAdmin(db,data,gatewayOrigin),checkGateway(gatewayOrigin,5)]);
+      const [inventory,ctaGateway]=await Promise.all([copyCtaAdmin(db,data,gatewayOrigin),checkCopy(5)]);
       return {...inventory,ctaGateway};
     }
-    if (action==='confirm-cta' && await checkGateway(gatewayOrigin,5)!=='OPERATIONAL') {
+    if (action==='confirm-cta' && await checkCopy(5)!=='OPERATIONAL') {
       throw new RedirectRuleConflict('REDIRECT_GATEWAY_UNAVAILABLE');
     }
-    return copyCtaAdmin(db,data,gatewayOrigin);
+    return copyCtaAdmin(db,data,copyOrigin,recheckPool);
   }
   if (action==='save-default' && page===undefined) return saveRedirectRule(db,project,null,data,gatewayOrigin);
   if (typeof page!=='string' || !/^[a-f0-9-]{36}$/i.test(page)) throw new TypeError('invalid page scope');
@@ -102,12 +141,12 @@ export async function pageRedirectAdmin(db: Pool, input: unknown, env=process.en
     }
     const copy = new URL(normalizeHttpsAddress(data.copyUrl));
     if (copy.search || copy.hash) throw new TypeError('copy URL must match an observed page');
-    if (await checkGateway(gatewayOrigin,3)!=='OPERATIONAL') throw new RedirectRuleConflict('REDIRECT_GATEWAY_UNAVAILABLE');
+    if (await checkCopy(3)!=='OPERATIONAL') throw new RedirectRuleConflict('REDIRECT_GATEWAY_UNAVAILABLE');
     return saveRedirectRule(db,project,page,{
       action:'confirm-copy', project, page, copyOrigin:copy.origin, copyPathname:copy.pathname,
       revision:data.revision, urlGeneration:data.urlGeneration, configGeneration:data.configGeneration,
       destination:data.destination, allocation:data.allocation,
-    },gatewayOrigin);
+    },copyOrigin,recheckPool);
   }
   if (action==='save-default' || action==='save-copy' || action==='disable-copy') {
     if (action==='save-copy') {
@@ -122,18 +161,18 @@ export async function pageRedirectAdmin(db: Pool, input: unknown, env=process.en
   if (typeof action!=='string' || !Object.hasOwn(expected,action) ||
       expected[action as keyof typeof expected]!==Object.keys(data).sort().join(',')) throw new TypeError('invalid action');
   const [gateway,rulesGateway] = action==='deactivate' ? ['UNCONFIGURED','UNCONFIGURED'] as const : await Promise.all([
-    checkGateway(gatewayOrigin),action==='inspect' ? copyContextsInstalled(db).then(installed=>checkGateway(gatewayOrigin,installed ? 3 : 2)) : Promise.resolve('UNCONFIGURED' as const),
+    checkGateway(gatewayOrigin),action==='inspect' ? copyContextsInstalled(db).then(installed=>checkCopy(installed ? 3 : 2)) : Promise.resolve('UNCONFIGURED' as const),
   ]);
   const client=await db.connect();
   try {
     if (action==='inspect') {
       await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
-      const scope=await readScope(client,project,page,gatewayOrigin);
+      const scope=await readScope(client,project,page,copyOrigin);
       const rules=await redirectRuleSettings(client,project,page);
       const ctaRuleCopies=await listCtaRuleCopies(client,project,page);
       await client.query('COMMIT');
-      return {gateway,rules,ctaRuleCopies,rulesGateway,issue:scope.issue,entryIssue:scope.entryIssue,entry:scope.entry,approvalId:scope.approval?.id ?? null,
-        authorization:scope.authorization ?? null,active:gateway==='OPERATIONAL' && !scope.issue && !scope.entryIssue && scope.readyContext && scope.entry?.enabled===true,
+      return {gateway,rules,ctaRuleCopies,rulesGateway,issue:scope.issue==='TELEMETRY_MISMATCH' ? selection.issue ?? scope.issue : scope.issue,entryIssue:scope.entryIssue,entry:scope.entry,approvalId:scope.approval?.id ?? null,
+        authorization:scope.authorization ?? null,active:gateway==='OPERATIONAL' && !scope.issue && !scope.entryIssue && scope.readyContext && scope.entry?.enabled===true && copyOrigin===gatewayOrigin,
         urlGeneration:scope.row.url_generation,configGeneration:scope.row.config_generation};
     }
     if (action==='activate' && gateway!=='OPERATIONAL') throw new PageConflict('public gateway unavailable');

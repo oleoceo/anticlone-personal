@@ -1,3 +1,5 @@
+import {useId} from 'react';
+import {copyRuleBlocker} from './copy-rule-blockers';
 import {useRef, useState} from 'react';
 import type {AdminApi, Page} from './admin-api';
 import {copyUrl, httpsDestination, type ContextKey, type CopyRedirectSettings} from './copy-redirect-rules';
@@ -50,7 +52,7 @@ function CtaEditor({api,state,scope,inventory,operation,pending,refresh}: {
     <button type="button" disabled={operation.busy || pending} onClick={refresh}>Atualizar CTAs identificados</button>
     {points.size ? [...points].map(([key,point])=><CtaCard key={key} api={api} state={state} scope={scope} point={point}
       rule={rules.get(key)} observed={inventory.points.includes(point)} operation={operation} pending={pending}
-      ready={inventory.ctaGateway==='OPERATIONAL'} refresh={refresh}/>) :
+      gateway={inventory.ctaGateway} refresh={refresh}/>) :
       <p>Nenhum CTA identificado nesta cópia. Abra a cópia com o runtime ativo e atualize a lista.</p>}
   </>;
 }
@@ -62,11 +64,12 @@ const uniform = (percent:number):Allocation => Object.fromEntries(traffic.map(ke
 const allocationSummary = (allocation:Allocation) => traffic.map(key=>trafficLabels[key]+' '+allocation[key]+'%').join(' · ');
 type CardProps = {
   api:AdminApi;state:RedirectStatus;scope:{project:string;page:string;copyUrl:string};point:Point;rule?:Rule;observed:boolean;
-  operation:ReturnType<typeof useOperation>;pending:boolean;ready:boolean;refresh:()=>void;
+  operation:ReturnType<typeof useOperation>;pending:boolean;gateway:RedirectStatus['gateway'];refresh:()=>void;
 };
 
 function CtaCard(props:CardProps) {
-  const {point,rule,observed,ready}=props;
+  const {point,rule,observed,gateway}=props;
+  const ready=gateway==='OPERATIONAL';
   const details=useRef<HTMLDetailsElement>(null);
   const kind=kinds[point.kind ?? 'link'];
   const name=rule?.display_name ?? (point.evidence && point.evidence!=='marker'
@@ -91,7 +94,7 @@ function CtaCard(props:CardProps) {
   </details>;
 }
 
-function CtaRuleForm({api,state,scope,point,rule,observed,operation,pending,ready,refresh,name,allocation,close}: CardProps & {
+function CtaRuleForm({api,state,scope,point,rule,observed,operation,pending,gateway,refresh,name,allocation,close}: CardProps & {
   name:string;allocation:Allocation;close:()=>void;
 }) {
   const [displayName,setDisplayName]=useState(name.slice(0,80));
@@ -99,9 +102,14 @@ function CtaRuleForm({api,state,scope,point,rule,observed,operation,pending,read
   const [percentages,setPercentages]=useState(allocation);
   const identity={...scope,marker:point.marker,surface:point.surface,revision:rule?.version ?? 0};
   const busy=operation.busy || pending;
+  const blockerId=useId();
+  const blocker=pending ? 'Aguarde a atualização dos CTAs identificados.' :
+    operation.busy ? 'Aguarde a operação administrativa em andamento.' :
+    !observed ? 'Abra o caminho da cópia para gerar nova observação e atualize os CTAs identificados.' :
+    point.compatible===false ? 'Selecione um CTA compatível identificado nesta cópia.' :
+    copyRuleBlocker(state.issue,gateway,5);
   return <>
     <p>{point.marker}{point.surface && ' · '+point.surface} · {sources[point.evidence ?? 'marker']}</p>
-    {!ready && <p>Gateway sem suporte operacional confirmado para CTAs por cópia.</p>}
     <form onSubmit={event=>{
       const fields=formData(event);
       try {
@@ -135,9 +143,10 @@ function CtaRuleForm({api,state,scope,point,rule,observed,operation,pending,read
           type="number" min={0} max={100} required/></label>)}
         <button type="button" onClick={()=>setPercentages(uniform(100))}>Aplicar 100% a todas</button>
       </fieldset>
-      <button className="primary" type="submit" disabled={busy || !observed || point.compatible===false || !!state.issue || !ready}>
+      <button className="primary" type="submit" disabled={!!blocker} aria-describedby={blocker ? blockerId : undefined}>
         {rule?.enabled ? 'Editar regra' : 'Salvar e ativar'}
       </button>
+      {blocker && <p id={blockerId} role="status">{blocker}</p>}
     </form>
     {rule?.enabled && <button type="button" disabled={busy} onClick={()=>
       operation.review('Desativar regra de CTA', <p>{name} · {scope.copyUrl}</p>,async ()=>{

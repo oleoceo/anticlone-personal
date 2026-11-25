@@ -1,3 +1,6 @@
+import {useId} from 'react';
+import {copyRuleBlocker} from './copy-rule-blockers';
+import type {RedirectStatus} from './page-redirect-controls';
 import {useState} from 'react';
 import type {AdminApi, Page} from './admin-api';
 import {normalizeHttpsAddress} from '../https-address';
@@ -59,8 +62,8 @@ function CopyDiagnostics({copy,rule}: {copy?: CopyContext; rule?: CopyRule}) {
   </section>;
 }
 
-export function CopyRedirectRules({api,page,settings,issue,gateway,ruleGateway,operation,refresh,incidentHost,urlGeneration,configGeneration}: {
-  api: AdminApi; page: Page; settings: CopyRedirectSettings; issue: string | null; gateway: string; ruleGateway: string;
+export function CopyRedirectRules({api,page,settings,issue,ruleGateway,operation,refresh,incidentHost,urlGeneration,configGeneration}: {
+  api: AdminApi; page: Page; settings: CopyRedirectSettings; issue: string | null; ruleGateway: RedirectStatus['gateway'];
   operation: Operation; refresh: () => void; incidentHost?: string; urlGeneration: string; configGeneration: string;
 }) {
   const {projectDefault,rules}=settings;
@@ -76,14 +79,12 @@ export function CopyRedirectRules({api,page,settings,issue,gateway,ruleGateway,o
   const context=contexts.find(item=>item.copy_origin===copy?.copy_origin && item.copy_pathname===copy.copy_pathname);
   const current=rules.find(item=>item.copy_origin===copy?.copy_origin && item.copy_pathname===copy.copy_pathname);
   const scope={project:page.project_id,page:page.id};
-  const gatewayReady=ruleGateway==='OPERATIONAL';
+  const blocker=copyRuleBlocker(issue,ruleGateway,3);
   const stale=!!current && (current.url_generation!==urlGeneration || current.config_generation!==configGeneration);
-  const eligible=!!current?.enabled && !stale && !current.copy_is_official && gatewayReady && !issue;
+  const eligible=!!current?.enabled && !stale && !current.copy_is_official && !blocker;
   return <section className="panel operation-section">
     <h2>Redirecionamento por cópia</h2>
-    <p>Gateway {gateway==='OPERATIONAL' ? 'operacional' : gateway==='OBSERVATION_ONLY' ? 'em modo de observação' : 'sem disponibilidade operacional confirmada'}.</p>
-    {gateway==='OPERATIONAL' && !gatewayReady && <p>O gateway ainda precisa da atualização para regras por cópia e seus diagnósticos.</p>}
-    {issue && <p className="notice">{issue}</p>}
+    <p>Gateway da instalação {ruleGateway==='OPERATIONAL' ? 'operacional' : ruleGateway==='OBSERVATION_ONLY' ? 'em modo de observação' : 'sem disponibilidade operacional confirmada'}.</p>
     <label>Página clonada<select value={copy ? selected : ''} disabled={operation.busy || !candidates.size} onChange={event=>setSelection(event.target.value)}>
       <option value="">Selecione a URL da cópia</option>
       {[...candidates].map(([name])=><option key={name} value={name}>{name}</option>)}
@@ -97,18 +98,20 @@ export function CopyRedirectRules({api,page,settings,issue,gateway,ruleGateway,o
       {current && <><p>Percentuais salvos{current.enabled ? '' : ' · inativos'}</p><AllocationSummary allocation={current.allocation}/></>}
       <CopyRuleEditor key={[selected,current?.revision,projectDefault?.revision,configGeneration].join('|')}
         api={api} scope={scope} copy={copy} current={current} projectDefault={projectDefault}
-        ready={gatewayReady && !issue && !current?.copy_is_official} operation={operation} refresh={refresh} urlGeneration={urlGeneration} configGeneration={configGeneration}/>
+        blocker={current?.copy_is_official ? 'Selecione uma cópia observada fora das origens oficiais.' : blocker} operation={operation} refresh={refresh} urlGeneration={urlGeneration} configGeneration={configGeneration}/>
       <CopyDiagnostics copy={context} rule={current}/>
     </>}
   </section>;
 }
 
-function CopyRuleEditor({api,scope,copy,current,projectDefault,ready,operation,refresh,urlGeneration,configGeneration}: {
+function CopyRuleEditor({api,scope,copy,current,projectDefault,blocker,operation,refresh,urlGeneration,configGeneration}: {
   api: AdminApi; scope: {project:string;page:string}; copy: ContextKey; current?: CopyRule; projectDefault: ProjectDefault|null;
-  ready: boolean; operation: Operation; refresh: () => void; urlGeneration: string; configGeneration: string;
+  blocker: string | null; operation: Operation; refresh: () => void; urlGeneration: string; configGeneration: string;
 }) {
   const [destination,setDestination]=useState(current?.approved_destination ?? projectDefault?.destination ?? '');
   const [allocation,setAllocation]=useState(current?.allocation ?? emptyAllocation);
+  const blockerId=useId();
+  const blocked=operation.busy ? 'Aguarde a operação administrativa em andamento.' : blocker;
   let preview = '';
   try { preview = httpsDestination(destination); } catch { /* Validate when submitting. */ }
   return <>
@@ -143,7 +146,8 @@ function CopyRuleEditor({api,scope,copy,current,projectDefault,ready,operation,r
         <dt>REDIRECIONAR PARA</dt><dd>{preview || 'Informe o destino'}</dd>
         <dt>PERCENTUAIS</dt><dd><AllocationSummary allocation={allocation}/></dd>
       </dl>
-      <button className="primary" type="submit" disabled={operation.busy || !ready}>CONFIRMO REDIRECIONAMENTO</button>
+      <button className="primary" type="submit" disabled={!!blocked} aria-describedby={blocked ? blockerId : undefined}>CONFIRMO REDIRECIONAMENTO</button>
+      {blocked && <p id={blockerId} role="status">{blocked}</p>}
     </form>
     {current?.enabled && <button type="button" disabled={operation.busy} onClick={()=>
       operation.review('Desativar redirecionamento da cópia', <p>{copyUrl(copy)}</p>, async ()=>{

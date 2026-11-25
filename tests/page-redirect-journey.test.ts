@@ -82,11 +82,13 @@ test('authenticated copy rules, native CTA restoration, 150 ms browser navigatio
     const pin=createHash('sha256').update(new X509Certificate(tls.cert).publicKey.export({type:'spki',format:'der'})).digest('base64');
     const reservation=httpServer(), port=await listen(reservation);
     await close(reservation);
+    let advertisedContract: string | undefined;
     proxy=httpsServer(tls,(req,res)=>{
       if (delays.error && /\/g$/.test(req.url??'')) {res.writeHead(503,{'Access-Control-Allow-Origin':'*'}).end();return;}
       const fixtureClient = /^AntiCloneFixture-([2-5])$/.exec(req.headers['user-agent']??'');
       const upstream=request({hostname:'127.0.0.1',port,path:req.url,method:req.method,
         headers:{...req.headers,host:browserHost,'x-forwarded-proto':'https','x-forwarded-for':'127.0.0.'+(fixtureClient?.[1]??'1')}},answer=>{
+        if (req.url==='/healthz' && advertisedContract) answer.headers['x-anticlone-redirect-contract']=advertisedContract;
         const relay=()=>{res.writeHead(answer.statusCode??502,answer.headers);answer.pipe(res);};
         if ((delays.entry && /\/g$/.test(req.url??'')) || (delays.core && /\/b\.js$/.test(req.url??''))) setTimeout(relay,250);
         else relay();
@@ -95,7 +97,8 @@ test('authenticated copy rules, native CTA restoration, 150 ms browser navigatio
       req.pipe(upstream);
     });
     const proxyPort=await listen(proxy);
-    const gateway='https://'+browserHost+':'+proxyPort;
+    // Both the Admin Node process and Chromium must resolve the fixture gateway.
+    const gateway='https://localhost:'+proxyPort;
     const privateEnv={...process.env,PROJECT_ID:undefined,DATABASE_URL:process.env.TEST_DATABASE_URL,
       PGOPTIONS:`-c search_path=${schema}`,SMTP_PORT:'1',NODE_EXTRA_CA_CERTS:join(dir,'cert')};
     launch('server.js',{...privateEnv,PORT:String(port),GATEWAY_MODE:'OPERATIONAL',GATEWAY_TRANSPORT:'HTTPS_PROXY',PUBLIC_GATEWAY_HOST:browserHost,GATEWAY_NOTIFICATION_DELIVERY:'off'});
@@ -185,7 +188,14 @@ test('authenticated copy rules, native CTA restoration, 150 ms browser navigatio
     await discovery.goto(copy+'/');
     await until(async()=> (await db.query('SELECT count(*)::int n FROM page_copy_contexts WHERE page_id=$1',[pageId])).rows[0].n===1,'observed copy context');
     const incident=(await db.query('SELECT id FROM incidents WHERE project_id=$1 AND host=$2',[project,'lp-clone-tawny.vercel.app'])).rows[0];
+    advertisedContract='2';
     await panel.goto(projectPath+'/incidentes/'+incident.id+'/redirecionar?lp='+pageId);
+    const confirmRedirect=panel.getByRole('button',{name:'CONFIRMO REDIRECIONAMENTO',exact:true});
+    await panel.getByText('O gateway da instalação não atende ao contrato 3. Verifique a versão em execução no gateway.',{exact:true}).waitFor();
+    assert.equal(await confirmRedirect.isDisabled(),true);
+    assert.ok(await confirmRedirect.getAttribute('aria-describedby'));
+    advertisedContract=undefined;
+    await panel.reload();
     const selectCopy=panel.getByLabel('Página clonada');
     await selectCopy.waitFor();
     assert.equal(await selectCopy.inputValue(),copy+'/');
@@ -308,7 +318,16 @@ test('authenticated copy rules, native CTA restoration, 150 ms browser navigatio
 
     await until(async()=> (await db.query(`SELECT 1 FROM copy_cta_inventory WHERE page_id=$1 AND copy_pathname='/' AND jsonb_array_length(points)=2`,[pageId])).rowCount===1,
       'static and dynamic CTA inventory');
+    advertisedContract='4';
     await panel.goto(projectPath+'/incidentes/'+incident.id+'/substituir-cta?lp='+pageId);
+    await panel.getByLabel('Página clonada').selectOption(copy+'/');
+    await panel.getByLabel('checkout-main',{exact:true}).click();
+    const confirmCta=panel.getByRole('button',{name:'Salvar e ativar',exact:true}).filter({visible:true});
+    await panel.getByText('O gateway da instalação não atende ao contrato 5. Verifique a versão em execução no gateway.',{exact:true}).filter({visible:true}).waitFor();
+    assert.equal(await confirmCta.isDisabled(),true);
+    assert.ok(await confirmCta.getAttribute('aria-describedby'));
+    advertisedContract=undefined;
+    await panel.reload();
     await panel.getByLabel('Página clonada').selectOption(copy+'/');
     await panel.getByLabel('checkout-main',{exact:true}).click();
     const saveCta=async (label:string, destination:string, percentages:[string,string,string,string])=>{

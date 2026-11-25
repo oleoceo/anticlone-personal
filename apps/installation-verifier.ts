@@ -51,7 +51,7 @@ export function publicHttpsBroker(target?:string,signal?:AbortSignal,
         if(res.headers['content-encoding']&&res.headers['content-encoding']!=='identity'){res.destroy();reject(Error('encoded response denied'));return;}
         res.on('data',(chunk:Buffer)=>{size+=chunk.length;total+=chunk.length;if(size>(options.responseLimit??512*1024)||total>2*1024*1024){res.destroy();reject(Error('response budget'));}else chunks.push(chunk);});
         res.on('error',reject);
-        res.on('end',()=>accept({status:res.statusCode??500,headers:Object.fromEntries(['content-type','content-security-policy','referrer-policy','x-content-type-options','access-control-allow-origin','cross-origin-embedder-policy','cross-origin-opener-policy','cross-origin-resource-policy'].flatMap(name=>typeof res.headers[name]==='string'?[[name,res.headers[name] as string]]:[])),body:Buffer.concat(chunks)}));
+        res.on('end',()=>accept({status:res.statusCode??500,headers:Object.fromEntries(['content-type','content-security-policy','referrer-policy','x-content-type-options','access-control-allow-origin','cross-origin-embedder-policy','cross-origin-opener-policy','cross-origin-resource-policy','x-anticlone-redirect-contract'].flatMap(name=>typeof res.headers[name]==='string'?[[name,res.headers[name] as string]]:[])),body:Buffer.concat(chunks)}));
       });
       const timer=setTimeout(()=>req.destroy(Error('HTTPS deadline')),4000);
       req.once('close',()=>clearTimeout(timer));req.once('error',reject);req.end(value.method==='POST'?value.body:undefined);

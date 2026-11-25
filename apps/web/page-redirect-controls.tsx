@@ -5,7 +5,7 @@ import type {EntryPolicy, Operational} from './protection-contracts';
 import type {AdminApi} from './admin-api';
 
 export type RedirectStatus = {
-  gateway: 'OPERATIONAL' | 'OBSERVATION_ONLY' | 'UNREACHABLE' | 'UNCONFIGURED';
+  gateway: 'OPERATIONAL' | 'OBSERVATION_ONLY' | 'UNREACHABLE' | 'UNCONFIGURED' | 'INCOMPATIBLE';
   issue: string | null;
   rules: CopyRedirectSettings | null;
   ctaRuleCopies: ContextKey[];
@@ -19,13 +19,6 @@ export type RedirectStatus = {
   configGeneration: string;
 };
 
-const blockers: Record<string,string> = {
-  LP_INACTIVE:'Ative o projeto e a LP antes de ativar a regra.',
-  LP_URL_REQUIRED:'Cadastre uma única URL oficial para esta LP.',
-  RUNTIME_NOT_PUBLISHED:'Publique a instalação desta LP.',
-  TELEMETRY_MISMATCH:'A instalação aponta para outra origem de telemetria.',
-};
-
 export function PageRedirectControls({api,page,state,incidentHost,operation,refresh}: {
   api: AdminApi; page: Page; state: RedirectStatus; incidentHost?: string;
   operation: ReturnType<typeof useOperation>; refresh: () => void;
@@ -34,7 +27,7 @@ export function PageRedirectControls({api,page,state,incidentHost,operation,refr
   const replaced=state.rules?.rules.some(rule=>rule.copy_origin===authorization?.copy_origin && rule.copy_pathname===authorization?.copy_pathname);
   return <>
     {state.rules?.contexts ? <CopyRedirectRules key={page.id+':'+(incidentHost??'')} api={api} page={page} settings={state.rules}
-      gateway={state.gateway} ruleGateway={state.rulesGateway} issue={state.issue ? blockers[state.issue] ?? null : null} operation={operation} refresh={refresh}
+      ruleGateway={state.rulesGateway} issue={state.issue} operation={operation} refresh={refresh}
       incidentHost={incidentHost} urlGeneration={state.urlGeneration} configGeneration={state.configGeneration}/> :
       <p className="notice">As regras por cópia observada exigem a atualização do banco.</p>}
     {state.entry && authorization && !replaced && state.gateway!=='UNCONFIGURED' && <details className="panel operation-section">

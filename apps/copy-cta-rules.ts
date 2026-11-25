@@ -129,7 +129,7 @@ export async function copyCtaDecision(client:PoolClient, scope:Scope, session:un
   return {version,mappings,replaced:new Set(rules.map(rule=>ctaPointKey(rule.marker,rule.surface)))};
 }
 
-export async function copyCtaAdmin(db:Pool, input:Record<string,unknown>,gatewayOrigin?:string) {
+export async function copyCtaAdmin(db:Pool, input:Record<string,unknown>,gatewayOrigin?:string, recheckPool?: (client: PoolClient, origin: string)=>Promise<boolean>) {
   const {project,page,action,marker,surface,revision}=input;
   if (typeof project!=='string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(project) || typeof page!=='string' || !uuid.test(page)) throw new TypeError('invalid scope');
   const copy=new URL(normalizeHttpsAddress(input.copyUrl));
@@ -182,7 +182,8 @@ export async function copyCtaAdmin(db:Pool, input:Record<string,unknown>,gateway
         throw new PageConflict('page configuration changed');
       }
       const distribution=await readDistribution(client,current.installation_id);
-      if (!distribution || new URL(distribution.bases.TELEMETRY).origin!==gatewayOrigin) throw new PageConflict('CTA runtime configuration changed');
+      if (!distribution || new URL(distribution.bases.TELEMETRY).origin!==gatewayOrigin ||
+          (recheckPool && !await recheckPool(client,gatewayOrigin))) throw new PageConflict('CTA runtime configuration changed');
       const point=(await pointsForCopy(client,scope)).find(item=>item.marker===marker && item.surface===surface && item.native_digest===input.nativeDigest);
       if (!point?.native_url || point.compatible===false) throw new PageConflict('CTA observation changed');
       const protectedPoint=await client.query(`SELECT 1 FROM cta_points p LEFT JOIN cta_commercial_references r

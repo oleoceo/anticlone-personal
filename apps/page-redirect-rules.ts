@@ -38,7 +38,7 @@ export async function redirectRuleSettings(client: PoolClient, project: string, 
   return {projectDefault,rules,contexts:page ? await listCopyContexts(client,project,page) : null};
 }
 
-export async function saveRedirectRule(db: Pool, project: string, page: string | null, data: Record<string,unknown>, gatewayOrigin?: string) {
+export async function saveRedirectRule(db: Pool, project: string, page: string | null, data: Record<string,unknown>, gatewayOrigin?: string, recheckPool?: (client: PoolClient, origin: string)=>Promise<boolean>) {
   const shapes = {
     'save-default':page ? 'acknowledged,action,destination,page,project,revision' : 'acknowledged,action,destination,project,revision',
     'confirm-copy':'action,allocation,configGeneration,copyOrigin,copyPathname,destination,page,project,revision,urlGeneration',
@@ -110,7 +110,8 @@ export async function saveRedirectRule(db: Pool, project: string, page: string |
           throw new PageConflict('page configuration changed');
         }
         const distribution = await readDistribution(client,current.installation_id);
-        if (!distribution || new URL(distribution.bases.TELEMETRY).origin!==gatewayOrigin) throw new RedirectRuleConflict('REDIRECT_RUNTIME_REQUIRED');
+        if (!distribution || new URL(distribution.bases.TELEMETRY).origin!==gatewayOrigin ||
+          (recheckPool && !await recheckPool(client,gatewayOrigin))) throw new RedirectRuleConflict('REDIRECT_RUNTIME_REQUIRED');
         const policy = action==='confirm-copy' ? {destination:data.destination,allocation:data.allocation,stealth:false} :
           data.policy as Record<string,unknown> | undefined;
         if (!policy || Object.keys(policy).sort().join(',')!=='allocation,destination,stealth' || typeof policy.stealth!=='boolean') throw new TypeError('invalid copy policy');
