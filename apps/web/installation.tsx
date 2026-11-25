@@ -1,4 +1,4 @@
-import {useState, type ReactNode} from 'react';
+import {useId, useState, type ReactNode} from 'react';
 import {AdminApi, type Page} from './admin-api';
 import {Link} from 'react-router-dom';
 import {Back, conversionsPath, installPath, pagePath, projectIncidentsPath, protectionPath, settingsPath, useContextNavigation} from './navigation';
@@ -11,10 +11,12 @@ const resources = {
   STATIC_ASSETS: ['html.gif', 'css.gif', 'cta-inventory.js'],
 };
 type Role = keyof typeof resources;
+const roles = Object.keys(resources) as Role[];
+type EndpointSelection = {mode:'single'|'roles'; origins:Record<Role,string>};
+const singleOrigin = (origin: string) => ({SCRIPT:origin,TELEMETRY:origin,STATIC_ASSETS:origin});
 type Distribution = InstallationStatus & {
   telemetryOrigins?: string[];
   telemetryEndpoints?: {origin:string;state:keyof typeof telemetryEndpointLabels}[];
-  selectedTelemetryOrigin?: string | null;
   distribution: null | {version: number; bases: Record<Role, string>; paths?: Record<string, string>};
   snippets?: {html: string; css: string} | null;
   history?: {version: number; created_at: string; reason: string | null}[];
@@ -94,20 +96,43 @@ export function Installation({api, project, page, context, setGuard}: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>();
   const [notice, setNotice] = useState('');
-  const [telemetry, setTelemetry] = useState<string>();
+  const endpointFieldId = useId();
+  const [selection, setSelection] = useState<EndpointSelection>();
   const data = result ?? query.data;
   const collected = collectionResult ?? collection.data;
   const published = data?.distribution;
-  const currentEndpoint = data?.selectedTelemetryOrigin ?? '';
-  const unavailableEndpoints = data?.telemetryEndpoints?.filter(endpoint => endpoint.state !== 'OPERATIONAL') ?? [];
-  const preserveSelection = 'current';
-  const selectedTelemetry = telemetry ?? (currentEndpoint ? preserveSelection : '');
-  const pendingTelemetry = telemetry !== undefined && telemetry !== preserveSelection &&
-    (telemetry !== currentEndpoint || !!telemetry && !!published &&
-      Object.values(published.bases).some(base => new URL(base).origin !== telemetry));
-  const canPublish = data && (pendingTelemetry ? (telemetry ?
-    data.telemetryOrigins?.includes(telemetry) && !data.publication.issues.some(issue => issue.code === 'DISTRIBUTION_SCHEMA_MISSING') :
-    data.publication.defaultsReady) : data.publication.ready);
+  const installedOrigins = published ? {
+    SCRIPT:new URL(published.bases.SCRIPT).origin,
+    TELEMETRY:new URL(published.bases.TELEMETRY).origin,
+    STATIC_ASSETS:new URL(published.bases.STATIC_ASSETS).origin,
+  } : singleOrigin('');
+  const installedMode = new Set(Object.values(installedOrigins)).size > 1 ? 'roles' : 'single';
+  const {mode,origins} = selection ?? {mode:installedMode,origins:installedOrigins};
+  const endpoints = data?.telemetryEndpoints ?? [];
+  const eligible = data?.telemetryOrigins ?? [];
+  const pendingSelection = !!selection && roles.some(role => origins[role] !== installedOrigins[role]);
+  const needsSelection = pendingSelection || !!selection && !published;
+  const canPublish = data && (needsSelection
+    ? roles.every(role => eligible.includes(origins[role])) &&
+      !data.publication.issues.some(issue => issue.code === 'DISTRIBUTION_SCHEMA_MISSING')
+    : data.publication.ready);
+
+  function endpointField(role: Role, label: string) {
+    const value = origins[role];
+    return <label className="installation-technology" key={role}><span id={endpointFieldId+role}>{label}</span>
+      <select aria-labelledby={endpointFieldId+role} value={value} disabled={busy} onChange={event => setSelection({
+        mode,
+        origins:mode === 'single' ? singleOrigin(event.target.value) : {...origins,[role]:event.target.value},
+      })}>
+        <option value="" disabled>Selecionar domínio</option>
+        {value && !eligible.includes(value) && !endpoints.some(endpoint => endpoint.origin === value) &&
+          <option value={value} disabled>{value} · Revisão atual</option>}
+        {eligible.map(origin => <option key={origin}>{origin}</option>)}
+        {endpoints.filter(endpoint => endpoint.state !== 'OPERATIONAL').map(({origin,state}) =>
+          <option key={origin} value={origin} disabled>{origin} · {telemetryEndpointLabels[state]}</option>)}
+      </select>
+    </label>;
+  }
   const diagnostic = data?.diagnostic;
   const officialUrl = page.urls.length === 1 ? page.urls[0].origin + page.urls[0].pathname : null;
   const guide = placements[technology];
@@ -128,8 +153,8 @@ export function Installation({api, project, page, context, setGuard}: {
         setNotice(status.installation?.enabled ? 'Coleta habilitada.' : 'Coleta desabilitada.');
       } else {
         const status = await api.request<Distribution>('distribution', {action, ...scope,
-          ...(action !== 'verify' && telemetry !== undefined && telemetry !== preserveSelection ? {telemetryOrigin:telemetry || null} : {})});
-        if (action !== 'verify') setTelemetry(undefined);
+          ...(action !== 'verify' && needsSelection ? {roleOrigins:origins} : {})});
+        if (action !== 'verify') setSelection(undefined);
         setResult(status);
         setNotice(action === 'verify' && status.verificationAttempt
           ? (labels[status.verificationAttempt.status] ?? status.verificationAttempt.status) + ' · ' +
@@ -184,19 +209,27 @@ export function Installation({api, project, page, context, setGuard}: {
         <ul>{publicationIssueMessages(data.publication.issues).map(message => <li key={message}>{message}</li>)}</ul>
         <Link {...nav.link(healthPath)}>Consultar Saúde e operações</Link>
       </div>}
-      {published && <p className="muted">Endpoint na revisão publicada: <code>{new URL(published.bases.TELEMETRY).origin}</code></p>}
-      {data && (!!data.telemetryEndpoints?.length || !!data.telemetryOrigins?.length || !!currentEndpoint) &&
-        <label className="installation-technology">Endpoint de telemetria<select value={selectedTelemetry} disabled={busy}
-          onChange={event => setTelemetry(event.target.value)}>
-          {currentEndpoint && <option value={preserveSelection}>Manter endereços da revisão atual</option>}
-          <option value="">Usar origem padrão</option>
-          {data.telemetryOrigins?.map(origin => <option key={origin}>{origin}</option>)}
-          {unavailableEndpoints.map(({origin,state})=>
-            <option key={origin} value={origin} disabled>{origin} · {telemetryEndpointLabels[state]}</option>)}
-        </select></label>}
+      {data && (endpoints.length > 0 || !!published) && <>
+        <label className="installation-technology"><span id={endpointFieldId}>Distribuição de endpoints</span>
+          <select aria-labelledby={endpointFieldId} value={mode} disabled={busy} onChange={event => {
+            const nextMode = event.target.value === 'roles' ? 'roles' : 'single';
+            setSelection({mode:nextMode,origins:nextMode === 'single' ? singleOrigin(origins.SCRIPT) : origins});
+          }}>
+            <option value="single">Endpoint único</option>
+            <option value="roles">Endpoints por função</option>
+          </select>
+        </label>
+        {mode === 'single' ? endpointField('SCRIPT','Domínio do endpoint') :
+          roles.map(role => endpointField(role,roleLabels[role]))}
+        {selection && <button type="button" disabled={busy} onClick={() => setSelection(undefined)}>
+          {published ? 'Manter endereços da revisão atual' : 'Usar endereços padrão'}
+        </button>}
+        {!published && !selection && <p>Sem uma seleção, a publicação usa o domínio padrão configurado para cada função.</p>}
+        {needsSelection && !canPublish && <p>Escolha um endpoint operacional para cada função.</p>}
+      </>}
       {data?.telemetryOrigins?.length === 0 &&
         <Link {...nav.link(settingsPath + '/integracoes')}>Conferir endpoints de telemetria</Link>}
-      {canPublish && (!published || data.publication.changesRequired || pendingTelemetry) && <>
+      {canPublish && (!published || data.publication.changesRequired || pendingSelection) && <>
         <p>{published ? 'Publique uma revisão para gerar trechos com os endereços selecionados.' :
           'Publique os endereços para gerar os trechos HTML e CSS desta página.'}</p>
         {!page.enabled && <p>Reative a LP na oferta para publicar pelo painel.</p>}
@@ -307,8 +340,8 @@ export function Installation({api, project, page, context, setGuard}: {
     {confirmation && <Confirm title={actionText[confirmation].name}
       accept={() => void execute(confirmation)} cancel={() => setConfirmation(undefined)}>
       <p>{actionText[confirmation].description}</p>
-      {(confirmation === 'publish' || confirmation === 'rotate') && pendingTelemetry &&
-        <p>{selectedTelemetry || 'Usar origem padrão'}</p>}
+      {(confirmation === 'publish' || confirmation === 'rotate') && needsSelection &&
+        <ul>{roles.map(role => <li key={role}>{roleLabels[role]} · {origins[role]}</li>)}</ul>}
     </Confirm>}
   </>;
 }

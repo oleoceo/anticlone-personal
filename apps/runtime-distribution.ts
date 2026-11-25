@@ -7,6 +7,7 @@ import {runControlledCheck,verificationPolicy,validVerifierImage,type Verificati
 
 export const distributionRoles = ['SCRIPT','TELEMETRY','STATIC_ASSETS'] as const;
 type Role = typeof distributionRoles[number];
+type RoleOrigins = Record<Role,string>;
 export type Distribution = {installation:string; version:number; bases:Record<Role,string>;paths?:Record<string,string>};
 type AliasRow = {alias:string;public_token?:string|null;installation_id:string;version:number;role:Role;origin:string;contract_version:number};
 
@@ -105,10 +106,21 @@ export function distributionSnippets(distribution:Distribution) {
 export async function distributionAdmin(db:Pool,body:unknown,env=process.env) {
   if (!body || typeof body!=='object' || Array.isArray(body)) throw new TypeError('invalid distribution');
   const data=body as Record<string,unknown>;
-  const explicit = Object.hasOwn(data,'telemetryOrigin');
-  if (explicit && (!['publish','rotate'].includes(String(data.action)) || (data.telemetryOrigin !== null &&
-    (typeof data.telemetryOrigin !== 'string' || !/^https:\/\/[a-z0-9.-]+(?::[0-9]+)?$/.test(data.telemetryOrigin))))) throw new TypeError('invalid telemetry origin');
-  if (Object.keys(data).sort().join(',')!==(explicit?'action,page,project,telemetryOrigin':'action,page,project') || typeof data.project!=='string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(data.project) || typeof data.page!=='string' || !/^[a-f0-9-]{36}$/i.test(data.page) || !['inspect','publish','rotate','verify'].includes(String(data.action))) throw new TypeError('invalid distribution');
+  const legacy = Object.hasOwn(data,'telemetryOrigin');
+  const explicit = Object.hasOwn(data,'roleOrigins');
+  const selectionKey = explicit ? ',roleOrigins' : legacy ? ',telemetryOrigin' : '';
+  if (Object.keys(data).sort().join(',')!=='action,page,project'+selectionKey || typeof data.project!=='string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(data.project) || typeof data.page!=='string' || !/^[a-f0-9-]{36}$/i.test(data.page) || !['inspect','publish','rotate','verify'].includes(String(data.action))) throw new TypeError('invalid distribution');
+  if (selectionKey && data.action!=='publish' && data.action!=='rotate') throw new TypeError('invalid distribution selection');
+  const isHttpsOrigin = (value: unknown): value is string =>
+    typeof value==='string' && /^https:\/\/[a-z0-9.-]+(?::[0-9]+)?$/.test(value);
+  if (legacy && data.telemetryOrigin!==null && !isHttpsOrigin(data.telemetryOrigin)) throw new TypeError('invalid telemetry origin');
+  let roleOrigins: RoleOrigins | undefined;
+  if (explicit) {
+    const input = data.roleOrigins as Partial<Record<Role,unknown>> | null;
+    if (!input || typeof input!=='object' || Object.keys(input).length!==distributionRoles.length ||
+        !distributionRoles.every(role => Object.hasOwn(input,role) && isHttpsOrigin(input[role]))) throw new TypeError('invalid role origins');
+    roleOrigins = input as RoleOrigins;
+  }
   if(data.action==='verify'){
     const attempt=await verifyPublishedInstallation(db,data.project,data.page,env);
     const current=await readOrPublish(db,{project:data.project,page:data.page,action:'inspect'},env);
@@ -119,7 +131,7 @@ export async function distributionAdmin(db:Pool,body:unknown,env=process.env) {
       {...attempt,status:'NOT_VERIFIED',reason:'VERIFICATION_SUPERSEDED'};
     return {...current,verificationAttempt};
   }
-  return readOrPublish(db,{project:data.project,page:data.page,action:String(data.action),telemetryOrigin:data.telemetryOrigin as string|null|undefined},env);
+  return readOrPublish(db,{project:data.project,page:data.page,action:String(data.action),telemetryOrigin:data.telemetryOrigin as string|null|undefined,roleOrigins},env);
 }
 
 async function distributionPage(client: PoolClient, project: string, page: string) {
@@ -135,7 +147,7 @@ async function distributionPage(client: PoolClient, project: string, page: strin
     [project,page])).rows[0];
 }
 
-async function readOrPublish(db: Pool, data: {project:string;page:string;action:string;telemetryOrigin?:string|null}, env: NodeJS.ProcessEnv) {
+async function readOrPublish(db: Pool, data: {project:string;page:string;action:string;telemetryOrigin?:string|null;roleOrigins?:RoleOrigins}, env: NodeJS.ProcessEnv) {
   const client=await db.connect();
   try {
     const inspecting=data.action==='inspect';
@@ -159,24 +171,26 @@ async function readOrPublish(db: Pool, data: {project:string;page:string;action:
     const registered = new Map(items.map(item => [item.origin,item.state]));
     const eligible = items.filter(item => item.state === 'OPERATIONAL').map(item => item.origin);
     const previous = distribution ? new URL(distribution.bases.TELEMETRY).origin : undefined;
-    const explicit = data.telemetryOrigin !== undefined;
-    const selected = explicit ? data.telemetryOrigin : previous && registered.has(previous) ? previous : undefined;
-    const persisted = distribution?.bases;
+    const selected = data.telemetryOrigin === undefined
+      ? previous && registered.has(previous) ? previous : undefined
+      : data.telemetryOrigin;
+    const uniform = data.telemetryOrigin;
+    const requested = data.roleOrigins ?? (uniform ? {SCRIPT:uniform,TELEMETRY:uniform,STATIC_ASSETS:uniform} : undefined);
+    const useDefaults = !requested && (!distribution || uniform===null);
     const origins = {...defaults};
-    if (selected) {
-      // Existing split-role revisions are kept by implicit publication and rotation.
-      for (const role of distributionRoles) origins[role] = explicit ? selected : new URL(persisted![role]).origin;
+    if (requested) Object.assign(origins,requested);
+    else if (!useDefaults && distribution) {
+      for (const role of distributionRoles) origins[role] = new URL(distribution.bases[role]).origin;
     }
     const unavailable = {code:'TELEMETRY_ORIGIN_UNAVAILABLE'};
     const requiresCheck = (origin: string) => registered.has(origin) || listedTelemetryOrigin(origin,env);
     const blockedDefault = Object.values(defaults).some(origin => requiresCheck(origin) && registered.get(origin) !== 'OPERATIONAL');
     const defaultsReady = !publicationIssues.length && !blockedDefault;
-    const issues = selected ? distributionRoles.flatMap(role => {
+    const issues = useDefaults ? [...publicationIssues] : distributionRoles.flatMap(role => {
       const code = runtimeOriginIssue(origins[role],env);
       return code ? [{code,role}] : [];
-    }) : [...publicationIssues];
-    const pooled = new Set(Object.values(origins).filter(requiresCheck));
-    if (selected) pooled.add(selected);
+    });
+    const pooled = new Set(Object.values(origins).filter(origin => requested || requiresCheck(origin)));
     if ([...pooled].some(origin => registered.get(origin) !== 'OPERATIONAL')) issues.push(unavailable);
     const publication = {ready:!issues.length,defaultsReady,issues,rotationAvailable:schema.rotation,changesRequired:false};
     const changesOrigins = (current: Distribution) => distributionRoles.some(role=>new URL(current.bases[role]).origin!==origins[role]);
@@ -237,7 +251,7 @@ async function readOrPublish(db: Pool, data: {project:string;page:string;action:
     await client.query('COMMIT');
     const measured=controlled && controlled.status!=='NOT_VERIFIED' ? controlled.layers : undefined;
     return {contractVersion:1,state:distribution?'PUBLISHED':'NOT_PUBLISHED',distribution,publication,telemetryOrigins:eligible,
-      telemetryEndpoints:items.map(({origin,state})=>({origin,state})),selectedTelemetryOrigin:selected ?? null,
+      telemetryEndpoints:items.map(({origin,state})=>({origin,state})),selectedTelemetryOrigin:data.roleOrigins?.TELEMETRY ?? selected ?? null,
       verification:{ready:!issue,issue},history:history.rows,aliasActivity,snippets:distribution?distributionSnippets(distribution):null,
       diagnostic:{status:controlled?.status??'NOT_VERIFIED',confidence:measured?'CONTROLLED_CURRENT_LOAD_ONLY':'UNAUTHENTICATED_CLAIM',
         controlledVerification:controlled??{status:'NOT_VERIFIED',reason:issue??'NO_CURRENT_VERIFICATION'},

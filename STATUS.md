@@ -1,5 +1,12 @@
 # STATUS — AntiClone Personal
 
+## F07 — seleção de endpoints por função na Instalação
+- Base PR #93 `0e3e1967`, sucessora documental da release Dev `50e290c2`.
+- A Instalação publica um domínio para os três papéis ou um mapa por papel; a pool operacional é revalidada na transação.
+- O campo legado segue aceito. Omissão preserva as origens vigentes; novas revisões mantêm os aliases históricos acessíveis.
+- A prova em `tests/runtime-distribution.test.ts` usa PostgreSQL e Chromium com HTTPS/mTLS sintético para um, dois e três domínios, elegibilidade, isolamento administrativo, contratos históricos e tempos de carga e decisão.
+- Revisão independente `/root/revisao_f07` favorável ao delta após os ajustes de rótulos, padrões e cobertura. Evidências de execução e checks vinculados ao PR de implementação.
+
 ## F33 — query strings nas rotas de distribuição (PR #93)
 - Gateway e probes reservados comparam o caminho até o primeiro `?`, preservando os caracteres originais do caminho.
 - A regressão em `tests/runtime-distribution.test.ts` verifica recursos, métodos HTTP, rejeições e probes com e sem query, além dos contratos anteriores.

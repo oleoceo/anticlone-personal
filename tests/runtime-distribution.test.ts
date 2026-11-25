@@ -54,6 +54,7 @@ async function sharedMtlsIngress(origins: readonly string[], dispatch: RequestLi
   const dir=await mkdtemp(join(tmpdir(),'anticlone-endpoints-'));
   const env=await syntheticTls(dir);
   const boundary=gatewayBoundary(env);
+  let browserClientAddress = '127.0.0.1';
   const server=npmServer(env,(req,res)=>{
     if(!boundary(req,res))return;
     if(req.url===distributionHealthPath){
@@ -89,7 +90,7 @@ async function sharedMtlsIngress(origins: readonly string[], dispatch: RequestLi
       const chunks:Buffer[] = [];
       for await (const chunk of req) chunks.push(chunk);
       try {
-        const reply = await ingress.request({url:origin+req.url,method:req.method,body:Buffer.concat(chunks).toString()},req.headers.origin);
+        const reply = await ingress.request({url:origin+req.url,method:req.method,body:Buffer.concat(chunks).toString()},req.headers.origin,browserClientAddress);
         res.writeHead(reply.status, reply.headers).end(reply.body);
       } catch {
         res.writeHead(502).end();
@@ -101,6 +102,7 @@ async function sharedMtlsIngress(origins: readonly string[], dispatch: RequestLi
   return {
     ...ingress,
     resolverRules:edges.map(({rule})=>rule).join(','),
+    setBrowserClientAddress(address:string) { browserClientAddress = address; },
     async close(){
       for (const listener of [...edges.map(({edge})=>edge),server]) {
         listener.closeAllConnections();
@@ -264,8 +266,10 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
     await db.query('DROP TRIGGER fail_runtime_observe ON incidents; DROP FUNCTION fail_runtime_observe()');
     assert.equal(await degradationState(db,'one','localhost',clone),'UNKNOWN','known loss invalidates the baseline');
     assert.equal((await db.query("SELECT count(*)::int n FROM degradation_events WHERE project_id='one' AND source='core'")).rows[0].n,2,'lost collection never invents a core observation');
-    // Explicit new role origins create v2; old bundles retain all v1 bases.
-    const second=await distributionAdmin(db,{...request,action:'publish'},{...env,RUNTIME_TELEMETRY_ORIGIN:'https://signals.owner.test'});
+    // An explicit legacy reset applies private defaults; omission preserves the revision.
+    const changedDefaults={...env,RUNTIME_TELEMETRY_ORIGIN:'https://signals.owner.test'};
+    assert.deepEqual((await distributionAdmin(db,{...request,action:'publish'},changedDefaults)).distribution,first);
+    const second=await distributionAdmin(db,{...request,action:'publish',telemetryOrigin:null},changedDefaults);
     assert.equal(second.distribution?.version,2);
     assert.equal(await bootstrapStatus(),'UNKNOWN','a receipt for the previous revision cannot count for the new alias');
     assert.deepEqual(await readDistribution(db,installation,1),first);
@@ -288,7 +292,7 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
     assert.equal(rotated.history?.[0].reason,'rotate');
     assert.deepEqual((await distributionAdmin(db,request,rotationEnv)).distribution,rotated.distribution);
     assert.deepEqual(await readDistribution(db,installation,2),second.distribution);
-    const modern=await distributionAdmin(db,{...request,action:'rotate'},env);assert.ok(modern.snippets);assert.ok(modern.distribution);
+    const modern=await distributionAdmin(db,{...request,action:'rotate',telemetryOrigin:null},env);assert.ok(modern.snippets);assert.ok(modern.distribution);
     html=modern.snippets.html;css=modern.snippets.css;
     await page.unroute('**/runtime.js');await page.unroute('**/core.js');
     const modernLayers=Promise.all(['e','f','m.gif','n.gif'].map(path=>page.waitForResponse(r=>r.url().endsWith('/'+path)&&r.ok())));
@@ -301,6 +305,7 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
     await db.query(await readFile('infra/067_telemetry_origins.sql','utf8'));
     const pooledOrigin = 'https://signals-pool.owner.test';
     const secondary = 'https://signals-secondary.owner.test';
+    const staticOrigin = 'https://assets-third.owner.test';
     await db.query(await readFile('infra/068_telemetry_origin_checks.sql','utf8'));
     const settings=adminBase+'/admin/ui/novo/configuracoes/integracoes';
     const installationPath=adminBase+'/admin/ui/novo/projetos/one/lps/'+pageId+'/instalacao';
@@ -309,7 +314,7 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
     await bootstrapLayer.getByText('Acesso ao recurso observado',{exact:true}).waitFor();
     await bootstrapLayer.getByText('Sem prova controlada atual',{exact:true}).waitFor();
     const previous=(await distributionAdmin(db,request,env)).distribution!;
-    const split=await distributionAdmin(db,{project:'one',page:sibling,action:'publish'},
+    const split=await distributionAdmin(db,{project:'one',page:sibling,action:'publish',telemetryOrigin:null},
       {...env,RUNTIME_TELEMETRY_ORIGIN:pooledOrigin});
     await panel.goto(settings);
     await panel.getByLabel('Origem HTTPS').fill(pooledOrigin);
@@ -317,12 +322,12 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
     await panel.getByRole('button',{name:'Confirmar',exact:true}).click();
     await panel.getByText('Aguardando autorização no ambiente privado',{exact:true}).waitFor();
     await panel.goto(installationPath);
-    const pendingOption=panel.getByLabel('Endpoint de telemetria').locator('option').filter({hasText:pooledOrigin});
+    const pendingOption=panel.getByLabel('Domínio do endpoint',{exact:true}).locator('option').filter({hasText:pooledOrigin});
     await pendingOption.waitFor({state:'attached'});
     assert.notEqual(await pendingOption.getAttribute('disabled'),null);
     assert.match(await pendingOption.textContent() ?? '',/Aguardando autorização/);
     await panel.goto(settings);
-    const pooledEnv = {...env,RUNTIME_TELEMETRY_POOL_ORIGINS:[pooledOrigin,secondary].join(',')};
+    const pooledEnv = {...env,RUNTIME_TELEMETRY_POOL_ORIGINS:[pooledOrigin,secondary,staticOrigin].join(',')};
     assert.equal((await listTelemetryOrigins(db,env)).items[0].authorized,false);
     for (const origin of ['http://signals.test','https://user@signals.test','https://127.0.0.1','https://signals.test/path','https://invalid..test','https://signals.test:8443']) {
       await assert.rejects(telemetryOriginAdmin(db,{action:'register',origin},env),TypeError);
@@ -344,8 +349,12 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
     await panel.getByRole('button',{name:'Cadastrar endpoint',exact:true}).click();
     await panel.getByRole('button',{name:'Confirmar',exact:true}).click();
     await panel.getByText(secondary,{exact:true}).waitFor();
-    ingress=await sharedMtlsIngress([pooledOrigin,secondary],(req,res)=>{
-      if(!distributed(req,res))dispatch(req,res);
+    await telemetryOriginAdmin(db,{action:'register',origin:staticOrigin},pooledEnv);
+    let comparisonMarkup = '';
+    ingress=await sharedMtlsIngress([pooledOrigin,secondary,staticOrigin],(req,res)=>{
+      if(req.url==='/load-comparison') {
+        res.writeHead(200,{'content-type':'text/html; charset=utf-8'}).end(comparisonMarkup);
+      } else if(!distributed(req,res))dispatch(req,res);
     });
     const upstream=ingress;
     // Preserve a v2 revision on the first HTTPS origin across the migration.
@@ -370,7 +379,7 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
     assert.deepEqual(await readDistribution(db,installation,named.version),named);
     await assert.rejects(distributionAdmin(db,{...request,action:'rotate',telemetryOrigin:pooledOrigin},pooledEnv),
       {code:'TELEMETRY_ORIGIN_UNAVAILABLE'});
-    for (const origin of [pooledOrigin,secondary]) {
+    for (const origin of [pooledOrigin,secondary,staticOrigin]) {
       await telemetryOriginAdmin(db,{action:'verify',origin},pooledEnv,origin=>checkTelemetryEndpoint(origin,upstream.request));
     }
     const implicit=await distributionAdmin(db,{project:'one',page:sibling,action:'rotate'},pooledEnv);
@@ -381,8 +390,12 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
       {...pooledEnv,ADMIN_PUBLIC_ORIGIN:base}),{code:'RUNTIME_ADMIN_HOST_CONFLICT'});
     assert.deepEqual(await readDistribution(db,siblingInstallation),implicit.distribution);
     await panel.goto(adminBase+'/admin/ui/novo/projetos/one/lps/'+sibling+'/instalacao');
-    assert.equal(await panel.getByLabel('Endpoint de telemetria').inputValue(),'current');
-    await panel.getByLabel('Endpoint de telemetria').selectOption(pooledOrigin);
+    const mode=panel.getByLabel('Distribuição de endpoints',{exact:true});
+    await mode.locator('option[value=roles]').waitFor({state:'attached'});
+    assert.equal(await mode.inputValue(),'roles');
+    assert.equal(await panel.getByLabel('Telemetria',{exact:true}).inputValue(),pooledOrigin);
+    await mode.selectOption('single');
+    await panel.getByLabel('Domínio do endpoint',{exact:true}).selectOption(pooledOrigin);
     await panel.getByRole('button',{name:'Publicar endereços de instalação',exact:true}).click();
     await panel.getByRole('button',{name:'Confirmar',exact:true}).click();
     await panel.getByRole('region',{name:'Trecho HEAD'}).locator('code').filter({hasText:pooledOrigin+'/assets/'}).waitFor();
@@ -404,7 +417,7 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
       CREATE TRIGGER alias_test_collision BEFORE INSERT ON runtime_aliases
       FOR EACH ROW EXECUTE FUNCTION alias_test_collision();`);
     await panel.goto(installationPath);
-    const select=panel.getByLabel('Endpoint de telemetria');
+    const select=panel.getByLabel('Domínio do endpoint',{exact:true});
     await select.selectOption(pooledOrigin);
     await panel.getByText('Diagnóstico avançado e histórico de revisões', {exact:true}).click();
     await panel.getByRole('button',{name:'Publicar nova revisão',exact:true}).click();
@@ -580,12 +593,53 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
     }
     assert.deepEqual(await readDistribution(db,installation,previous.version),previous);
     assert.equal((await distributionAdmin(db,request,pooledEnv)).publication.changesRequired,false);
-    await select.selectOption(secondary);
+    const roleOrigins={SCRIPT:pooledOrigin,TELEMETRY:secondary,STATIC_ASSETS:pooledOrigin};
+    const mutation={...request,action:'publish',roleOrigins};
+    for (const role of ['SCRIPT','TELEMETRY','STATIC_ASSETS'] as const) {
+      await assert.rejects(distributionAdmin(db,{...mutation,roleOrigins:{...roleOrigins,[role]:'https://unknown.owner.test'}},pooledEnv),
+        {code:'TELEMETRY_ORIGIN_UNAVAILABLE'});
+    }
+    await assert.rejects(distributionAdmin(db,mutation,{...pooledEnv,ADMIN_PUBLIC_ORIGIN:secondary}),{code:'RUNTIME_ADMIN_HOST_CONFLICT'});
+    await assert.rejects(distributionAdmin(db,{...mutation,roleOrigins:{SCRIPT:pooledOrigin}},pooledEnv),TypeError);
+    await assert.rejects(distributionAdmin(db,{...mutation,telemetryOrigin:null},pooledEnv),TypeError);
+    await assert.rejects(distributionAdmin(db,{...mutation,action:'inspect'},pooledEnv),TypeError);
+    assert.deepEqual(await readDistribution(db,installation),pooled.distribution);
+    const unauthenticated=await fetch(adminBase+'/admin/ui/distribution',{method:'POST',headers:{
+      origin:adminBase,'content-type':'application/json',
+    },body:JSON.stringify(mutation)});
+    assert.equal(unauthenticated.status,403);
+    const withoutCsrf=await panel.evaluate(async body => (await fetch('/admin/ui/distribution',{
+      method:'POST',headers:{'content-type':'application/json'},body,
+    })).status,JSON.stringify(mutation));
+    assert.equal(withoutCsrf,403);
+    await mode.selectOption('roles');
+    await panel.getByLabel('Telemetria',{exact:true}).selectOption(secondary);
     await panel.getByRole('button',{name:'Publicar endereços de instalação',exact:true}).click();
     await panel.getByRole('button',{name:'Confirmar',exact:true}).click();
     await snippet.filter({hasText:secondary}).waitFor();
     const next=(await distributionAdmin(db,request,pooledEnv)).distribution!;
+    assert.equal(next.version,pooled.distribution.version+1);
+    assert.deepEqual(Object.fromEntries(Object.entries(next.bases).map(([role,base])=>[role,new URL(base).origin])),roleOrigins);
+    assert.deepEqual((await distributionAdmin(db,mutation,pooledEnv)).distribution,next);
+    const rotatedSplit=(await distributionAdmin(db,{...request,action:'rotate'},pooledEnv)).distribution!;
+    assert.equal(rotatedSplit.version,next.version+1);
+    assert.deepEqual(Object.values(rotatedSplit.bases).map(url=>new URL(url).origin),Object.values(next.bases).map(url=>new URL(url).origin));
+    await panel.reload();
+    await panel.getByLabel('Recursos estáticos',{exact:true}).selectOption(staticOrigin);
+    const scriptSelect=panel.getByLabel('Scripts',{exact:true});
+    await scriptSelect.selectOption(secondary);
+    assert.equal(await panel.getByLabel('Recursos estáticos',{exact:true}).inputValue(),staticOrigin);
+    await scriptSelect.selectOption(pooledOrigin);
+    await panel.getByRole('button',{name:'Publicar endereços de instalação',exact:true}).click();
+    await panel.getByRole('button',{name:'Confirmar',exact:true}).click();
+    await panel.getByRole('region',{name:'Trecho BODY'}).locator('code').filter({hasText:staticOrigin}).waitFor();
+    const threeOrigins=(await readDistribution(db,installation))!;
+    assert.equal(threeOrigins.version,rotatedSplit.version+1);
+    assert.equal(new URL(threeOrigins.bases.SCRIPT).origin,pooledOrigin);
+    assert.equal(new URL(threeOrigins.bases.TELEMETRY).origin,secondary);
+    assert.equal(new URL(threeOrigins.bases.STATIC_ASSETS).origin,staticOrigin);
     assert.equal((await upstream.request({url:next.bases.TELEMETRY+next.paths!['observe'],method:'POST',body:input},origin)).status,204);
+    upstream.setBrowserClientAddress('192.0.2.3');
     const httpsBrowser=await chromium.launch({args:['--host-resolver-rules='+upstream.resolverRules,'--no-proxy-server']});
     try {
       const httpsPage=await httpsBrowser.newPage({ignoreHTTPSErrors:true});
@@ -597,21 +651,26 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
           assert.ok((await response!.text()).includes(revision.bases.TELEMETRY));
         }
       }
-      // Compare the same synthetic LP and HTTPS ingress for both compact maps.
+      // Serve the LP on loopback HTTPS too, so Chromium classifies it and its assets in the same address space.
       const lp = pooledOrigin+'/load-comparison';
-      let markup = '';
-      await httpsPage.route(lp, route => route.fulfill({contentType:'text/html',body:markup}));
-      const timings: number[][] = [[],[]];
-      const revisions: Distribution[] = [named,pooled.distribution];
+      const timings: number[][] = [[],[],[]];
+      const decisions: number[][] = [[],[],[]];
+      const revisions: Distribution[] = [pooled.distribution,next,threeOrigins];
       for (let sample = 0; sample < 3; sample++) {
-        for (const index of [sample % 2,1 - sample % 2]) {
+        for (let offset = 0; offset < revisions.length; offset++) {
+          const index = (sample+offset) % revisions.length;
           const revision = revisions[index];
           const snippet = distributionSnippets(revision);
-          markup = '<style>'+snippet.css+'</style><main class="anticlone-canary">LP de teste</main>'+snippet.html;
+          comparisonMarkup = '<style>'+snippet.css+'</style><main class="anticlone-canary">LP de teste</main>'+snippet.html;
           const expectedScripts = ['runtime.js','core.js','fallback.js']
             .map(resource => revision.bases.SCRIPT+revision.paths![resource]).sort();
           const core = httpsPage.waitForResponse(r => r.url()===revision.bases.SCRIPT+revision.paths!['core.js'] && r.ok());
-          await Promise.all([httpsPage.goto(lp),core]);
+          const canary = httpsPage.waitForResponse(r => r.url()===revision.bases.STATIC_ASSETS+revision.paths!['css.gif'] && r.ok());
+          const decision = httpsPage.waitForResponse(r => r.url()===revision.bases.TELEMETRY+revision.paths!['entry-decision'],{timeout:8000});
+          const [,,,decisionResponse] = await Promise.all([httpsPage.goto(lp),core,canary,decision]);
+          assert.equal(decisionResponse.status(),200);
+          assert.equal(await decisionResponse.finished(),null);
+          decisions[index].push(decisionResponse.request().timing().responseEnd);
           await httpsPage.waitForFunction(() => (performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming).loadEventEnd > 0);
           const measured = await httpsPage.evaluate(() => ({
             load: (performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming).loadEventEnd,
@@ -622,8 +681,11 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
           timings[index].push(measured.load);
         }
       }
-      const [namedLoad,filenameLoad] = timings.map(samples => samples.sort((a,b)=>a-b)[1]);
-      console.log('DISTRIBUTION_LOAD_MEDIAN_MS', JSON.stringify({named:namedLoad,filename:filenameLoad}));
+      const median = (samples: number[]) => [...samples].sort((a,b)=>a-b)[1];
+      console.log('DISTRIBUTION_ROLE_TIMING_MS',JSON.stringify(revisions.map((_,index)=>({
+        origins:index+1,loadMedian:median(timings[index]),decisionRequestMedian:median(decisions[index]),
+        loadSamples:timings[index],decisionRequestSamples:decisions[index],
+      }))));
       assert.equal((await httpsPage.goto(abbreviated.bases.SCRIPT+'app.js'))?.status(),404);
       assert.equal((await httpsPage.goto(next.bases.SCRIPT+'a.js'))?.status(),404);
       const tokens = new Set<string>();
@@ -643,7 +705,7 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
     const endpoint=panel.getByRole('listitem').filter({has:panel.getByText(pooledOrigin,{exact:true})});
     await endpoint.getByText('Operacional',{exact:true}).waitFor();
     await endpoint.getByText('LPs afetadas (2)',{exact:true}).click();
-    await endpoint.getByText('One · LP · revisão '+pooled.distribution.version+' anterior',{exact:true}).waitFor();
+    await endpoint.getByText('One · LP · revisão '+threeOrigins.version+' atual',{exact:true}).waitFor();
     await endpoint.getByText('One · Sibling · revisão '+aligned.version+' atual',{exact:true}).waitFor();
     if (demo) await panel.screenshot({path:join(demo,'endpoints.png'),fullPage:true});
     await endpoint.getByRole('button',{name:'Desativar',exact:true}).click();
@@ -653,6 +715,7 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
       {code:'TELEMETRY_ORIGIN_UNAVAILABLE'});
     assert.deepEqual(await readDistribution(db,installation,pooled.distribution.version),pooled.distribution);
     assert.equal((await upstream.request({url:pooled.distribution.bases.SCRIPT+pooled.distribution.paths!['runtime.js'],method:'GET',body:''})).status,200);
+    await assert.rejects(distributionAdmin(db,{...mutation,action:'rotate'},pooledEnv),{code:'TELEMETRY_ORIGIN_UNAVAILABLE'});
     const siblingState=await distributionAdmin(db,{project:'one',page:sibling,action:'inspect'},pooledEnv);
     assert.equal(siblingState.publication.ready,false);
     assert.equal(siblingState.selectedTelemetryOrigin,pooledOrigin);
@@ -662,6 +725,7 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
       {...pooledEnv,RUNTIME_COMPACT_ALIASES:'false'});
     assert.match(rollback.distribution!.bases.SCRIPT,/\/r\/v2\//);
     assert.deepEqual(await readDistribution(db,installation,next.version),next);
+    assert.deepEqual(await readDistribution(db,installation,threeOrigins.version),threeOrigins);
     assert.equal((await upstream.request({url:next.bases.SCRIPT+next.paths!['runtime.js'],method:'GET',body:''})).status,200);
     for(const target of ['http://127.0.0.1/','http://169.254.169.254/','https://unapproved.test/'])await assert.rejects(distributionAdmin(db,{...request,action:'verify',url:target},env),TypeError);
     await assert.rejects(db.query('UPDATE runtime_aliases SET origin=$1 WHERE installation_id=$2',[base,installation]));
