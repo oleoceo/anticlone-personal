@@ -58,8 +58,12 @@ no ambiente privado.
    cada função. `SCRIPT` serve Bootstrap, Core e fallback.
    `TELEMETRY` atende decisão, coleta, atualização e recibos.
    `STATIC_ASSETS` serve pixels e inventário de CTA. Um domínio pode ocupar
-   mais de uma função. Publique e aplique o trecho da nova revisão somente na
-   LP escolhida. Preserve os ingressos usados por trechos anteriores.
+   mais de uma função. Em uma revisão existente, **Usar origens padrão**
+   prepara uma publicação com as origens configuradas para cada função,
+   inclusive padrões válidos fora da pool. **Manter endereços da revisão
+   atual** cancela a escolha. Confirme a publicação e aplique o trecho da
+   nova revisão somente na LP escolhida. Preserve os ingressos usados por
+   trechos anteriores.
 
 ## Limites e aceite
 
@@ -117,7 +121,7 @@ o log do NPM são evidências fornecidas pelo operador.
 A allowlist Dev preservou `https://protect.leoceo.online`. O Admin verificou
 `https://web-frame.net` e `https://static-layer.com` como `OPERATIONAL`.
 O Admin foi promovido para `adcf9b12` (PR #94) com a flag de aliases
-compactos já ativa. O gateway Dev já servia o contrato utilizado pelo PR.
+compactos já ativa e atualizado para `10703eb` após a correção do P2. O gateway Dev já servia o contrato utilizado pelo PR.
 Lint, typecheck, build e o check oficial `validate-repo` passaram.
 
 Chromium carregou LPs de laboratório com HTML servido por interceptação local
@@ -146,6 +150,49 @@ Os casos acima exercitaram o caminho de CTA. Eles não medem navegação por
 `PAGE_REDIRECT` nem formam uma distribuição estatística de latência.
 Os registros brutos ficaram no diretório privado da release Dev.
 
-A revisão independente `/root/revisao` do SHA `adcf9b12` encontrou um P2.
-O painel perdeu a ação para voltar aos padrões configurados quando estão fora
-da pool. A API preserva essa operação via `telemetryOrigin: null`.
+A revisão independente `/root/revisao` detectou no SHA `adcf9b12` a
+ausência da ação para restaurar os padrões. O SHA `10703eb` restabelece
+essa ação via `telemetryOrigin: null`. O teste focal em Chromium e PostgreSQL
+confere cancelamento, payload, publicação fora da pool e preservação da
+revisão anterior. Os três testes focais passaram. A revisão independente
+`/root/p2` aprovou o delta `f5659a99b67a6186dece9de65ee35f95f694944948a302ad7890e44d4f6e27b8`.
+A CI oficial está vinculada ao [SHA corrigido do PR #94](https://github.com/oleoceo/anticlone-personal/actions/runs/45699026558).
+
+### Decisão inicial de página via Cloudflare
+
+O Chromium carregou HTML de LPs próprias de laboratório por interceptação
+local e usou Bootstrap e decisões reais do Dev via Cloudflare. As
+autorizações das fixtures foram suspensas ao fim. O tempo HTTP vai de
+`requestStart` a `responseEnd`. O tempo desde o Bootstrap termina quando o
+JSON foi entregue ao runtime após leitura e decodificação.
+
+| Telemetria | Conexão | HTTP (ms) | Desde o Bootstrap (ms) | Resultado |
+|---|---|---:|---:|---|
+| static-layer.com | Fria | 168,3 | 196,3 | Descartado |
+| static-layer.com | Aquecida | 141,1 | 162,7 | Descartado |
+| static-layer.com | Aquecida | 133,4 | 150,1 | Descartado |
+| static-layer.com | Aquecida | 158,6 | 173,8 | Descartado |
+| web-frame.net | Aquecida | 227,0 | 262,3 | Descartado |
+| web-frame.net | Aquecida | 157,7 | 170,5 | Descartado |
+| web-frame.net | Aquecida | 123,8 | 136,7 | Aplicado |
+| web-frame.net | Aquecida | 111,8 | 119,9 | Aplicado |
+| static-layer.com | Aquecida | 185,2 | 207,7 | Descartado |
+| static-layer.com | Aquecida | 145,3 | 172,2 | Descartado |
+| static-layer.com | Aquecida | 153,4 | 166,1 | Descartado |
+| static-layer.com | Aquecida | 174,2 | 191,4 | Descartado |
+
+As 12 respostas retornaram HTTP 200 com `PAGE_REDIRECT`. As duas entregues
+dentro de 150 ms levaram ao destino aprovado. Nas dez entregues fora do
+prazo, a LP permaneceu aberta e seu link nativo continuou navegável.
+Em uma falha de transporte injetada somente no navegador, a requisição
+rejeitou após 60,9 ms desde o Bootstrap, e a navegação nativa também
+funcionou. A amostra de CTA no mesmo fluxo de laboratório retornou
+`REPLACE_CONVERSION` em HTTP 119,8 ms, com entrega em 139,3 ms, e o clique
+chegou ao checkout aprovado. A primeira tentativa de clique expirou no
+seletor textual do fixture. O reteste identificou o CTA pelo marcador
+e obteve navegação ao destino.
+
+A diferença entre os relógios explica descartes mesmo com HTTP abaixo de
+150 ms. O ensaio mede a latência de ponta a ponta observada no navegador.
+Ele não isola latência de Cloudflare, NPM ou Gateway por componente e
+não estabelece percentis. O prazo e o runtime continuam os mesmos.
