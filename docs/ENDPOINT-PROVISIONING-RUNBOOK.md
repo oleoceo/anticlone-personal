@@ -164,7 +164,9 @@ O Chromium carregou HTML de LPs próprias de laboratório por interceptação
 local e usou Bootstrap e decisões reais do Dev via Cloudflare. As
 autorizações das fixtures foram suspensas ao fim. O tempo HTTP vai de
 `requestStart` a `responseEnd`. O tempo desde o Bootstrap termina quando o
-JSON foi entregue ao runtime após leitura e decodificação.
+JSON foi entregue ao runtime após leitura e decodificação. A condição
+aquecida incluiu sondas prévias no mesmo contexto do navegador. O teste
+não confirmou o reúso de cada conexão.
 
 | Telemetria | Conexão | HTTP (ms) | Desde o Bootstrap (ms) | Resultado |
 |---|---|---:|---:|---|
@@ -189,8 +191,10 @@ rejeitou após 60,9 ms desde o Bootstrap, e a navegação nativa também
 funcionou. A amostra de CTA no mesmo fluxo de laboratório retornou
 `REPLACE_CONVERSION` em HTTP 119,8 ms, com entrega em 139,3 ms, e o clique
 chegou ao checkout aprovado. A primeira tentativa de clique expirou no
-seletor textual do fixture. O reteste identificou o CTA pelo marcador
-e obteve navegação ao destino.
+seletor textual do fixture. Uma reprodução isolada confirmou que, sem
+a declaração UTF-8, o Chromium interpretou o HTML como Windows-1252
+e alterou o nome acessível. O reteste declarou UTF-8, selecionou o CTA
+pelo marcador e confirmou a navegação ao destino.
 
 A diferença entre os relógios explica descartes mesmo com HTTP abaixo de
 150 ms. O ensaio mede a latência de ponta a ponta observada no navegador.
