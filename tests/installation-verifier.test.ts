@@ -117,8 +117,6 @@ test('network-none sandboxed Chromium + mediated real TLS/PostgreSQL: FULL, CSP 
     const code=new TOTP({secret:Secret.fromBase32(secret)}).generate({timestamp:clock});
     const password='control-panel fixture';
     const salt=Buffer.alloc(16,1);
-    await db.query('CREATE TABLE admin_totp_replay (factor_id text PRIMARY KEY,last_counter bigint NOT NULL)');
-    await db.query('CREATE TABLE admin_totp_codes (factor_id text NOT NULL,digest text NOT NULL,valid_until bigint NOT NULL,PRIMARY KEY (factor_id,digest))');
     const admin=createAdminServer('scrypt$'+salt.toString('hex')+'$'+scryptSync(password,salt,64).toString('hex'),secret,db,()=>clock)
       .listen(0,'127.0.0.1');
     await once(admin,'listening');

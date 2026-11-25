@@ -39,8 +39,6 @@ test('authorized original requests and partial copy: contextual evidence without
     await db.query("INSERT INTO projects VALUES('one','One',$1),('two','Two','https://other.test')",[origin]);
     await db.query("INSERT INTO protected_pages(id,project_id,installation_id,name) VALUES($1,'one',$2,'First'),($3,'one',$4,'Second')",[page,installation,other,otherInstallation]);
     await db.query("INSERT INTO protected_page_urls(page_id,origin,pathname) VALUES($1,$2,'/'),($3,$2,'/second')",[page,origin,other]);
-    await db.query('CREATE TABLE admin_totp_replay(factor_id text PRIMARY KEY,last_counter bigint NOT NULL)');
-    await db.query('CREATE TABLE admin_totp_codes(factor_id text NOT NULL,digest text NOT NULL,valid_until bigint NOT NULL,PRIMARY KEY(factor_id,digest))');
     const endpoint=adminBase+'/admin/projects/one/original-requests';
     assert.equal((await fetch(endpoint,{method:'POST'})).status,401);
     assert.equal((await fetch(endpoint,{method:'POST',headers:{origin:'https://untrusted.test'}})).status,403);

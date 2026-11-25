@@ -31,7 +31,6 @@ for(const width of [1440,390])test(`GS01-04/06/13/16/17: continuous operational 
  smtp.listen(0,'127.0.0.1');await once(smtp.server,'listening');const sa=smtp.server.address();assert.ok(sa&&typeof sa!=='string');
  try{
   for(const f of (await readdir('infra')).filter(f=>/^\d{3}_.*\.sql$/.test(f)).sort())await db.query((await readFile('infra/'+f,'utf8')).replace(/^\uFEFF/,''));
-  await db.query('CREATE TABLE admin_totp_replay(factor_id text PRIMARY KEY,last_counter bigint NOT NULL); CREATE TABLE admin_totp_codes(factor_id text,digest text,valid_until bigint,PRIMARY KEY(factor_id,digest))');
   process.env.GATEWAY_MODE='OPERATIONAL';for(const k of Object.keys(process.env))if(/^(SCOPED_LAB_|LAB_CONTROLLED_)/.test(k))delete process.env[k];
   const scripts=Object.fromEntries(await Promise.all([['runtime.js','bootstrap.js'],['core.js','core.js'],['fallback.js','fallback.js']].map(async([name,file])=>[name,await readFile('runtime/'+file)])));
   const handle=scopedGateway(db,scripts,async()=>true),distributed=distributionGateway(db,scripts,(req,res)=>{if(!handle(req,res))res.writeHead(404).end();});

@@ -56,9 +56,6 @@ test('CTA/health provider TLS + independent worker + audited backlog in Chromium
   const inventory=(first:string,second:string)=>importInventory(db,'one',{surface:'main',candidates:[{marker:'checkout01',kind:'a',parent:'div',ordinal:1,url:original+first},{marker:'checkout02',kind:'a',parent:'div',ordinal:2,url:original+second}]});
   try{
     for(const file of (await readdir('infra')).filter(f=>/^\d{3}_.*\.sql$/.test(f)).sort())await db.query((await readFile('infra/'+file,'utf8')).replace(/^\uFEFF/,''));
-    // createAdminServer is embedded here; reproduce admin-server's durable MFA setup.
-    await db.query('CREATE TABLE admin_totp_replay (factor_id text PRIMARY KEY, last_counter bigint NOT NULL)');
-    await db.query('CREATE TABLE admin_totp_codes (factor_id text NOT NULL, digest text NOT NULL, valid_until bigint NOT NULL, PRIMARY KEY (factor_id,digest))');
     mark('migrated');
     await db.query("INSERT INTO projects(id,name,origin) VALUES('one','One',$1),('two','Two','https://other.test')",[original]);
     await enableInstallation(db,'one');await enableInstallation(db,'two');await configureHealth(db,'one',false,60,true);

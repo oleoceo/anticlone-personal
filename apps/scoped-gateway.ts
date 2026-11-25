@@ -6,7 +6,7 @@ import { issueEntryReceipt, issueObservedReceipt } from './observed-receipts.js'
 import { withAttribution } from './attribution.js';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Pool } from 'pg';
-import { configuredOrigin, observe } from './detection.js';
+import { configuredOrigin, recordObservation } from './detection.js';
 import { classifyTraffic } from './traffic.js';
 import { resolvePageContext } from './page-context.js';
 import { ctaDecision } from './cta-policy.js';
@@ -178,6 +178,7 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>, collect
         const points=inventory ? validateCopyCtaInventory(fields.ctas) : null;
         const client=await db.connect();
         let context:Awaited<ReturnType<typeof resolvePageContext>>=null;
+        let released = false;
         try {
           await client.query('BEGIN');
           context=await resolvePageContext(client,match[1]);
@@ -194,7 +195,10 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>, collect
             res.writeHead(204).end();
             return;
           }
-          const result=await observe(db,context.project,authorized ? [origin] : [],origin,core ? 'core' : 'fallback',core ? fields.signals : undefined);
+          const result = authorized ? 'authorized' : await recordObservation(client, context.project, origin, core ? 'core' : 'fallback', core ? fields.signals : undefined);
+          await client.query('COMMIT');
+          client.release();
+          released = true;
           receiveRuntimeReceipt(db,context,endpoint,core?'core':'fallback',new URL(origin).hostname,receiptAliases.get(req));
           if (authorized) await collect(context.project,context.page,origin,core ? 'core':'fallback');
           res.writeHead(result==='capacity' ? 429 : 204).end();
@@ -203,7 +207,7 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>, collect
         } catch(error) {
           if(context) void layers(context,origin,core?'core':'fallback',true).catch(()=>{});
           throw error;
-        } finally { try { await client.query('ROLLBACK'); client.release(); } catch { client.release(true); } }
+        } finally { if (!released) { try { await client.query('ROLLBACK'); client.release(); } catch { client.release(true); } } }
       })().catch((error:unknown) => decision ? res.writeHead(200,{'Content-Type':'application/json'}).end('{"action":"OBSERVE_ONLY"}') : res.writeHead(error instanceof TypeError || error instanceof SyntaxError ? 400 : 503).end());
     });
     return true;

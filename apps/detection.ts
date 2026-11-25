@@ -41,38 +41,46 @@ export async function cleanup(db: Pool, project: string): Promise<void> {
   } catch(error) { await pool.query('ROLLBACK'); throw error; } finally {pool.release();}
 }
 export async function observe(pool: Pool, project: string, allowedOrigin: string | readonly string[], input: string, source: 'core' | 'fallback' = 'core', evidence?: unknown): Promise<'authorized' | 'observed' | 'capacity'> {
-  const origin = configuredOrigin(input), host = hostFromUrl(origin);
+  const origin = configuredOrigin(input);
   if (typeof allowedOrigin === 'string' ? origin === allowedOrigin : allowedOrigin.includes(origin)) return 'authorized';
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    // Serialize admission per project, including across processes and restarts.
-    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [project]);
-    const existing = await client.query('SELECT id FROM incidents WHERE project_id=$1 AND host=$2', [project, host]);
-    if (!existing.rowCount) {
-      const count = await client.query('SELECT count(*)::int AS n FROM incidents WHERE project_id=$1', [project]);
-      if (count.rows[0].n >= 100) { await client.query('ROLLBACK'); return 'capacity'; }
-    }
-    const incident = await client.query(`INSERT INTO incidents (project_id, host) VALUES ($1, $2)
-      ON CONFLICT (project_id, host) DO UPDATE SET last_seen = now() RETURNING id`, [project, host]);
-    const day = await client.query(`INSERT INTO observation_source_days(project_id,host,day,source) VALUES($1,$2,(now() AT TIME ZONE 'UTC')::date,$3)
-      ON CONFLICT DO NOTHING RETURNING host`, [project, host, source]);
-    if (day.rowCount) {
-      const saved = await client.query('INSERT INTO observations (project_id, host, source) VALUES ($1, $2, $3) RETURNING id', [project, host, source]);
-      await tryRecordTimeline(client, {project,host,type:existing.rowCount ? 'source_observed' : 'first_observation',source,provenance:'gateway',reference:'observation:'+saved.rows[0].id,summary:{claimed_host:host},confidence:'receipt_only',limitations:'Gateway received a browser claim; host and source do not establish identity or independence.'});
-    }
-    if (evidence !== undefined) {
-      const traffic = classifyTraffic(evidence, origin);
-      await client.query(`INSERT INTO traffic_observation_days(project_id,host,day,traffic_class,evidence,certainty,source)
-        VALUES($1,$2,(now() AT TIME ZONE 'UTC')::date,$3,$4,$5,$6) ON CONFLICT DO NOTHING`,
-      [project, host, traffic.trafficClass, traffic.evidence, traffic.certainty, traffic.source]);
-    }
-    await tryIntent(client, () => client.query(`INSERT INTO alert_outbox(incident_id,expired_at)
-      SELECT id, CASE WHEN first_seen <= clock_timestamp()-interval '24 hours' THEN clock_timestamp() END
-      FROM incidents WHERE id=$1 ON CONFLICT (incident_id) DO NOTHING`, [incident.rows[0].id]));
-    await client.query('COMMIT'); return 'observed';
+    const result = await recordObservation(client, project, origin, source, evidence);
+    await client.query('COMMIT');
+    return result;
   } catch (error) { await client.query('ROLLBACK'); throw error; }
   finally { client.release(); }
+}
+
+// The caller owns the transaction and any eligibility checks.
+export async function recordObservation(client: PoolClient, project: string, origin: string, source: 'core' | 'fallback', evidence?: unknown): Promise<'observed' | 'capacity'> {
+  const host = hostFromUrl(origin);
+  // Serialize admission per project, including across processes and restarts.
+  await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [project]);
+  const existing = await client.query('SELECT id FROM incidents WHERE project_id=$1 AND host=$2', [project, host]);
+  if (!existing.rowCount) {
+    const count = await client.query('SELECT count(*)::int AS n FROM incidents WHERE project_id=$1', [project]);
+    if (count.rows[0].n >= 100) return 'capacity';
+  }
+  const incident = await client.query(`INSERT INTO incidents (project_id, host) VALUES ($1, $2)
+    ON CONFLICT (project_id, host) DO UPDATE SET last_seen = now() RETURNING id`, [project, host]);
+  const day = await client.query(`INSERT INTO observation_source_days(project_id,host,day,source) VALUES($1,$2,(now() AT TIME ZONE 'UTC')::date,$3)
+    ON CONFLICT DO NOTHING RETURNING host`, [project, host, source]);
+  if (day.rowCount) {
+    const saved = await client.query('INSERT INTO observations (project_id, host, source) VALUES ($1, $2, $3) RETURNING id', [project, host, source]);
+    await tryRecordTimeline(client, {project,host,type:existing.rowCount ? 'source_observed' : 'first_observation',source,provenance:'gateway',reference:'observation:'+saved.rows[0].id,summary:{claimed_host:host},confidence:'receipt_only',limitations:'Gateway received a browser claim; host and source do not establish identity or independence.'});
+  }
+  if (evidence !== undefined) {
+    const traffic = classifyTraffic(evidence, origin);
+    await client.query(`INSERT INTO traffic_observation_days(project_id,host,day,traffic_class,evidence,certainty,source)
+      VALUES($1,$2,(now() AT TIME ZONE 'UTC')::date,$3,$4,$5,$6) ON CONFLICT DO NOTHING`,
+    [project, host, traffic.trafficClass, traffic.evidence, traffic.certainty, traffic.source]);
+  }
+  await tryIntent(client, () => client.query(`INSERT INTO alert_outbox(incident_id,expired_at)
+    SELECT id, CASE WHEN first_seen <= clock_timestamp()-interval '24 hours' THEN clock_timestamp() END
+    FROM incidents WHERE id=$1 ON CONFLICT (incident_id) DO NOTHING`, [incident.rows[0].id]));
+  return 'observed';
 }
 
 // Referer is an unauthenticated claim; never create an incident or alert from a canary.

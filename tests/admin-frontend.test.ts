@@ -43,8 +43,6 @@ async function fixture(test: TestContext, browserArgs?: string[]) {
     await db.query((await readFile('infra/' + name, 'utf8')).replace(/^\uFEFF/, ''));
   }
 
-  await db.query('CREATE TABLE admin_totp_replay (factor_id text PRIMARY KEY, last_counter bigint NOT NULL)');
-  await db.query('CREATE TABLE admin_totp_codes (factor_id text NOT NULL, digest text NOT NULL, valid_until bigint NOT NULL, PRIMARY KEY (factor_id,digest))');
 
   const savedOrigin = process.env.RUNTIME_PUBLIC_ORIGIN;
   const savedVerifier = process.env.INSTALLATION_VERIFIER_IMAGE;

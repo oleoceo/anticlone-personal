@@ -109,8 +109,6 @@ test('operational v2 + MFA/CSRF admin: HTTPS publication, rotation, PAGE/CTA, su
     }
     const base='https://gateway.test'+(proxy?'':':'+address.port);
     process.env.RUNTIME_PUBLIC_ORIGIN=base;
-    await db.query('CREATE TABLE admin_totp_replay(factor_id text PRIMARY KEY,last_counter bigint NOT NULL)');
-    await db.query('CREATE TABLE admin_totp_codes(factor_id text NOT NULL,digest text NOT NULL,valid_until bigint NOT NULL,PRIMARY KEY(factor_id,digest))');
     const secret='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',salt='0123456789abcdef0123456789abcdef';
     const passwordRecord=`scrypt$${salt}$${scryptSync('password',Buffer.from(salt,'hex'),64).toString('hex')}`;
     admin=createAdminServer(passwordRecord,secret,db).listen(0,'127.0.0.1');await once(admin,'listening');

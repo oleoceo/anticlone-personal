@@ -182,7 +182,6 @@ test('Chromium delivers CTA observations across origins when the old beacon cann
   assert.equal((await browserClass('/copy?utm_medium=cpc')).entry.action,'OBSERVE_ONLY');
   assert.equal((await browserClass('/copy')).entry.mappings.length,2);
 
-  await db.query('CREATE TABLE admin_totp_replay(factor_id text PRIMARY KEY,last_counter bigint NOT NULL); CREATE TABLE admin_totp_codes(factor_id text NOT NULL,digest text NOT NULL,valid_until bigint,PRIMARY KEY(factor_id,digest))');
   const salt=Buffer.alloc(16,43), password='test-panel-password', secret='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
   const record='scrypt$'+salt.toString('hex')+'$'+scryptSync(password,salt,64).toString('hex');
   const admin=createAdminServer(record,secret,db).listen(0,'127.0.0.1');
