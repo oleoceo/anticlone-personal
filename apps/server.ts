@@ -176,9 +176,10 @@ const handler: http.RequestListener = (req, res) => {
   if (handleCommerce(req,res)) return;
   if (handleProjectCheckout(req,res)) return;
   if (handleObservedSession(req,res)) return;
-  const assetFileHealth = req.url === distributionHealthPath;
-  const namedDistributionHealth = req.url === namedDistributionHealthPath;
-  const distributionHealth = assetFileHealth || namedDistributionHealth || req.url === abbreviatedDistributionHealthPath;
+  const distributionPath = (req.url ?? '').split('?', 1)[0];
+  const assetFileHealth = distributionPath === distributionHealthPath;
+  const namedDistributionHealth = distributionPath === namedDistributionHealthPath;
+  const distributionHealth = assetFileHealth || namedDistributionHealth || distributionPath === abbreviatedDistributionHealthPath;
   if (!distributionHealth && distributed(req,res)) return;
   if (scoped(req,res)) return;
   if (!project && req.url !== '/healthz' && !distributionHealth) { res.writeHead(404).end(); return; }

@@ -13,7 +13,7 @@ import {receiveRuntimeReceipt,receiveDistributionScript,receiptAliases} from './
 export function distributionGateway(db:Pool,scripts:Record<string,Buffer>,dispatch:(req:IncomingMessage,res:ServerResponse)=>void,layers:LayerObserver=async()=>{}) {
   let start=Date.now(),count=0;
   return (req:IncomingMessage,res:ServerResponse):boolean=>{
-    const path = req.url ?? '';
+    const path = (req.url ?? '').split('?', 1)[0];
     const compact = path.startsWith('/assets/');
     if (!compact && !path.startsWith('/d/') && !path.startsWith('/r/')) return false;
     const assetFile = /^\/assets\/((?:js|img|api)\/[a-z]+)\.([0-9a-f]{20})(\.(?:js|gif))?$/.exec(path);

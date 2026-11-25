@@ -1,10 +1,12 @@
-import {checkTelemetryEndpoint, distributionHealthPath, listTelemetryOrigins, telemetryOriginAdmin} from '../apps/telemetry-origins.js';
+import {abbreviatedDistributionHealthPath, checkTelemetryEndpoint, distributionHealthPath, namedDistributionHealthPath, listTelemetryOrigins, telemetryOriginAdmin} from '../apps/telemetry-origins.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID,scryptSync} from 'node:crypto';
 import {mkdir,mkdtemp,readFile,readdir,rm,writeFile} from 'node:fs/promises';
 import {createServer,type RequestListener} from 'node:http';
 import {createServer as createHttpsServer, request as httpsRequest} from 'node:https';
+import {spawn} from 'node:child_process';
+import {Script} from 'node:vm';
 import {once} from 'node:events';
 import {gzipSync} from 'node:zlib';
 import type {AddressInfo} from 'node:net';
@@ -68,7 +70,7 @@ async function sharedMtlsIngress(origins: readonly string[], dispatch: RequestLi
       assert.ok(origins.includes(target.origin));
       return new Promise((resolve,reject)=>{
         const req=httpsRequest({hostname:'127.0.0.1',port,servername:env.PUBLIC_GATEWAY_HOST,ca,cert,key,method,
-          path:target.pathname,headers:{host:env.PUBLIC_GATEWAY_HOST,'x-forwarded-proto':'https','x-forwarded-for':'127.0.0.1',
+          path:target.pathname+target.search,headers:{host:env.PUBLIC_GATEWAY_HOST,'x-forwarded-proto':'https','x-forwarded-for':'127.0.0.1',
             ...(origin ? {origin,'content-type':'text/plain'} : {})}},res=>{
           const chunks:Buffer[]=[];
           res.on('data',chunk=>chunks.push(chunk));
@@ -267,7 +269,11 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
     assert.equal(second.distribution?.version,2);
     assert.equal(await bootstrapStatus(),'UNKNOWN','a receipt for the previous revision cannot count for the new alias');
     assert.deepEqual(await readDistribution(db,installation,1),first);
-    const oldBundle=await (await fetch(first.bases.SCRIPT+'runtime.js')).text();
+    const oldScript=first.bases.SCRIPT+'runtime.js';
+    const oldBundle=await (await fetch(oldScript)).text();
+    const queriedOldBundle=await fetch(oldScript+'?cache=1');
+    assert.equal(queriedOldBundle.status,200);
+    assert.equal(await queriedOldBundle.text(),oldBundle);
     assert.ok(oldBundle.includes(first.bases.TELEMETRY));assert.ok(!oldBundle.includes('https://signals.owner.test'));
     await db.query(await readFile('infra/053_distribution_rotation.sql','utf8'));
     const rotationEnv={...env,RUNTIME_TELEMETRY_ORIGIN:'https://signals.owner.test'};
@@ -437,6 +443,84 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
     }));
     const input=JSON.stringify({origin,pathname:'/',signals:{}});
     assert.equal((await upstream.request({url:pooled.distribution.bases.TELEMETRY+pooled.distribution.paths!['observe'],method:'POST',body:input},origin)).status,204);
+    const filename = pooled.distribution;
+    const paths = filename.paths!;
+    for (const query of ['', '?cache=1&next=%2Fassets%3Fx']) {
+      for (const endpoint of ['runtime.js','core.js','fallback.js','cta-inventory.js']) {
+        const role = endpoint==='cta-inventory.js' ? 'STATIC_ASSETS' : 'SCRIPT';
+        const reply=await upstream.request({url:filename.bases[role]+paths[endpoint]+query,method:'GET',body:''});
+        assert.equal(reply.status,200,endpoint);
+        assert.match(reply.headers['content-type'],/^application\/javascript/);
+        new Script(reply.body.toString());
+        if(endpoint==='runtime.js') assert.deepEqual(reply.body,pooledBundle.body);
+      }
+      for (const endpoint of ['html.gif','css.gif']) {
+        const reply=await upstream.request({url:filename.bases.STATIC_ASSETS+paths[endpoint]+query,method:'GET',body:''});
+        assert.equal(reply.status,200,endpoint);
+        assert.equal(reply.headers['content-type'],'image/gif');
+        assert.equal(reply.body.subarray(0,6).toString(),'GIF89a');
+      }
+      const session='a'.repeat(32);
+      const decisionInput=JSON.stringify({pathname:'/',session,signals:{}});
+      const receipt=randomUUID();
+      await db.query(`INSERT INTO observed_decision_receipts
+        (id,project_id,page_id,session_id,origin,action,policy_version,traffic_class,points)
+        VALUES($1,'one',$2,$3,$4,'PAGE_REDIRECT',1,'DIRECT_UNKNOWN','[]')`,[receipt,pageId,session,origin]);
+      const actions = [
+        ['observe',input,204], ['observe/fallback',JSON.stringify({origin,pathname:'/'}),204],
+        ['entry-decision',decisionInput,200], ['cta-refresh',decisionInput,200],
+        ['observed-session',decisionInput,204],
+        ['observed-action',JSON.stringify({event:randomUUID(),receipt,marker:null,surface:null}),204],
+      ] as const;
+      for (const [endpoint,body,status] of actions) {
+        const url=filename.bases.TELEMETRY+paths[endpoint]+query;
+        assert.equal((await upstream.request({url,method:'POST',body},origin)).status,status,endpoint);
+        assert.equal((await upstream.request({url,method:'GET',body:''},origin)).status,
+          endpoint.startsWith('observed-') ? 415 : 405,endpoint);
+      }
+      const script=paths['runtime.js'];
+      const telemetryToken=paths['observe'].split('.')[1];
+      const staticToken=paths['html.gif'].split('.')[1];
+      for (const invalid of [
+        script.replace(/[0-9a-f]{20}/,'00000000000000000001'),
+        script.replace('app.','wrong.'),
+        script.replace('app.','%61pp.'),
+        script.replace(/[0-9a-f]{20}/,telemetryToken),
+        script.replace(/[0-9a-f]{20}/,staticToken),
+        paths['html.gif'].replace(/[0-9a-f]{20}/,script.split('.')[1]),
+      ]) {
+        assert.equal((await upstream.request({url:filename.bases.SCRIPT+invalid+query,method:'GET',body:''})).status,404,invalid);
+      }
+    }
+    const probeSocket=createServer().listen(0,'127.0.0.1');
+    await once(probeSocket,'listening');
+    const probePort=(probeSocket.address() as AddressInfo).port;
+    await new Promise<void>(resolve=>probeSocket.close(()=>resolve()));
+    const probeBase='http://127.0.0.1:'+probePort;
+    const probeGateway=spawn(process.execPath,['dist/apps/server.js'],{env:{
+      ...process.env, DATABASE_URL:process.env.TEST_DATABASE_URL, PGOPTIONS:'-c search_path='+schema,
+      PORT:String(probePort), SMTP_PORT:'1', GATEWAY_MODE:'OPERATIONAL',
+    },stdio:['ignore','ignore','inherit']});
+    try {
+      for(let attempt=0;attempt<100;attempt++){
+        if(await fetch(probeBase+'/healthz').then(reply=>reply.ok,()=>false)) break;
+        if(probeGateway.exitCode!==null) assert.fail('Probe gateway exited');
+        await new Promise(resolve=>setTimeout(resolve,50));
+      }
+      for (const path of [distributionHealthPath,namedDistributionHealthPath,abbreviatedDistributionHealthPath]) {
+        for (const query of ['', '?cache=1']) {
+          const reply=await fetch(probeBase+path+query);
+          assert.equal(reply.status,200,path+query);
+          assert.deepEqual(await reply.json(),{status:'ready',mode:'OPERATIONAL',action:'SCOPED_AUTHORIZATION_REQUIRED'});
+        }
+      }
+    } finally {
+      if(probeGateway.exitCode===null && probeGateway.signalCode===null){
+        const exited=once(probeGateway,'exit');
+        probeGateway.kill();
+        await exited;
+      }
+    }
     // Put the exact HTML from the panel into a controlled original and copy.
     const mailPage=await browser.newPage();
     const mailCopy='https://mail-copy.owner.test/';
@@ -505,9 +589,11 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
       const httpsPage=await httpsBrowser.newPage({ignoreHTTPSErrors:true});
       for (const revision of [oldHttps,abbreviated,named,pooled.distribution,next]) {
         const script = revision.bases.SCRIPT+revision.paths!['runtime.js'];
-        const response = await httpsPage.goto(script);
-        assert.equal(response?.status(),200);
-        assert.ok((await response!.text()).includes(revision.bases.TELEMETRY));
+        for (const query of ['', '?cache=1']) {
+          const response = await httpsPage.goto(script+query);
+          assert.equal(response?.status(),200);
+          assert.ok((await response!.text()).includes(revision.bases.TELEMETRY));
+        }
       }
       // Compare the same synthetic LP and HTTPS ingress for both compact maps.
       const lp = pooledOrigin+'/load-comparison';

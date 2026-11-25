@@ -1,5 +1,10 @@
 # STATUS — AntiClone Personal
 
+## F33 — query strings nas rotas de distribuição (PR #93)
+- Gateway e probes reservados comparam o caminho até o primeiro `?`, preservando os caracteres originais do caminho.
+- A regressão em `tests/runtime-distribution.test.ts` verifica recursos, métodos HTTP, rejeições e probes com e sem query, além dos contratos anteriores.
+- Aceite Dev da revisão sintética 1 e ativação da flag dependem da CI e das verificações pelo caminho público.
+
 ## F30 — apresentação da Visão Geral
 - Quatro indicadores, origens em linhas, cliques por CTA e detalhes operacionais recolhíveis. A configuração mostra os fatores e o resultado da estimativa versionada.
 - [Capturas comparativas em Chromium desktop e mobile](docs/evidencias/visao-geral/README.md) com a mesma fixture nos dois builds.
