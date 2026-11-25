@@ -189,7 +189,7 @@ test('scoped redirect activation, revision and deactivation preserve the other L
     await run(ctaConfirmation);
     assert.deepEqual(probes.at(-1),[telemetry,5,true]);
     const savedCta=await run({page:second,action:'inspect-cta',copyUrl:ctaConfirmation.copyUrl});
-    assert.ok('ctaRules' in savedCta);
+    assert.ok('ctaRules' in savedCta && savedCta.ctaRules);
     assert.equal(savedCta.ctaRules[0]?.enabled,true);
     assert.equal(savedCta.ctaRules[0]?.destination,overrideDestination);
     assert.equal((await copyRedirectAdmission(db,secondInstallation,'https://new-copy.test','/'))?.admitted,true);
