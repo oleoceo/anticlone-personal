@@ -175,6 +175,16 @@ preserva as revisões anteriores. Veja o [procedimento NPM](NPM-VPS-RUNBOOK.md#1
 | Sinais e decisão | `collect` recebe observações, `report` recebe o fallback, `config` entrega a decisão inicial, `refresh` atualiza CTA, `session` e `activity` recebem a sessão e a ação observadas. |
 | Recursos estáticos | `pixel.gif` é o sinal HTML, `style.gif` é o sinal CSS e `inventory.js` serve o inventário de laboratório existente. |
 
+O Gateway seleciona aliases dos contratos v1 a v4 e os probes reservados de
+distribuição pelo caminho lexical até o primeiro `?`, sem decodificar ou
+normalizar o caminho. A query string fica fora da comparação. A seleção
+continua validando formato, token, papel e método HTTP conforme o recurso.
+No smoke, compare o mesmo recurso ou probe com e sem query.
+
+O contrato 4 foi homologado no Dev em um cenário sintético via Cloudflare.
+O [STATUS](../STATUS.md#f33--query-strings-nas-rotas-de-distribuição-pr-93)
+registra o SHA executado, a CI e os recibos do aceite.
+
 Scripts usam `/assets/js/<nome>.<token>.js`, imagens usam
 `/assets/img/<nome>.<token>.gif` e os endpoints usam
 `/assets/api/<nome>.<token>`. Cada papel usa um token independente.

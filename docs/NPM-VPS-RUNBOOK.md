@@ -501,6 +501,15 @@ prontidão em `/assets/js/app.00000000000000000000.js` em cada padrão. Revalide
 cadastrados e só então habilite `RUNTIME_COMPACT_ALIASES=true` no admin.
 A LP original permanece fora deste procedimento de preparação.
 
+No smoke de distribuição, acesse o probe reservado e os recursos do
+contrato ativo com e sem uma query de teste, como `?smoke=1`. Confira o
+mesmo status e tipo de conteúdo nas duas variantes. Para as ações de
+telemetria, use os métodos HTTP e os payloads do cenário controlado e
+confira as rejeições de token, nome ou papel incorretos. O Gateway
+compara o caminho original até o primeiro `?`, sem decodificação ou
+normalização. O aceite Dev já registrado no [STATUS](../STATUS.md#f07--domínios-de-distribuição-e-aliases-compactos)
+cobre a revisão sintética pelo caminho público.
+
 **Rollback.** Retire a flag para voltar a emitir URLs v2 e desative no painel
 um domínio com problema para bloquear novas revisões. Preserve o Gateway
 compatível, as migrações 075 a 077, o proxy e o DNS dos endereços já instalados enquanto houver

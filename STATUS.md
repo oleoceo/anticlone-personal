@@ -3,7 +3,9 @@
 ## F33 — query strings nas rotas de distribuição (PR #93)
 - Gateway e probes reservados comparam o caminho até o primeiro `?`, preservando os caracteres originais do caminho.
 - A regressão em `tests/runtime-distribution.test.ts` verifica recursos, métodos HTTP, rejeições e probes com e sem query, além dos contratos anteriores.
-- Aceite Dev da revisão sintética 1 e ativação da flag dependem da CI e das verificações pelo caminho público.
+- **PR93_ALIASES_OPERATIONAL** no Dev. SHA homologado `50e290c2a9ebc62c13c57a5ee97e4a1b803df89f`, [CI oficial 45652589598](https://github.com/oleoceo/anticlone-personal/actions/runs/45652589598) com 159 testes aprovados, zero falhas e zero skips. O PR #93 segue aberto, sem merge. O commit posterior de documentação registra esse aceite.
+- Suíte local completa: 142 aprovados, 6 falhas e 7 skips. Cinco falhas ambientais comprovadas: `cta-history` e `cta-observed-browser` por `libcups.so.2` indisponível (ambos passaram no reteste com as bibliotecas locais), `front3-upgrade` e `recovery` por `pg_dump` indisponível e `operational-authorization` por `ENOTFOUND gateway.test`.
+- A falha de `page-redirect-journey` permanece com causa indeterminada. O clique em **CONFIRMO REDIRECIONAMENTO** expirou com o botão desabilitado. Faltam trace do painel, respostas administrativas e estado do formulário no momento da falha.
 
 ## F30 — apresentação da Visão Geral
 - Quatro indicadores, origens em linhas, cliques por CTA e detalhes operacionais recolhíveis. A configuração mostra os fatores e o resultado da estimativa versionada.
@@ -273,4 +275,7 @@
 - Base Dev PR #92, `d55fbb7`. Cadastro reaproveitado com diagnóstico na rota compacta, bloqueio de publicação e autorização privada.
 - Migrações 075–077 e flag privada de emissão. Revisões novas usam sufixo aleatório de 80 bits no nome, com compatibilidade histórica.
 - Chromium/PostgreSQL focal 3/3 em duas origens HTTPS sintéticas. Nginx, regressões e revisão do SHA final ficam registrados no PR.
-- Publicação e rollback em `docs/NPM-VPS-RUNBOOK.md` §11. Homologação externa depende do proprietário.
+- Aceite Dev controlado no SHA homologado da F33. Dois Gateways saudáveis na release imutável e **15 revisões v2 preservadas** (7 privadas e 8 públicas), verificadas com e sem query (`history.json`).
+- Contrato 4 validado via Cloudflare na revisão sintética 1 da instalação `4bd1fd84-fac4-47d6-b5e3-f4a28c6592c6`. Probe, scripts, GIFs, telemetria, sessão e CTA passaram. O clique foi persistido e a LP original foi preservada (`synthetic.json`).
+- `RUNTIME_COMPACT_ALIASES=false` durante a atualização e o aceite. Após a aprovação, `RUNTIME_COMPACT_ALIASES=true` confirmado no novo PID `1101004` do Admin Dev (`admin-activation.json`).
+- Publicação e rollback em [NPM-VPS-RUNBOOK.md §11](docs/NPM-VPS-RUNBOOK.md#11-adicionar-um-domínio-de-distribuição). O aceite cobre somente o cenário sintético no Dev. A homologação do segundo endpoint permanece pendente.
