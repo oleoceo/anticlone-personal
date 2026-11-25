@@ -3,7 +3,7 @@
 ## Segurança e estabilização do Dev
 - Aceite FlowMembers preservado, incluindo 150 ms e fail-open.
 - Migration 078 tira DDL de autenticação do boot. PostgreSQL de laboratório aceitou login restrito e recusou DDL. Gateway público Dev usa superusuário.
-- Coleta scoped reutiliza uma conexão. Jornadas isoladas de CTA, redirect, detecção e e-mail passaram. Medições comparativas pendentes.
+- Coleta scoped reutiliza uma conexão. Jornadas isoladas de CTA, redirect, detecção e e-mail passaram. Perfil comparativo coletado em laboratório; capacidade no limite pendente.
 - Artefato Admin conferido com a base #96 e prontidão FlowMembers confirmada em leitura. O recibo 6d00d0c está desatualizado.
 - S1 integral, S2 e S5 bloqueiam integração. D2 confirmado e aguardando avaliação da solução mínima. [Evidências](docs/ESTABILIZACAO-SEGURANCA-DEV.md).
 
