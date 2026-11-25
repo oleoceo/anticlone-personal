@@ -403,6 +403,24 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
     assert.equal(aligned.version,implicit.distribution!.version+1);
     assert.deepEqual(new Set(Object.values(aligned.bases).map(url=>new URL(url).origin)),new Set([pooledOrigin]));
     assert.deepEqual(await readDistribution(db,siblingInstallation,implicit.distribution!.version),implicit.distribution);
+    const useDefaults=panel.getByRole('button',{name:'Usar origens padrão',exact:true});
+    const publish=panel.getByRole('button',{name:'Publicar endereços de instalação',exact:true});
+    await useDefaults.click();
+    await panel.getByRole('button',{name:'Manter endereços da revisão atual',exact:true}).click();
+    await publish.waitFor({state:'hidden'});
+    assert.deepEqual(await readDistribution(db,siblingInstallation),aligned);
+    await useDefaults.click();
+    await publish.click();
+    const restoredResponse=panel.waitForResponse(response=>response.url()===adminBase+'/admin/ui/distribution' &&
+      response.request().method()==='POST' && response.request().postDataJSON().action==='publish');
+    await panel.getByRole('button',{name:'Confirmar',exact:true}).click();
+    const restored=(await restoredResponse);
+    assert.deepEqual(restored.request().postDataJSON(),{action:'publish',project:'one',page:sibling,telemetryOrigin:null});
+    assert.equal(restored.status(),200);
+    const restoredDistribution=(await restored.json()).distribution as Distribution;
+    assert.equal(restoredDistribution.version,aligned.version+1);
+    assert.deepEqual(new Set(Object.values(restoredDistribution.bases).map(url=>new URL(url).origin)),new Set([base]));
+    assert.deepEqual(await readDistribution(db,siblingInstallation,aligned.version),aligned);
     // Force the first INSERT to collide with a real filename token in this
     // isolated schema, then allow the publisher to retry with fresh randomness.
     await db.query(`CREATE SEQUENCE alias_test_attempts;

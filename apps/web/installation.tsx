@@ -97,7 +97,7 @@ export function Installation({api, project, page, context, setGuard}: {
   const [error, setError] = useState<unknown>();
   const [notice, setNotice] = useState('');
   const endpointFieldId = useId();
-  const [selection, setSelection] = useState<EndpointSelection>();
+  const [selection, setSelection] = useState<EndpointSelection | null>();
   const data = result ?? query.data;
   const collected = collectionResult ?? collection.data;
   const published = data?.distribution;
@@ -110,9 +110,10 @@ export function Installation({api, project, page, context, setGuard}: {
   const {mode,origins} = selection ?? {mode:installedMode,origins:installedOrigins};
   const endpoints = data?.telemetryEndpoints ?? [];
   const eligible = data?.telemetryOrigins ?? [];
+  const useDefaults = selection === null;
   const pendingSelection = !!selection && roles.some(role => origins[role] !== installedOrigins[role]);
   const needsSelection = pendingSelection || !!selection && !published;
-  const canPublish = data && (needsSelection
+  const canPublish = data && (useDefaults ? data.publication.defaultsReady : needsSelection
     ? roles.every(role => eligible.includes(origins[role])) &&
       !data.publication.issues.some(issue => issue.code === 'DISTRIBUTION_SCHEMA_MISSING')
     : data.publication.ready);
@@ -152,8 +153,9 @@ export function Installation({api, project, page, context, setGuard}: {
         setCollectionResult(status);
         setNotice(status.installation?.enabled ? 'Coleta habilitada.' : 'Coleta desabilitada.');
       } else {
+        const endpointChoice = useDefaults ? {telemetryOrigin:null} : needsSelection ? {roleOrigins:origins} : {};
         const status = await api.request<Distribution>('distribution', {action, ...scope,
-          ...(action !== 'verify' && needsSelection ? {roleOrigins:origins} : {})});
+          ...(action === 'verify' ? {} : endpointChoice)});
         if (action !== 'verify') setSelection(undefined);
         setResult(status);
         setNotice(action === 'verify' && status.verificationAttempt
@@ -210,7 +212,7 @@ export function Installation({api, project, page, context, setGuard}: {
         <Link {...nav.link(healthPath)}>Consultar Saúde e operações</Link>
       </div>}
       {data && (endpoints.length > 0 || !!published) && <>
-        <label className="installation-technology"><span id={endpointFieldId}>Distribuição de endpoints</span>
+        {!useDefaults && <><label className="installation-technology"><span id={endpointFieldId}>Distribuição de endpoints</span>
           <select aria-labelledby={endpointFieldId} value={mode} disabled={busy} onChange={event => {
             const nextMode = event.target.value === 'roles' ? 'roles' : 'single';
             setSelection({mode:nextMode,origins:nextMode === 'single' ? singleOrigin(origins.SCRIPT) : origins});
@@ -220,16 +222,21 @@ export function Installation({api, project, page, context, setGuard}: {
           </select>
         </label>
         {mode === 'single' ? endpointField('SCRIPT','Domínio do endpoint') :
-          roles.map(role => endpointField(role,roleLabels[role]))}
-        {selection && <button type="button" disabled={busy} onClick={() => setSelection(undefined)}>
+          roles.map(role => endpointField(role,roleLabels[role]))}</>}
+        {published && !useDefaults && <button type="button" disabled={busy} onClick={() => setSelection(null)}>
+          Usar origens padrão
+        </button>}
+        {selection !== undefined && <button type="button" disabled={busy} onClick={() => setSelection(undefined)}>
           {published ? 'Manter endereços da revisão atual' : 'Usar endereços padrão'}
         </button>}
+        {useDefaults && <p>{canPublish ? 'A publicação usará as origens padrão configuradas para cada função.' :
+          'As origens padrão estão indisponíveis para publicação.'}</p>}
         {!published && !selection && <p>Sem uma seleção, a publicação usa o domínio padrão configurado para cada função.</p>}
         {needsSelection && !canPublish && <p>Escolha um endpoint operacional para cada função.</p>}
       </>}
       {data?.telemetryOrigins?.length === 0 &&
         <Link {...nav.link(settingsPath + '/integracoes')}>Conferir endpoints de telemetria</Link>}
-      {canPublish && (!published || data.publication.changesRequired || pendingSelection) && <>
+      {canPublish && (!published || data.publication.changesRequired || pendingSelection || useDefaults) && <>
         <p>{published ? 'Publique uma revisão para gerar trechos com os endereços selecionados.' :
           'Publique os endereços para gerar os trechos HTML e CSS desta página.'}</p>
         {!page.enabled && <p>Reative a LP na oferta para publicar pelo painel.</p>}
@@ -340,6 +347,8 @@ export function Installation({api, project, page, context, setGuard}: {
     {confirmation && <Confirm title={actionText[confirmation].name}
       accept={() => void execute(confirmation)} cancel={() => setConfirmation(undefined)}>
       <p>{actionText[confirmation].description}</p>
+      {(confirmation === 'publish' || confirmation === 'rotate') && useDefaults &&
+        <p>Usar as origens padrão configuradas para cada função.</p>}
       {(confirmation === 'publish' || confirmation === 'rotate') && needsSelection &&
         <ul>{roles.map(role => <li key={role}>{roleLabels[role]} · {origins[role]}</li>)}</ul>}
     </Confirm>}
