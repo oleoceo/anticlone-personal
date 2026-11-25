@@ -7,6 +7,13 @@
 - A prova em `tests/runtime-distribution.test.ts` usa PostgreSQL e Chromium com HTTPS/mTLS sintético para um, dois e três domínios, elegibilidade, isolamento administrativo, contratos históricos e tempos de carga e decisão.
 - Revisão independente `/root/revisao_f07` favorável ao delta após os ajustes de rótulos, padrões e cobertura. Evidências de execução e checks vinculados ao PR de implementação.
 
+## F07 — aceite da pool e ingressos Dev
+- Hosts 15 e 16 aceitos por leoceo com backup e regressão por host. Probes públicos reconferidos.
+- Allowlist preservada, dois domínios habilitados e verificados como `OPERATIONAL`. Admin Dev no SHA `adcf9b12`.
+- Cinco arranjos em Chromium com Cloudflare real passaram para recursos, coleta, sessão e CTA. Cinco revisões de laboratório anteriores e 15 históricas v2 conferidas.
+- Revisão independente `/root/revisao` no SHA `adcf9b12` apontou P2 pendente na restauração de padrões pelo painel. PR #94 segue em rascunho.
+- Evidências, escopo, tempos e rollback em [ENDPOINT-PROVISIONING-RUNBOOK.md](docs/ENDPOINT-PROVISIONING-RUNBOOK.md).
+
 ## F33 — query strings nas rotas de distribuição (PR #93)
 - Gateway e probes reservados comparam o caminho até o primeiro `?`, preservando os caracteres originais do caminho.
 - A regressão em `tests/runtime-distribution.test.ts` verifica recursos, métodos HTTP, rejeições e probes com e sem query, além dos contratos anteriores.
