@@ -1,3 +1,4 @@
+import {distributionPaths, namedDistributionSchema} from './distribution-paths.js';
 import {listedTelemetryOrigin, listTelemetryOrigins, telemetryOriginForPublication} from './telemetry-origins.js';
 import { randomBytes, randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
@@ -7,7 +8,6 @@ import {runControlledCheck,verificationPolicy,validVerifierImage,type Verificati
 export const distributionRoles = ['SCRIPT','TELEMETRY','STATIC_ASSETS'] as const;
 type Role = typeof distributionRoles[number];
 export type Distribution = {installation:string; version:number; bases:Record<Role,string>;paths?:Record<string,string>};
-export const neutralPaths:Record<string,string>={'runtime.js':'a.js','core.js':'b.js','fallback.js':'c.js','observe':'e','observe/fallback':'f','entry-decision':'g','cta-refresh':'h','observed-session':'j','observed-action':'k','html.gif':'m.gif','css.gif':'n.gif','cta-inventory.js':'p.js'};
 type AliasRow = {alias:string;public_token?:string|null;installation_id:string;version:number;role:Role;origin:string;contract_version:number};
 
 export class DistributionBlocked extends TypeError {
@@ -50,7 +50,7 @@ function verifierConfiguration(env: NodeJS.ProcessEnv) {
 }
 
 export async function installationPrerequisites(db: Pick<Pool,'query'>, env=process.env) {
-  const schema = (await db.query<{distribution: boolean; rotation: boolean; verifier: boolean; activity: boolean; receipts: boolean; compact: boolean}>(`
+  const schema = (await db.query<{distribution: boolean; rotation: boolean; verifier: boolean; activity: boolean; receipts: boolean; compact: boolean; named: boolean}>(`
     SELECT to_regclass('runtime_aliases') IS NOT NULL AND to_regclass('page_installation_signals') IS NOT NULL
       AND to_regclass('runtime_distributions') IS NOT NULL AS distribution,
       EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('runtime_distributions')
@@ -59,7 +59,8 @@ export async function installationPrerequisites(db: Pick<Pool,'query'>, env=proc
       to_regclass('runtime_alias_activity') IS NOT NULL AS activity,
       to_regclass('investigation_receipts') IS NOT NULL AS receipts,
       EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('runtime_aliases')
-        AND attname='public_token' AND NOT attisdropped) AS compact`)).rows[0];
+        AND attname='public_token' AND NOT attisdropped) AS compact,
+      ${namedDistributionSchema} AS named`)).rows[0];
   const {origins,issues} = configuredOrigins(env);
   const publicationIssues: {code: string; role?: Role}[] = schema.distribution
     ? issues : [{code:'DISTRIBUTION_SCHEMA_MISSING'}, ...issues];
@@ -77,8 +78,9 @@ function verificationIssue(targets: string[], active: boolean, distribution: Dis
 }
 function fromRows(rows:AliasRow[]):Distribution|null {
   if (rows.length!==3 || new Set(rows.map(row=>row.role)).size!==3) return null;
+  const paths = distributionPaths(rows[0].contract_version);
   return {installation:rows[0].installation_id,version:rows[0].version,
-    ...(rows[0].contract_version===2?{paths:neutralPaths}:{}),
+    ...(paths?{paths}:{}),
     bases:Object.fromEntries(rows.map(row=>[row.role,row.origin+(row.public_token ? '/assets/'+row.public_token : (row.contract_version===2?'/r/v2/':'/d/v1/')+row.alias)+'/'])) as Record<Role,string>};
 }
 export async function readDistribution(db:Pool|PoolClient,installation:string,version?:number) {
@@ -178,11 +180,14 @@ async function readOrPublish(db: Pool, data: {project:string;page:string;action:
       // Idempotent explicit publication: a dashboard read never creates aliases.
       if (data.action==='rotate' || !distribution || changesOrigins(distribution)) {
         const version=(distribution?.version ?? 0)+1;
-        if(schema.rotation) await client.query('INSERT INTO runtime_distributions(installation_id,version,publication_reason) VALUES($1,$2,$3)',[page.installation_id,version,data.action]);
+        const compact = schema.compact && env.RUNTIME_COMPACT_ALIASES === 'true';
+        if (compact && schema.named) {
+          await client.query('INSERT INTO runtime_distributions(installation_id,version,publication_reason,contract_version) VALUES($1,$2,$3,3)',[page.installation_id,version,data.action]);
+        } else if (schema.rotation) await client.query('INSERT INTO runtime_distributions(installation_id,version,publication_reason) VALUES($1,$2,$3)',[page.installation_id,version,data.action]);
         else await client.query('INSERT INTO runtime_distributions(installation_id,version) VALUES($1,$2)',[page.installation_id,version]);
         for (const role of distributionRoles) {
           const values = [randomUUID(),page.installation_id,version,role,origins[role]];
-          if (schema.compact && env.RUNTIME_COMPACT_ALIASES === 'true') {
+          if (compact) {
             // 128 random bits, encoded without padding. Retry only a public-token collision.
             let inserted = false;
             for (let attempt = 0; attempt < 3 && !inserted; attempt++) {

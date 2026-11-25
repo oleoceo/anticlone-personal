@@ -1,8 +1,11 @@
+import {abbreviatedPaths, compactPaths} from './distribution-paths.js';
 import type {Pool, PoolClient} from 'pg';
 import {PublicDnsFailure, publicHttpsBroker} from './installation-verifier.js';
 
 // A 16-byte base64url token cannot end in '1'. Probe the real script location.
-export const distributionHealthPath = '/assets/0000000000000000000001/a.js';
+const distributionProbeBase = '/assets/0000000000000000000001/';
+export const distributionHealthPath = distributionProbeBase+compactPaths['runtime.js'];
+export const abbreviatedDistributionHealthPath = distributionProbeBase+abbreviatedPaths['runtime.js'];
 
 type Database = Pick<Pool | PoolClient, 'query'>;
 type CheckStatus = 'OPERATIONAL' | 'DNS_FAILED' | 'HTTPS_FAILED' | 'GATEWAY_NOT_READY';

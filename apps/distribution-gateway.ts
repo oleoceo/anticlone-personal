@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Pool } from 'pg';
-import { readDistribution,neutralPaths } from './runtime-distribution.js';
+import { readDistribution } from './runtime-distribution.js';
+import {distributionPaths} from './distribution-paths.js';
 import { resolvePageContext } from './page-context.js';
 import { configuredOrigin, recordCanaryClaim } from './detection.js';
 import { operationallyEligible } from './operational-eligibility.js';
@@ -25,12 +26,16 @@ export function distributionGateway(db:Pool,scripts:Record<string,Buffer>,dispat
     if (!match) {res.writeHead(404).end();return true;}
     void (async()=>{
       const routeStarted = performance.now();
-      const modern=compact || path.startsWith('/r/v2/');
-      const endpoint=modern ? Object.keys(neutralPaths).find(name=>neutralPaths[name]===match[2])??'' : match[2];
       const row=(await db.query(`SELECT a.alias,a.installation_id,a.version,a.role,d.contract_version, to_jsonb(a)->>'public_token' AS public_token,
         (SELECT count(*)::int FROM runtime_aliases WHERE installation_id=a.installation_id AND version=a.version) AS aliases
         FROM runtime_aliases a JOIN runtime_distributions d USING(installation_id,version) WHERE ${compact ? 'a.public_token' : 'a.alias'}=$1`,[match[1]])).rows[0];
-      if (!row || !allowed[row.role]?.includes(endpoint) || (row.contract_version===2)!==modern || Boolean(row.public_token)!==compact) {res.writeHead(404).end();return;}
+      if (!row || Boolean(row.public_token)!==compact ||
+        (!compact && (row.contract_version===2 ? !path.startsWith('/r/v2/') : row.contract_version!==1 || !path.startsWith('/d/v1/')))) {
+        res.writeHead(404).end();return;
+      }
+      const paths = distributionPaths(row.contract_version);
+      const endpoint = paths ? Object.keys(paths).find(name=>paths[name]===match[2]) ?? '' : match[2];
+      if (!allowed[row.role]?.includes(endpoint)) {res.writeHead(404).end();return;}
       if (row.aliases!==3) {res.writeHead(503).end();return;}
       if (scripts[endpoint]) {
         const distribution=await readDistribution(db,row.installation_id,row.version);

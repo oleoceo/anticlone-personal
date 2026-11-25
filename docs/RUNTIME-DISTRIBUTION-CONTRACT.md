@@ -113,7 +113,7 @@ com `proxy_ssl_name` e `Host` upstream fixos no hostname canônico
 e o PostgreSQL Dev são compartilhados pelo fluxo. A conclusão do gate e o
 teste no hostname real continuam necessários para cada ingresso.
 
-## Aliases compactos e cadastro de domínios (075)
+## Aliases compactos e cadastro de domínios (075–076)
 
 Para a mesma função de Bootstrap, os formatos públicos são:
 
@@ -121,30 +121,32 @@ Para a mesma função de Bootstrap, os formatos públicos são:
 |---|---|
 | v1 histórica | `https://assets.example.com/d/v1/8ce06c96-03bb-46ed-a9a9-916006c36bdd/runtime.js` |
 | v2 histórica | `https://assets.example.com/r/v2/8ce06c96-03bb-46ed-a9a9-916006c36bdd/a.js` |
-| compacta | `https://assets.example.com/assets/I2Fz7aURhvkqwkSqBywnXQ/a.js` |
+| Compacta anterior | `https://assets.example.com/assets/I2Fz7aURhvkqwkSqBywnXQ/a.js` |
+| Compacta atual | `https://assets.example.com/assets/I2Fz7aURhvkqwkSqBywnXQ/app.js` |
 
 A 075 é aditiva. Cada papel recebe 128 bits aleatórios do gerador criptográfico
 do Node, codificados em 22 caracteres base64url. O índice único cobre todos os
 tokens públicos e uma colisão é tentada novamente dentro da transação de
 publicação. O UUID segue como chave interna de recibos e atividade. As três
 rotas de cada revisão continuam vinculadas à LP, aos papéis e às origens
-persistidas. O token é um identificador público. O contrato de resposta v2
-e o mapa de recursos permanecem iguais.
+persistidas. O token é um identificador público. A 076 fixa o novo mapa nos registros do contrato 3. Revisões v1, v2 e compactas
+anteriores conservam os nomes originais. Os contratos de resposta permanecem iguais.
 
 Após habilitar `RUNTIME_COMPACT_ALIASES=true` no ambiente privado do admin,
-novas revisões usam o formato compacto. A primeira publicação e alterações
+novas revisões usam os nomes do formato compacto, após aplicar a 076. A primeira publicação e alterações
 de origem geram a revisão automaticamente. Para trocar os caminhos de uma LP
 com a mesma origem, use **Publicar nova revisão** no histórico da instalação.
 Consultar e republicar sem mudança de origem preservam a revisão atual.
-Cada base compacta economiza 12 bytes no hostname equivalente, ou 36 bytes
-nas três bases injetadas no Bootstrap antes da compressão. O arquivo do
-Bootstrap e os scripts exigidos pela instalação são os mesmos.
+O conteúdo executável e a sequência de carregamento preservam o contrato.
+Os nomes legíveis acrescentam 63 bytes brutos ao mapa injetado. O ensaio
+Chromium compara os pedidos e o evento de carga da mesma LP sintética com
+os dois mapas compactos.
 
 A migração limpa os resultados antigos de verificação. O painel passa a testar
 DNS, certificado HTTPS e prontidão operacional pela mesma regra de ingresso
 do Bootstrap compacto, com o caminho reservado
-`/assets/0000000000000000000001/a.js`. O probe confirma que a rota chega a
-um Gateway operacional com a 075. A conferência privada do upstream efetivo
+`/assets/0000000000000000000001/app.js`. O probe confirma que a rota chega a
+um Gateway operacional com a 076. A conferência privada do upstream efetivo
 e o smoke dos três papéis confirmam a instância e a distribuição da LP. A
 verificação é pontual. Revalide após alterações de ingresso, DNS ou TLS.
 
@@ -155,3 +157,44 @@ como padrão em configuração privada. Os padrões existentes continuam sob
 responsabilidade do operador, que comprova seu ingresso antes de habilitar o
 formato compacto. Desativar um endpoint impede novas publicações nele e
 preserva as revisões anteriores. Veja o [procedimento NPM](NPM-VPS-RUNBOOK.md#11-adicionar-um-domínio-de-distribuição).
+
+
+### Recursos da revisão compacta atual
+
+| Papel | Nomes e função |
+|---|---|
+| Scripts | `app.js` inicializa a instalação, `common.js` carrega o núcleo e `events.js` registra a observação de fallback. A extensão `.js` reflete o formato servido. |
+| Sinais e decisão | `collect` recebe observações, `report` recebe o fallback, `config` entrega a decisão inicial, `refresh` atualiza CTA, `session` e `activity` recebem a sessão e a ação observadas. |
+| Recursos estáticos | `pixel.gif` é o sinal HTML, `style.gif` é o sinal CSS e `inventory.js` serve o inventário de laboratório existente. |
+
+Exemplo de instalação com origem e tokens ilustrativos. Use os trechos gerados
+pelo painel para obter os tokens da LP.
+
+**HEAD**
+
+```html
+<link rel="preconnect" href="https://assets.example.com" crossorigin>
+<script async src="https://assets.example.com/assets/I2Fz7aURhvkqwkSqBywnXQ/app.js"></script>
+<script async src="https://assets.example.com/assets/I2Fz7aURhvkqwkSqBywnXQ/events.js"></script>
+```
+
+**BODY**
+
+```html
+<img src="https://assets.example.com/assets/y6VrYqM8kxJhLBdFuG2WnA/pixel.gif" width="1" height="1" alt="" referrerpolicy="strict-origin-when-cross-origin">
+```
+
+**CSS**. Aplique `anticlone-canary` a um elemento existente.
+
+```css
+.anticlone-canary {
+  background-image: url("https://assets.example.com/assets/y6VrYqM8kxJhLBdFuG2WnA/style.gif");
+}
+```
+
+- **HTML**. Insira os trechos no `head`, no `body` e na folha de estilos da página.
+- **WordPress**. Insira o HEAD pelo mecanismo do tema ou plugin da LP, o BODY num bloco HTML personalizado e a regra no CSS adicional.
+- **React/Vite**. Insira HEAD e BODY no `index.html`, importe o CSS existente e aplique a classe com `className`. O Bootstrap continua como script clássico, carregado fora do bundle e da montagem React.
+
+O Core é carregado pelo Bootstrap, por exemplo em
+`https://assets.example.com/assets/I2Fz7aURhvkqwkSqBywnXQ/common.js`.

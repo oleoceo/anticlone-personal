@@ -13,7 +13,7 @@ import {Pool} from 'pg';
 import {chromium} from 'playwright';
 import {SMTPServer} from 'smtp-server';
 import {TOTP,Secret} from 'otpauth';
-import {distributionAdmin,distributionOrigins,readDistribution} from '../apps/runtime-distribution.js';
+import {distributionAdmin,distributionOrigins,distributionSnippets,readDistribution,type Distribution} from '../apps/runtime-distribution.js';
 import {distributionGateway} from '../apps/distribution-gateway.js';
 import {scopedGateway} from '../apps/scoped-gateway.js';
 import {observedSessionGateway} from '../apps/observed-session-gateway.js';
@@ -348,6 +348,14 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
     await db.query(await readFile('infra/075_compact_distribution_aliases.sql','utf8'));
     await assert.rejects(distributionAdmin(db,{...request,action:'rotate',telemetryOrigin:pooledOrigin},pooledEnv),
       {code:'TELEMETRY_ORIGIN_UNAVAILABLE'});
+    await telemetryOriginAdmin(db,{action:'verify',origin:pooledOrigin},pooledEnv,async()=> 'OPERATIONAL');
+    const abbreviated = (await distributionAdmin(db,{...request,action:'rotate',telemetryOrigin:pooledOrigin},pooledEnv)).distribution!;
+    assert.match(abbreviated.bases.SCRIPT,/\/assets\//);
+    assert.equal(abbreviated.paths?.['runtime.js'],'a.js');
+    await db.query(await readFile('infra/076_named_distribution_aliases.sql','utf8'));
+    assert.deepEqual(await readDistribution(db,installation,abbreviated.version),abbreviated);
+    await assert.rejects(distributionAdmin(db,{...request,action:'rotate',telemetryOrigin:pooledOrigin},pooledEnv),
+      {code:'TELEMETRY_ORIGIN_UNAVAILABLE'});
     for (const origin of [pooledOrigin,secondary]) {
       await telemetryOriginAdmin(db,{action:'verify',origin},pooledEnv,origin=>checkTelemetryEndpoint(origin,upstream.request));
     }
@@ -375,9 +383,10 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
     await panel.getByRole('button',{name:'Publicar nova revisão',exact:true}).click();
     await panel.getByRole('button',{name:'Confirmar',exact:true}).click();
     const snippet=panel.getByRole('region',{name:'Trecho HEAD'}).locator('code');
-    await snippet.filter({hasText:pooledOrigin+'/assets/'}).waitFor();
+    await snippet.filter({hasText:'/app.js'}).waitFor();
     const pooled = await distributionAdmin(db,request,pooledEnv);
     assert.ok(pooled.distribution?.paths);
+    assert.equal(pooled.distribution.paths['runtime.js'],'app.js');
     assert.deepEqual(new Set(Object.values(pooled.distribution.bases).map(url=>new URL(url).origin)),new Set([pooledOrigin]));
     const installedHtml=[await snippet.textContent(),await panel.getByRole('region',{name:'Trecho BODY'}).locator('code').textContent()].join('\n');
     assert.equal(installedHtml,pooled.snippets?.html);
@@ -387,11 +396,17 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
       await writeFile(join(demo,'snippet-index.html.txt'),installedHtml);
       await panel.screenshot({path:join(demo,'instalacao.png'),fullPage:true});
     }
-    const pooledBundle = await upstream.request({url:pooled.distribution.bases.SCRIPT+'a.js',method:'GET',body:''});
+    const pooledBundle = await upstream.request({url:pooled.distribution.bases.SCRIPT+'app.js',method:'GET',body:''});
     assert.equal(pooledBundle.status,200);
     assert.ok(pooledBundle.body.includes(pooled.distribution.bases.TELEMETRY));
+    const abbreviatedBundle = await upstream.request({url:abbreviated.bases.SCRIPT+'a.js',method:'GET',body:''});
+    const withoutDistribution = (body: Buffer) => body.toString().replace(/const distribution = .*;/,'const distribution = null;');
+    assert.equal(abbreviatedBundle.status,200);
+    assert.equal(withoutDistribution(pooledBundle.body),withoutDistribution(abbreviatedBundle.body));
+    assert.equal(installedHtml.match(/<script async /g)?.length,2);
+    console.log('DISTRIBUTION_RESOURCE_NAMES_BOOTSTRAP_DELTA_BYTES', pooledBundle.body.length-abbreviatedBundle.body.length);
     const input=JSON.stringify({origin,pathname:'/',signals:{}});
-    assert.equal((await upstream.request({url:pooled.distribution.bases.TELEMETRY+'e',method:'POST',body:input},origin)).status,204);
+    assert.equal((await upstream.request({url:pooled.distribution.bases.TELEMETRY+'collect',method:'POST',body:input},origin)).status,204);
     // Put the exact HTML from the panel into a controlled original and copy.
     const mailPage=await browser.newPage();
     const mailCopy='https://mail-copy.owner.test/';
@@ -417,7 +432,7 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
         await route.fulfill({status:answer.status,headers:answer.headers,body:answer.body});
       });
       const visit=async(url:string)=>{
-        const signal=mailPage.waitForResponse(response=>response.url()===pooled.distribution!.bases.TELEMETRY+'e' &&
+        const signal=mailPage.waitForResponse(response=>response.url()===pooled.distribution!.bases.TELEMETRY+'collect' &&
           response.request().method()==='POST' && response.status()===204);
         await mailPage.goto(url);
         await signal;
@@ -454,21 +469,50 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
     await panel.getByRole('button',{name:'Confirmar',exact:true}).click();
     await snippet.filter({hasText:secondary}).waitFor();
     const next=(await distributionAdmin(db,request,pooledEnv)).distribution!;
-    assert.equal((await upstream.request({url:next.bases.TELEMETRY+'e',method:'POST',body:input},origin)).status,204);
+    assert.equal((await upstream.request({url:next.bases.TELEMETRY+'collect',method:'POST',body:input},origin)).status,204);
     const httpsBrowser=await chromium.launch({args:['--host-resolver-rules='+upstream.resolverRules,'--no-proxy-server']});
     try {
       const httpsPage=await httpsBrowser.newPage({ignoreHTTPSErrors:true});
-      for (const revision of [oldHttps,pooled.distribution,next]) {
-        const script = revision.bases.SCRIPT+'a.js';
+      for (const revision of [oldHttps,abbreviated,pooled.distribution,next]) {
+        const script = revision.bases.SCRIPT+revision.paths!['runtime.js'];
         const response = await httpsPage.goto(script);
         assert.equal(response?.status(),200);
         assert.ok((await response!.text()).includes(revision.bases.TELEMETRY));
       }
+      // Compare the same synthetic LP and HTTPS ingress for both compact maps.
+      const lp = pooledOrigin+'/load-comparison';
+      let markup = '';
+      await httpsPage.route(lp, route => route.fulfill({contentType:'text/html',body:markup}));
+      const timings: number[][] = [[],[]];
+      const revisions: Distribution[] = [abbreviated,pooled.distribution];
+      for (let sample = 0; sample < 3; sample++) {
+        for (const index of [sample % 2,1 - sample % 2]) {
+          const revision = revisions[index];
+          const snippet = distributionSnippets(revision);
+          markup = '<style>'+snippet.css+'</style><main class="anticlone-canary">LP de teste</main>'+snippet.html;
+          const expectedScripts = ['runtime.js','core.js','fallback.js']
+            .map(resource => revision.bases.SCRIPT+revision.paths![resource]).sort();
+          const core = httpsPage.waitForResponse(r => r.url()===revision.bases.SCRIPT+revision.paths!['core.js'] && r.ok());
+          await Promise.all([httpsPage.goto(lp),core]);
+          await httpsPage.waitForFunction(() => (performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming).loadEventEnd > 0);
+          const measured = await httpsPage.evaluate(() => ({
+            load: (performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming).loadEventEnd,
+            scripts: performance.getEntriesByType('resource')
+              .filter(entry => (entry as PerformanceResourceTiming).initiatorType==='script').map(entry => entry.name).sort(),
+          }));
+          assert.deepEqual(measured.scripts,expectedScripts);
+          timings[index].push(measured.load);
+        }
+      }
+      const [abbreviatedLoad,namedLoad] = timings.map(samples => samples.sort((a,b)=>a-b)[1]);
+      console.log('DISTRIBUTION_LOAD_MEDIAN_MS', JSON.stringify({abbreviated:abbreviatedLoad,named:namedLoad}));
+      assert.equal((await httpsPage.goto(abbreviated.bases.SCRIPT+'app.js'))?.status(),404);
+      assert.equal((await httpsPage.goto(next.bases.SCRIPT+'a.js'))?.status(),404);
       for (const revision of [pooled.distribution,next]) {
         const tokens=Object.values(revision.bases).map(base=>new URL(base).pathname);
         assert.equal(new Set(tokens).size,3);
         for (const token of tokens) assert.match(token,/^\/assets\/[A-Za-z0-9_-]{22}\/$/);
-        assert.equal((await httpsPage.goto(revision.bases.TELEMETRY+'a.js'))?.status(),404);
+        assert.equal((await httpsPage.goto(revision.bases.TELEMETRY+'app.js'))?.status(),404);
       }
     } finally {
       await httpsBrowser.close();
@@ -486,7 +530,7 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
     await assert.rejects(distributionAdmin(db,{...request,action:'publish',telemetryOrigin:pooledOrigin},pooledEnv),
       {code:'TELEMETRY_ORIGIN_UNAVAILABLE'});
     assert.deepEqual(await readDistribution(db,installation,pooled.distribution.version),pooled.distribution);
-    assert.equal((await upstream.request({url:pooled.distribution.bases.SCRIPT+'a.js',method:'GET',body:''})).status,200);
+    assert.equal((await upstream.request({url:pooled.distribution.bases.SCRIPT+'app.js',method:'GET',body:''})).status,200);
     const siblingState=await distributionAdmin(db,{project:'one',page:sibling,action:'inspect'},pooledEnv);
     assert.equal(siblingState.publication.ready,false);
     assert.equal(siblingState.selectedTelemetryOrigin,pooledOrigin);
@@ -496,7 +540,7 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
       {...pooledEnv,RUNTIME_COMPACT_ALIASES:'false'});
     assert.match(rollback.distribution!.bases.SCRIPT,/\/r\/v2\//);
     assert.deepEqual(await readDistribution(db,installation,next.version),next);
-    assert.equal((await upstream.request({url:next.bases.SCRIPT+'a.js',method:'GET',body:''})).status,200);
+    assert.equal((await upstream.request({url:next.bases.SCRIPT+'app.js',method:'GET',body:''})).status,200);
     for(const target of ['http://127.0.0.1/','http://169.254.169.254/','https://unapproved.test/'])await assert.rejects(distributionAdmin(db,{...request,action:'verify',url:target},env),TypeError);
     await assert.rejects(db.query('UPDATE runtime_aliases SET origin=$1 WHERE installation_id=$2',[base,installation]));
     await db.query("UPDATE projects SET lifecycle_state='PAUSED' WHERE id='one'");

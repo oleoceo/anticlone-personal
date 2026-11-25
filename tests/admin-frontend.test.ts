@@ -12,7 +12,9 @@ import {test, type TestContext} from 'node:test';
 import {TOTP, Secret} from 'otpauth';
 import {Pool} from 'pg';
 import {chromium, type Page} from 'playwright';
-const distributionPrefix = process.env.RUNTIME_COMPACT_ALIASES === 'true' ? '/assets/' : '/r/v2/';
+const namedDistribution = process.env.RUNTIME_COMPACT_ALIASES === 'true';
+const distributionPrefix = namedDistribution ? '/assets/' : '/r/v2/';
+const decisionSuffix = namedDistribution ? '/config' : '/g';
 import {createAdminServer} from '../apps/admin-auth.js';
 import {join} from 'node:path';
 import {commerceAdmin, commerceSigningInput, commerceWebhook, provisionCommerceSender, receiveCommerce} from '../apps/commerce.js';
@@ -162,11 +164,11 @@ for (const width of [1440, 390]) {
     const scripts = await page.getByRole('region', {name: 'Trecho HEAD'}).locator('code').innerText();
     const source = scripts.match(/<script async src="([^"]+)"/)?.[1];
     assert.ok(source && source.startsWith('https://runtime.frontend.test'+distributionPrefix));
-    assert.ok(source.endsWith('/a.js'));
-    assert.match(scripts, /\/c\.js/);
-    assert.doesNotMatch(scripts, /\/(?:e|b\.js)"/);
-    assert.match(await page.getByRole('region', {name: 'Trecho BODY'}).locator('code').innerText(), /\/m\.gif/);
-    assert.match(await page.getByRole('region', {name: 'Trecho CSS'}).locator('code').innerText(), /\/n\.gif/);
+    assert.ok(source.endsWith(namedDistribution ? '/app.js' : '/a.js'));
+    assert.match(scripts, namedDistribution ? /\/events\.js/ : /\/c\.js/);
+    assert.doesNotMatch(scripts, /\/(?:e|b\.js|collect|common\.js)"/);
+    assert.match(await page.getByRole('region', {name: 'Trecho BODY'}).locator('code').innerText(), namedDistribution ? /\/pixel\.gif/ : /\/m\.gif/);
+    assert.match(await page.getByRole('region', {name: 'Trecho CSS'}).locator('code').innerText(), namedDistribution ? /\/style\.gif/ : /\/n\.gif/);
     await page.getByLabel('Tecnologia do site').selectOption('React/Vite');
     await page.getByText('<main className="conteudo anticlone-canary">…</main>', {exact: true}).waitFor();
     await page.getByLabel('Tecnologia do site').selectOption('WordPress');
@@ -1335,7 +1337,7 @@ test('React provisions an original LP and copy, then real gateway applies scoped
     await authorize(2);
     await capture(panel, '07-politica-cta');
     for (const point of candidates) {
-      const decision = visit.waitForResponse(response => response.url().startsWith(gatewayOrigin + distributionPrefix) && response.url().endsWith('/g'));
+      const decision = visit.waitForResponse(response => response.url().startsWith(gatewayOrigin + distributionPrefix) && response.url().endsWith(decisionSuffix));
       await visit.goto(copy + '/lp');
       assert.equal((await (await decision).json()).action, 'REPLACE_CONVERSION');
       const cta = visit.locator('[data-anticlone-point="' + point.marker + '"]');
@@ -1357,7 +1359,7 @@ test('React provisions an original LP and copy, then real gateway applies scoped
     await confirm('Revisar aprovação', /^Aprovação registrada\./);
     await authorize(3);
     for (const point of candidates) {
-      const decision=visit.waitForResponse(response=>response.url().startsWith(gatewayOrigin+distributionPrefix) && response.url().endsWith('/g'));
+      const decision=visit.waitForResponse(response=>response.url().startsWith(gatewayOrigin+distributionPrefix) && response.url().endsWith(decisionSuffix));
       await visit.goto(copy+'/lp');
       assert.equal((await (await decision).json()).action,'REPLACE_CONVERSION');
       await visit.locator('[data-anticlone-point="'+point.marker+'"]').click();

@@ -492,20 +492,18 @@ ambiente autorizado antes de aplicar. [Configuração avançada do NPM](https://
    DNS, TLS e rota têm pendências distintas no painel. Valide os trechos
    publicados em uma LP de teste antes de instalar em uma página real.
 
-**Sequência da primeira publicação compacta.** Aplique a migration 075 em
-transação com escritas administrativas pausadas e substitua o admin antigo
+**Sequência da primeira publicação compacta.** Aplique as migrações 075 e 076 na ordem, em
+transações com escritas administrativas pausadas e substitua o admin antigo
 antes de reabrir publicação, para que somente o novo probe grave resultados.
 Atualize o Gateway e as regras de ingresso em todos os vhosts, inclusive
 os padrões já configurados. Confira as rotas históricas, o monitor e a
-prontidão pelo caminho reservado em cada padrão. Revalide os endpoints
+prontidão em `/assets/0000000000000000000001/app.js` em cada padrão. Revalide os endpoints
 cadastrados e só então habilite `RUNTIME_COMPACT_ALIASES=true` no admin.
 A LP original permanece fora deste procedimento de preparação.
 
 **Rollback.** Retire a flag para voltar a emitir URLs v2 e desative no painel
 um domínio com problema para bloquear novas revisões. Preserve o Gateway
-compatível, a 075, o proxy e o DNS dos endereços já instalados enquanto houver
-consumidores compactos. Antes de emitir ou compartilhar qualquer endereço compacto é possível
-restaurar os fragmentos anteriores e a versão anterior da aplicação,
-mantendo a migração aditiva. Se for necessário trocar a origem de uma LP
+compatível, as migrações 075 e 076, o proxy e o DNS dos endereços já instalados enquanto houver
+consumidores compactos. Uma reversão da aplicação e dos fragmentos exige checar quais formatos foram emitidos ou compartilhados e conservar suporte a todos eles. Mantenha as migrações aditivas. Se for necessário trocar a origem de uma LP
 de teste, emita outra revisão sobre um domínio saudável e substitua seus
 trechos sob autorização. Alterar a seleção no painel afeta futuras revisões.
