@@ -156,7 +156,10 @@ essa ação via `telemetryOrigin: null`. O teste focal em Chromium e PostgreSQL
 confere cancelamento, payload, publicação fora da pool e preservação da
 revisão anterior. Os três testes focais passaram. A revisão independente
 `/root/p2` aprovou o delta `f5659a99b67a6186dece9de65ee35f95f694944948a302ad7890e44d4f6e27b8`.
-A CI oficial está vinculada ao [SHA corrigido do PR #94](https://github.com/oleoceo/anticlone-personal/actions/runs/45699026558).
+A primeira CI oficial identificou uma asserção remanescente que ainda
+esperava a revisão anterior como atual. O SHA `6d00d0c` ajustou somente
+as asserções de histórico e prontidão. A revisão independente aprovou
+o delta adicional. [CI oficial do SHA final do PR #94](https://github.com/oleoceo/anticlone-personal/actions/runs/45701475272).
 
 ### Decisão inicial de página via Cloudflare
 

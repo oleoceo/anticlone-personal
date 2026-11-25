@@ -724,7 +724,7 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
     await endpoint.getByText('Operacional',{exact:true}).waitFor();
     await endpoint.getByText('LPs afetadas (2)',{exact:true}).click();
     await endpoint.getByText('One · LP · revisão '+threeOrigins.version+' atual',{exact:true}).waitFor();
-    await endpoint.getByText('One · Sibling · revisão '+aligned.version+' atual',{exact:true}).waitFor();
+    await endpoint.getByText('One · Sibling · revisão '+aligned.version+' anterior',{exact:true}).waitFor();
     if (demo) await panel.screenshot({path:join(demo,'endpoints.png'),fullPage:true});
     await endpoint.getByRole('button',{name:'Desativar',exact:true}).click();
     await panel.getByRole('button',{name:'Confirmar',exact:true}).click();
@@ -735,8 +735,9 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
     assert.equal((await upstream.request({url:pooled.distribution.bases.SCRIPT+pooled.distribution.paths!['runtime.js'],method:'GET',body:''})).status,200);
     await assert.rejects(distributionAdmin(db,{...mutation,action:'rotate'},pooledEnv),{code:'TELEMETRY_ORIGIN_UNAVAILABLE'});
     const siblingState=await distributionAdmin(db,{project:'one',page:sibling,action:'inspect'},pooledEnv);
-    assert.equal(siblingState.publication.ready,false);
-    assert.equal(siblingState.selectedTelemetryOrigin,pooledOrigin);
+    assert.equal(siblingState.publication.ready,true);
+    assert.equal(siblingState.selectedTelemetryOrigin,null);
+    assert.deepEqual(siblingState.distribution,restoredDistribution);
     await telemetryOriginAdmin(db,{action:'set-enabled',origin:pooledOrigin,enabled:true},pooledEnv);
     assert.equal((await listTelemetryOrigins(db,pooledEnv)).items[0].state,'UNVERIFIED');
     const rollback = await distributionAdmin(db,{...request,action:'rotate',telemetryOrigin:secondary},
