@@ -1,5 +1,5 @@
-import {namedDistributionSchema} from './distribution-paths.js';
-import {abbreviatedDistributionHealthPath, distributionHealthPath} from './telemetry-origins.js';
+import {assetFileDistributionSchema, namedDistributionSchema} from './distribution-paths.js';
+import {abbreviatedDistributionHealthPath, distributionHealthPath, namedDistributionHealthPath} from './telemetry-origins.js';
 import {commerceWebhook} from './commerce.js';
 import { distributionGateway } from './distribution-gateway.js';
 import { runtimeLayerObservations, scopedCorrelationOrigin } from './runtime-layer-observations.js';
@@ -176,8 +176,9 @@ const handler: http.RequestListener = (req, res) => {
   if (handleCommerce(req,res)) return;
   if (handleProjectCheckout(req,res)) return;
   if (handleObservedSession(req,res)) return;
-  const namedDistributionHealth = req.url === distributionHealthPath;
-  const distributionHealth = namedDistributionHealth || req.url === abbreviatedDistributionHealthPath;
+  const assetFileHealth = req.url === distributionHealthPath;
+  const namedDistributionHealth = req.url === namedDistributionHealthPath;
+  const distributionHealth = assetFileHealth || namedDistributionHealth || req.url === abbreviatedDistributionHealthPath;
   if (!distributionHealth && distributed(req,res)) return;
   if (scoped(req,res)) return;
   if (!project && req.url !== '/healthz' && !distributionHealth) { res.writeHead(404).end(); return; }
@@ -186,8 +187,8 @@ const handler: http.RequestListener = (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*'); res.setHeader('Cache-Control', 'no-store');
   if (req.method === 'GET' && (req.url === '/healthz' || distributionHealth)) {
     void pool.query(`SELECT to_regclass('page_redirect_rules') IS NOT NULL AS redirects,to_regclass('page_copy_contexts') IS NOT NULL AS diagnostics,to_regclass('copy_cta_rules') IS NOT NULL AS ctas,EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('copy_cta_rules') AND attname='allocation' AND NOT attisdropped) AS cta_allocations,
-      EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('runtime_aliases') AND attname='public_token' AND NOT attisdropped) AS compact_aliases, ${namedDistributionSchema} AS named_aliases`).then(({rows}) => {
-      if (distributionHealth && !(namedDistributionHealth ? rows[0].named_aliases : rows[0].compact_aliases)) {res.writeHead(503).end();return;}
+      EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('runtime_aliases') AND attname='public_token' AND NOT attisdropped) AS compact_aliases, (${namedDistributionSchema} OR ${assetFileDistributionSchema}) AS named_aliases, ${assetFileDistributionSchema} AS asset_file_aliases`).then(({rows}) => {
+      if (distributionHealth && !(assetFileHealth ? rows[0].asset_file_aliases : namedDistributionHealth ? rows[0].named_aliases : rows[0].compact_aliases)) {res.writeHead(503).end();return;}
       if (rows[0].redirects) res.setHeader('X-AntiClone-Redirect-Contract',rows[0].cta_allocations ? '5' : rows[0].ctas ? '4' : rows[0].diagnostics ? '3' : '2');
       res.writeHead(200, {'Content-Type':'application/json'}).end(JSON.stringify({status:'ready', mode:process.env.GATEWAY_MODE==='OPERATIONAL'?'OPERATIONAL':mode.pilot ? 'PILOT_OBSERVE' : 'LAB', action:process.env.GATEWAY_MODE==='OPERATIONAL'?'SCOPED_AUTHORIZATION_REQUIRED':'OBSERVE_ONLY'}));
     }).catch(() => res.writeHead(503).end()); return;

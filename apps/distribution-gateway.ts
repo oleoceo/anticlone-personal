@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Pool } from 'pg';
 import { readDistribution } from './runtime-distribution.js';
-import {distributionPaths} from './distribution-paths.js';
+import {assetFileContract, assetFilePatterns, distributionPaths, distributionRoleByResource} from './distribution-paths.js';
 import { resolvePageContext } from './page-context.js';
 import { configuredOrigin, recordCanaryClaim } from './detection.js';
 import { operationallyEligible } from './operational-eligibility.js';
@@ -9,7 +9,6 @@ import { recordInstallationActivity } from './health-alerts.js';
 import type { LayerObserver } from './runtime-layer-observations.js';
 import {receiveRuntimeReceipt,receiveDistributionScript,receiptAliases} from './investigation-receipts.js';
 
-const allowed:Record<string,readonly string[]>={SCRIPT:['runtime.js','core.js','fallback.js'],TELEMETRY:['observe','observe/fallback','entry-decision','cta-refresh','observed-session','observed-action'],STATIC_ASSETS:['html.gif','css.gif','cta-inventory.js']};
 // Dispatch through existing domain handlers; distribution never authorizes actions.
 export function distributionGateway(db:Pool,scripts:Record<string,Buffer>,dispatch:(req:IncomingMessage,res:ServerResponse)=>void,layers:LayerObserver=async()=>{}) {
   let start=Date.now(),count=0;
@@ -17,25 +16,29 @@ export function distributionGateway(db:Pool,scripts:Record<string,Buffer>,dispat
     const path = req.url ?? '';
     const compact = path.startsWith('/assets/');
     if (!compact && !path.startsWith('/d/') && !path.startsWith('/r/')) return false;
+    const assetFile = /^\/assets\/((?:js|img|api)\/[a-z]+)\.([0-9a-f]{20})(\.(?:js|gif))?$/.exec(path);
     const match = compact
       ? /^\/assets\/([A-Za-z0-9_-]{22})\/([a-z.-]+)$/.exec(path)
       : /^\/(?:d\/v1|r\/v2)\/([a-f0-9-]{36})\/([a-z.-]+(?:\/fallback)?)$/.exec(path);
     res.setHeader('Cache-Control','no-store');res.setHeader('Access-Control-Allow-Origin','*');res.setHeader('X-Content-Type-Options','nosniff');
     if (Date.now()-start>=60000) {start=Date.now();count=0;}
     if (++count>1200) {res.writeHead(429).end();return true;}
-    if (!match) {res.writeHead(404).end();return true;}
+    if (!assetFile && !match) {res.writeHead(404).end();return true;}
+    const token = assetFile?.[2] ?? match![1];
     void (async()=>{
       const routeStarted = performance.now();
       const row=(await db.query(`SELECT a.alias,a.installation_id,a.version,a.role,d.contract_version, to_jsonb(a)->>'public_token' AS public_token,
         (SELECT count(*)::int FROM runtime_aliases WHERE installation_id=a.installation_id AND version=a.version) AS aliases
-        FROM runtime_aliases a JOIN runtime_distributions d USING(installation_id,version) WHERE ${compact ? 'a.public_token' : 'a.alias'}=$1`,[match[1]])).rows[0];
-      if (!row || Boolean(row.public_token)!==compact ||
+        FROM runtime_aliases a JOIN runtime_distributions d USING(installation_id,version) WHERE ${compact ? 'a.public_token' : 'a.alias'}=$1`,[token])).rows[0];
+      if (!row || Boolean(row.public_token)!==compact || Boolean(assetFile)!==(row.contract_version===assetFileContract) ||
         (!compact && (row.contract_version===2 ? !path.startsWith('/r/v2/') : row.contract_version!==1 || !path.startsWith('/d/v1/')))) {
         res.writeHead(404).end();return;
       }
       const paths = distributionPaths(row.contract_version);
-      const endpoint = paths ? Object.keys(paths).find(name=>paths[name]===match[2]) ?? '' : match[2];
-      if (!allowed[row.role]?.includes(endpoint)) {res.writeHead(404).end();return;}
+      const endpoint = assetFile
+        ? Object.keys(assetFilePatterns).find(name=>assetFilePatterns[name]===assetFile[1]+'.*'+(assetFile[3] ?? ''))
+        : paths ? Object.keys(paths).find(name=>paths[name]===match![2]) : match![2];
+      if (!endpoint || distributionRoleByResource[endpoint]!==row.role) {res.writeHead(404).end();return;}
       if (row.aliases!==3) {res.writeHead(503).end();return;}
       if (scripts[endpoint]) {
         const distribution=await readDistribution(db,row.installation_id,row.version);

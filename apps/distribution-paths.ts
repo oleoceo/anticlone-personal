@@ -19,3 +19,23 @@ export function distributionPaths(contractVersion: number) {
 
 export const namedDistributionSchema = `EXISTS (SELECT 1 FROM pg_constraint
   WHERE conrelid=to_regclass('runtime_distributions') AND conname='runtime_distributions_named_contract_check')`;
+
+export const assetFileContract = 4;
+export const assetProbeToken = '00000000000000000000';
+
+export const assetFilePatterns: Record<string, string> = {
+  'runtime.js':'js/app.*.js', 'core.js':'js/common.*.js', 'fallback.js':'js/events.*.js',
+  'observe':'api/collect.*', 'observe/fallback':'api/report.*', 'entry-decision':'api/config.*',
+  'cta-refresh':'api/refresh.*', 'observed-session':'api/session.*', 'observed-action':'api/activity.*',
+  'html.gif':'img/pixel.*.gif', 'css.gif':'img/style.*.gif', 'cta-inventory.js':'js/inventory.*.js',
+};
+
+export const distributionRoleByResource: Record<string, 'SCRIPT'|'TELEMETRY'|'STATIC_ASSETS'> = {
+  'runtime.js':'SCRIPT', 'core.js':'SCRIPT', 'fallback.js':'SCRIPT',
+  'observe':'TELEMETRY', 'observe/fallback':'TELEMETRY', 'entry-decision':'TELEMETRY',
+  'cta-refresh':'TELEMETRY', 'observed-session':'TELEMETRY', 'observed-action':'TELEMETRY',
+  'html.gif':'STATIC_ASSETS', 'css.gif':'STATIC_ASSETS', 'cta-inventory.js':'STATIC_ASSETS',
+};
+
+export const assetFileDistributionSchema = `EXISTS (SELECT 1 FROM pg_constraint
+  WHERE conrelid=to_regclass('runtime_distributions') AND conname='runtime_distributions_asset_file_contract_check')`;

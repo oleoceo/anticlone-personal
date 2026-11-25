@@ -1,4 +1,4 @@
-import {distributionPaths, namedDistributionSchema} from './distribution-paths.js';
+import {assetFileContract, assetFileDistributionSchema, assetFilePatterns, assetProbeToken, distributionPaths, distributionRoleByResource, namedDistributionSchema} from './distribution-paths.js';
 import {listedTelemetryOrigin, listTelemetryOrigins, telemetryOriginForPublication} from './telemetry-origins.js';
 import { randomBytes, randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
@@ -50,7 +50,7 @@ function verifierConfiguration(env: NodeJS.ProcessEnv) {
 }
 
 export async function installationPrerequisites(db: Pick<Pool,'query'>, env=process.env) {
-  const schema = (await db.query<{distribution: boolean; rotation: boolean; verifier: boolean; activity: boolean; receipts: boolean; compact: boolean; named: boolean}>(`
+  const schema = (await db.query<{distribution: boolean; rotation: boolean; verifier: boolean; activity: boolean; receipts: boolean; compact: boolean; named: boolean; assetFile: boolean}>(`
     SELECT to_regclass('runtime_aliases') IS NOT NULL AND to_regclass('page_installation_signals') IS NOT NULL
       AND to_regclass('runtime_distributions') IS NOT NULL AS distribution,
       EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('runtime_distributions')
@@ -60,7 +60,8 @@ export async function installationPrerequisites(db: Pick<Pool,'query'>, env=proc
       to_regclass('investigation_receipts') IS NOT NULL AS receipts,
       EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('runtime_aliases')
         AND attname='public_token' AND NOT attisdropped) AS compact,
-      ${namedDistributionSchema} AS named`)).rows[0];
+      (${namedDistributionSchema} OR ${assetFileDistributionSchema}) AS named,
+      ${assetFileDistributionSchema} AS "assetFile"`)).rows[0];
   const {origins,issues} = configuredOrigins(env);
   const publicationIssues: {code: string; role?: Role}[] = schema.distribution
     ? issues : [{code:'DISTRIBUTION_SCHEMA_MISSING'}, ...issues];
@@ -78,6 +79,14 @@ function verificationIssue(targets: string[], active: boolean, distribution: Dis
 }
 function fromRows(rows:AliasRow[]):Distribution|null {
   if (rows.length!==3 || new Set(rows.map(row=>row.role)).size!==3) return null;
+  if (rows[0].contract_version===assetFileContract) {
+    if (rows.some(row=>!row.public_token || !/^[0-9a-f]{20}$/.test(row.public_token) || row.public_token===assetProbeToken)) return null;
+    const byRole = new Map(rows.map(row=>[row.role,row]));
+    const paths = Object.fromEntries(Object.entries(assetFilePatterns).map(([resource,pattern])=>
+      [resource,pattern.replace('*',byRole.get(distributionRoleByResource[resource])!.public_token!)]));
+    return {installation:rows[0].installation_id,version:rows[0].version,paths,
+      bases:Object.fromEntries(rows.map(row=>[row.role,row.origin+'/assets/'])) as Record<Role,string>};
+  }
   const paths = distributionPaths(rows[0].contract_version);
   return {installation:rows[0].installation_id,version:rows[0].version,
     ...(paths?{paths}:{}),
@@ -182,16 +191,17 @@ async function readOrPublish(db: Pool, data: {project:string;page:string;action:
         const version=(distribution?.version ?? 0)+1;
         const compact = schema.compact && env.RUNTIME_COMPACT_ALIASES === 'true';
         if (compact && schema.named) {
-          await client.query('INSERT INTO runtime_distributions(installation_id,version,publication_reason,contract_version) VALUES($1,$2,$3,3)',[page.installation_id,version,data.action]);
+          await client.query('INSERT INTO runtime_distributions(installation_id,version,publication_reason,contract_version) VALUES($1,$2,$3,$4)',[page.installation_id,version,data.action,schema.assetFile?assetFileContract:3]);
         } else if (schema.rotation) await client.query('INSERT INTO runtime_distributions(installation_id,version,publication_reason) VALUES($1,$2,$3)',[page.installation_id,version,data.action]);
         else await client.query('INSERT INTO runtime_distributions(installation_id,version) VALUES($1,$2)',[page.installation_id,version]);
         for (const role of distributionRoles) {
           const values = [randomUUID(),page.installation_id,version,role,origins[role]];
           if (compact) {
-            // 128 random bits, encoded without padding. Retry only a public-token collision.
+            // The reserved probe address never belongs to an installation.
             let inserted = false;
             for (let attempt = 0; attempt < 3 && !inserted; attempt++) {
-              const token = randomBytes(16).toString('base64url');
+              const token = schema.assetFile ? randomBytes(10).toString('hex') : randomBytes(16).toString('base64url');
+              if (token === assetProbeToken) continue;
               const result = await client.query(`INSERT INTO runtime_aliases(alias,installation_id,version,role,origin,public_token)
                 VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT (public_token) WHERE public_token IS NOT NULL DO NOTHING`,
               [...values,token]);

@@ -14,7 +14,7 @@ import {Pool} from 'pg';
 import {chromium, type Page} from 'playwright';
 const namedDistribution = process.env.RUNTIME_COMPACT_ALIASES === 'true';
 const distributionPrefix = namedDistribution ? '/assets/' : '/r/v2/';
-const decisionSuffix = namedDistribution ? '/config' : '/g';
+const decisionSuffix = namedDistribution ? /\/api\/config\.[0-9a-f]{20}$/ : /\/g$/;
 import {createAdminServer} from '../apps/admin-auth.js';
 import {join} from 'node:path';
 import {commerceAdmin, commerceSigningInput, commerceWebhook, provisionCommerceSender, receiveCommerce} from '../apps/commerce.js';
@@ -164,11 +164,11 @@ for (const width of [1440, 390]) {
     const scripts = await page.getByRole('region', {name: 'Trecho HEAD'}).locator('code').innerText();
     const source = scripts.match(/<script async src="([^"]+)"/)?.[1];
     assert.ok(source && source.startsWith('https://runtime.frontend.test'+distributionPrefix));
-    assert.ok(source.endsWith(namedDistribution ? '/app.js' : '/a.js'));
-    assert.match(scripts, namedDistribution ? /\/events\.js/ : /\/c\.js/);
-    assert.doesNotMatch(scripts, /\/(?:e|b\.js|collect|common\.js)"/);
-    assert.match(await page.getByRole('region', {name: 'Trecho BODY'}).locator('code').innerText(), namedDistribution ? /\/pixel\.gif/ : /\/m\.gif/);
-    assert.match(await page.getByRole('region', {name: 'Trecho CSS'}).locator('code').innerText(), namedDistribution ? /\/style\.gif/ : /\/n\.gif/);
+    assert.ok((namedDistribution ? /\/js\/app\.[0-9a-f]{20}\.js$/ : /\/a\.js$/).test(source));
+    assert.match(scripts, namedDistribution ? /\/js\/events\.[0-9a-f]{20}\.js/ : /\/c\.js/);
+    assert.doesNotMatch(scripts, /\/(?:e|b\.js|api\/collect\.[0-9a-f]{20}|js\/common\.[0-9a-f]{20}\.js)"/);
+    assert.match(await page.getByRole('region', {name: 'Trecho BODY'}).locator('code').innerText(), namedDistribution ? /\/img\/pixel\.[0-9a-f]{20}\.gif/ : /\/m\.gif/);
+    assert.match(await page.getByRole('region', {name: 'Trecho CSS'}).locator('code').innerText(), namedDistribution ? /\/img\/style\.[0-9a-f]{20}\.gif/ : /\/n\.gif/);
     await page.getByLabel('Tecnologia do site').selectOption('React/Vite');
     await page.getByText('<main className="conteudo anticlone-canary">…</main>', {exact: true}).waitFor();
     await page.getByLabel('Tecnologia do site').selectOption('WordPress');
@@ -1337,7 +1337,7 @@ test('React provisions an original LP and copy, then real gateway applies scoped
     await authorize(2);
     await capture(panel, '07-politica-cta');
     for (const point of candidates) {
-      const decision = visit.waitForResponse(response => response.url().startsWith(gatewayOrigin + distributionPrefix) && response.url().endsWith(decisionSuffix));
+      const decision = visit.waitForResponse(response => response.url().startsWith(gatewayOrigin + distributionPrefix) && decisionSuffix.test(response.url()));
       await visit.goto(copy + '/lp');
       assert.equal((await (await decision).json()).action, 'REPLACE_CONVERSION');
       const cta = visit.locator('[data-anticlone-point="' + point.marker + '"]');
@@ -1359,7 +1359,7 @@ test('React provisions an original LP and copy, then real gateway applies scoped
     await confirm('Revisar aprovação', /^Aprovação registrada\./);
     await authorize(3);
     for (const point of candidates) {
-      const decision=visit.waitForResponse(response=>response.url().startsWith(gatewayOrigin+distributionPrefix) && response.url().endsWith(decisionSuffix));
+      const decision=visit.waitForResponse(response=>response.url().startsWith(gatewayOrigin+distributionPrefix) && decisionSuffix.test(response.url()));
       await visit.goto(copy+'/lp');
       assert.equal((await (await decision).json()).action,'REPLACE_CONVERSION');
       await visit.locator('[data-anticlone-point="'+point.marker+'"]').click();

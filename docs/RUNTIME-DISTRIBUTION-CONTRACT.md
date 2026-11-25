@@ -113,7 +113,7 @@ com `proxy_ssl_name` e `Host` upstream fixos no hostname canônico
 e o PostgreSQL Dev são compartilhados pelo fluxo. A conclusão do gate e o
 teste no hostname real continuam necessários para cada ingresso.
 
-## Aliases compactos e cadastro de domínios (075–076)
+## Aliases compactos e cadastro de domínios (075–077)
 
 Para a mesma função de Bootstrap, os formatos públicos são:
 
@@ -122,7 +122,8 @@ Para a mesma função de Bootstrap, os formatos públicos são:
 | v1 histórica | `https://assets.example.com/d/v1/8ce06c96-03bb-46ed-a9a9-916006c36bdd/runtime.js` |
 | v2 histórica | `https://assets.example.com/r/v2/8ce06c96-03bb-46ed-a9a9-916006c36bdd/a.js` |
 | Compacta anterior | `https://assets.example.com/assets/I2Fz7aURhvkqwkSqBywnXQ/a.js` |
-| Compacta atual | `https://assets.example.com/assets/I2Fz7aURhvkqwkSqBywnXQ/app.js` |
+| Compacta nomeada | `https://assets.example.com/assets/I2Fz7aURhvkqwkSqBywnXQ/app.js` |
+| Compacta atual | `https://signals-pool.owner.test/assets/js/app.4e25b80ce6409714d13e.js` |
 
 A 075 é aditiva. Cada papel recebe 128 bits aleatórios do gerador criptográfico
 do Node, codificados em 22 caracteres base64url. O índice único cobre todos os
@@ -130,23 +131,30 @@ tokens públicos e uma colisão é tentada novamente dentro da transação de
 publicação. O UUID segue como chave interna de recibos e atividade. As três
 rotas de cada revisão continuam vinculadas à LP, aos papéis e às origens
 persistidas. O token é um identificador público. A 076 fixa o novo mapa nos registros do contrato 3. Revisões v1, v2 e compactas
-anteriores conservam os nomes originais. Os contratos de resposta permanecem iguais.
+anteriores conservam os nomes originais. A 077 fixa o contrato 4 e move o
+token para o nome de cada recurso. Escolhemos 80 bits em vez de 64 para
+reduzir a chance de colisão por um fator de 65.536. São dez bytes do gerador
+criptográfico, codificados em vinte caracteres hexadecimais. O sufixo tem
+aparência de hash de asset e é um identificador aleatório da revisão por
+papel. O índice único e a emissão transacional com até três tentativas
+preservam a unicidade. O zero é reservado ao probe. As validações de papel,
+instalação e autorização continuam no Gateway.
 
 Após habilitar `RUNTIME_COMPACT_ALIASES=true` no ambiente privado do admin,
-novas revisões usam os nomes do formato compacto, após aplicar a 076. A primeira publicação e alterações
+novas revisões usam os nomes do formato compacto, após aplicar a 077. A primeira publicação e alterações
 de origem geram a revisão automaticamente. Para trocar os caminhos de uma LP
 com a mesma origem, use **Publicar nova revisão** no histórico da instalação.
 Consultar e republicar sem mudança de origem preservam a revisão atual.
 O conteúdo executável e a sequência de carregamento preservam o contrato.
-Os nomes legíveis acrescentam 63 bytes brutos ao mapa injetado. O ensaio
+O formato de arquivo repete os tokens nos nomes do mapa injetado. O ensaio
 Chromium compara os pedidos e o evento de carga da mesma LP sintética com
-os dois mapas compactos.
+os dois mapas compactos e mede o tamanho do Bootstrap servido.
 
 A migração limpa os resultados antigos de verificação. O painel passa a testar
 DNS, certificado HTTPS e prontidão operacional pela mesma regra de ingresso
 do Bootstrap compacto, com o caminho reservado
-`/assets/0000000000000000000001/app.js`. O probe confirma que a rota chega a
-um Gateway operacional com a 076. A conferência privada do upstream efetivo
+`/assets/js/app.00000000000000000000.js`. O probe confirma que a rota chega a
+um Gateway operacional com a 077. A conferência privada do upstream efetivo
 e o smoke dos três papéis confirmam a instância e a distribuição da LP. A
 verificação é pontual. Revalide após alterações de ingresso, DNS ou TLS.
 
@@ -167,28 +175,32 @@ preserva as revisões anteriores. Veja o [procedimento NPM](NPM-VPS-RUNBOOK.md#1
 | Sinais e decisão | `collect` recebe observações, `report` recebe o fallback, `config` entrega a decisão inicial, `refresh` atualiza CTA, `session` e `activity` recebem a sessão e a ação observadas. |
 | Recursos estáticos | `pixel.gif` é o sinal HTML, `style.gif` é o sinal CSS e `inventory.js` serve o inventário de laboratório existente. |
 
-Exemplo de instalação com origem e tokens ilustrativos. Use os trechos gerados
-pelo painel para obter os tokens da LP.
+Scripts usam `/assets/js/<nome>.<token>.js`, imagens usam
+`/assets/img/<nome>.<token>.gif` e os endpoints usam
+`/assets/api/<nome>.<token>`. Cada papel usa um token independente.
+
+Exemplo gerado pelo painel para a LP do laboratório Chromium. Use os trechos
+gerados para a sua LP para obter os endereços da revisão correspondente.
 
 **HEAD**
 
 ```html
-<link rel="preconnect" href="https://assets.example.com" crossorigin>
-<script async src="https://assets.example.com/assets/I2Fz7aURhvkqwkSqBywnXQ/app.js"></script>
-<script async src="https://assets.example.com/assets/I2Fz7aURhvkqwkSqBywnXQ/events.js"></script>
+<link rel="preconnect" href="https://signals-pool.owner.test" crossorigin>
+<script async src="https://signals-pool.owner.test/assets/js/app.4e25b80ce6409714d13e.js"></script>
+<script async src="https://signals-pool.owner.test/assets/js/events.4e25b80ce6409714d13e.js"></script>
 ```
 
 **BODY**
 
 ```html
-<img src="https://assets.example.com/assets/y6VrYqM8kxJhLBdFuG2WnA/pixel.gif" width="1" height="1" alt="" referrerpolicy="strict-origin-when-cross-origin">
+<img src="https://signals-pool.owner.test/assets/img/pixel.96d3f6f9bf0a459fab4a.gif" width="1" height="1" alt="" referrerpolicy="strict-origin-when-cross-origin">
 ```
 
 **CSS**. Aplique `anticlone-canary` a um elemento existente.
 
 ```css
 .anticlone-canary {
-  background-image: url("https://assets.example.com/assets/y6VrYqM8kxJhLBdFuG2WnA/style.gif");
+  background-image: url("https://signals-pool.owner.test/assets/img/style.96d3f6f9bf0a459fab4a.gif");
 }
 ```
 
@@ -197,4 +209,4 @@ pelo painel para obter os tokens da LP.
 - **React/Vite**. Insira HEAD e BODY no `index.html`, importe o CSS existente e aplique a classe com `className`. O Bootstrap continua como script clássico, carregado fora do bundle e da montagem React.
 
 O Core é carregado pelo Bootstrap, por exemplo em
-`https://assets.example.com/assets/I2Fz7aURhvkqwkSqBywnXQ/common.js`.
+`https://signals-pool.owner.test/assets/js/common.4e25b80ce6409714d13e.js`.
