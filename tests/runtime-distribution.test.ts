@@ -65,12 +65,12 @@ async function sharedMtlsIngress(origins: readonly string[], dispatch: RequestLi
   const [ca,cert,key]=await Promise.all(['server.crt','proxy.crt','proxy.key'].map(file=>readFile(join(dir,file))));
   const ingress = {
     // Reproduces the ingress contract: approved external vhosts share one mTLS upstream and canonical Host/SNI.
-    request({url,method,body}:VerificationRequest,origin?:string):Promise<VerificationResponse>{
+    request({url,method,body}:VerificationRequest,origin?:string,clientAddress='127.0.0.1'):Promise<VerificationResponse>{
       const target=new URL(url);
       assert.ok(origins.includes(target.origin));
       return new Promise((resolve,reject)=>{
         const req=httpsRequest({hostname:'127.0.0.1',port,servername:env.PUBLIC_GATEWAY_HOST,ca,cert,key,method,
-          path:target.pathname+target.search,headers:{host:env.PUBLIC_GATEWAY_HOST,'x-forwarded-proto':'https','x-forwarded-for':'127.0.0.1',
+          path:target.pathname+target.search,headers:{host:env.PUBLIC_GATEWAY_HOST,'x-forwarded-proto':'https','x-forwarded-for':clientAddress,
             ...(origin ? {origin,'content-type':'text/plain'} : {})}},res=>{
           const chunks:Buffer[]=[];
           res.on('data',chunk=>chunks.push(chunk));
@@ -443,19 +443,21 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
     }));
     const input=JSON.stringify({origin,pathname:'/',signals:{}});
     assert.equal((await upstream.request({url:pooled.distribution.bases.TELEMETRY+pooled.distribution.paths!['observe'],method:'POST',body:input},origin)).status,204);
+    // Model a separate visitor so these probes do not consume the browser fixture’s per-client budget.
+    const regressionRequest=(request:VerificationRequest,origin?:string)=>upstream.request(request,origin,'192.0.2.2');
     const filename = pooled.distribution;
     const paths = filename.paths!;
     for (const query of ['', '?cache=1&next=%2Fassets%3Fx']) {
       for (const endpoint of ['runtime.js','core.js','fallback.js','cta-inventory.js']) {
         const role = endpoint==='cta-inventory.js' ? 'STATIC_ASSETS' : 'SCRIPT';
-        const reply=await upstream.request({url:filename.bases[role]+paths[endpoint]+query,method:'GET',body:''});
+        const reply=await regressionRequest({url:filename.bases[role]+paths[endpoint]+query,method:'GET',body:''});
         assert.equal(reply.status,200,endpoint);
         assert.match(reply.headers['content-type'],/^application\/javascript/);
         new Script(reply.body.toString());
         if(endpoint==='runtime.js') assert.deepEqual(reply.body,pooledBundle.body);
       }
       for (const endpoint of ['html.gif','css.gif']) {
-        const reply=await upstream.request({url:filename.bases.STATIC_ASSETS+paths[endpoint]+query,method:'GET',body:''});
+        const reply=await regressionRequest({url:filename.bases.STATIC_ASSETS+paths[endpoint]+query,method:'GET',body:''});
         assert.equal(reply.status,200,endpoint);
         assert.equal(reply.headers['content-type'],'image/gif');
         assert.equal(reply.body.subarray(0,6).toString(),'GIF89a');
@@ -474,8 +476,8 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
       ] as const;
       for (const [endpoint,body,status] of actions) {
         const url=filename.bases.TELEMETRY+paths[endpoint]+query;
-        assert.equal((await upstream.request({url,method:'POST',body},origin)).status,status,endpoint);
-        assert.equal((await upstream.request({url,method:'GET',body:''},origin)).status,
+        assert.equal((await regressionRequest({url,method:'POST',body},origin)).status,status,endpoint);
+        assert.equal((await regressionRequest({url,method:'GET',body:''},origin)).status,
           endpoint.startsWith('observed-') ? 415 : 405,endpoint);
       }
       const script=paths['runtime.js'];
@@ -489,7 +491,7 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
         script.replace(/[0-9a-f]{20}/,staticToken),
         paths['html.gif'].replace(/[0-9a-f]{20}/,script.split('.')[1]),
       ]) {
-        assert.equal((await upstream.request({url:filename.bases.SCRIPT+invalid+query,method:'GET',body:''})).status,404,invalid);
+        assert.equal((await regressionRequest({url:filename.bases.SCRIPT+invalid+query,method:'GET',body:''})).status,404,invalid);
       }
     }
     const probeSocket=createServer().listen(0,'127.0.0.1');
