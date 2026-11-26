@@ -18,6 +18,7 @@ test('daily history atomically folds eligible facts and distinguishes missing co
     for(const file of ['047_observed_metrics','074_observed_session_copy','079_observed_daily'])
       await db.query(await readFile('infra/'+file+'.sql','utf8'));
     await db.query("ALTER TABLE observed_action_facts ADD COLUMN copy_cta jsonb; INSERT INTO projects VALUES ('one'),('two')");
+    await db.query(await readFile('infra/080_observed_expiry_guard.sql','utf8'));
     await db.query("UPDATE observed_daily_installation SET installed_at=statement_timestamp()-interval '5 days'");
     const page=crypto.randomUUID();
     await db.query("INSERT INTO protected_pages VALUES($1,'one')",[page]);
@@ -28,7 +29,8 @@ test('daily history atomically folds eligible facts and distinguishes missing co
     await db.query(`GRANT USAGE ON SCHEMA ${schema} TO ${role};
       GRANT SELECT (project_id,page_id,received_at,action,traffic_class,evidence,copy_cta,session_copy), DELETE ON observed_action_facts TO ${role};
       GRANT SELECT, INSERT, UPDATE, DELETE ON observed_daily_actions TO ${role};
-      GRANT SELECT, INSERT, UPDATE ON observed_daily_progress TO ${role};`);
+      GRANT SELECT, INSERT, UPDATE ON observed_daily_progress TO ${role};
+      GRANT EXECUTE ON FUNCTION expire_observed_facts(text) TO ${role};`);
     const retainAsMaintenance=async () => {
       const client=await db.connect();
       try {
@@ -50,6 +52,8 @@ test('daily history atomically folds eligible facts and distinguishes missing co
       await denied.query('ROLLBACK');
       denied.release();
     }
+    // A rollback executable is prevented from expiring facts outside the approved path.
+    await assert.rejects(db.query("DELETE FROM observed_action_facts WHERE project_id='one' AND received_at<clock_timestamp()-interval '7 days'"),/observed expiry must use consolidation/);
     await Promise.all([retainAsMaintenance(),retainAsMaintenance()]);
     await retainAsMaintenance();
     const {rows:[remaining]}=await db.query('SELECT count(*)::int n FROM observed_action_facts');
@@ -59,6 +63,7 @@ test('daily history atomically folds eligible facts and distinguishes missing co
     assert.equal(result.coverage.length,1);
     assert.equal(result.days.length,1);
     assert.equal(result.days[0].events,'2');
+    assert.deepEqual(result.points,[{copy_origin:'https://copy.test',copy_path:'/offer',marker:'checkout01',surface:'main',clicks:'2'}]);
     assert.deepEqual(result.copies,[{origin:'https://copy.test',pathname:'/offer'}]);
     const {rows:[point]}=await db.query('SELECT marker,surface,events FROM observed_daily_actions');
     assert.deepEqual(point,{marker:'checkout01',surface:'main',events:'2'});

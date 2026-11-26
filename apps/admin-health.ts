@@ -1,3 +1,4 @@
+import {incidentCapacity} from './detection.js';
 import { request } from 'node:http';
 import type { Pool } from 'pg';
 import { installationDiagnostic } from './installation.js';
@@ -42,6 +43,7 @@ export async function adminHealth(db: Pool, body: unknown, env=process.env) {
       publicationIssues:database?.publicationIssues ?? null, verifierIssue:database?.verifierIssue ?? null};
   }
   if (typeof value.project!=='string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(value.project)) throw new TypeError('invalid project');
+  if (keys==='action,project' && value.action==='incident-capacity') return incidentCapacity(db,value.project);
   if (keys==='action,project' && value.action==='inspect') {
     const [settings,history,collection]=await Promise.all([
       healthSettings(db,value.project),healthHistory(db,value.project),installationDiagnostic(db,value.project),

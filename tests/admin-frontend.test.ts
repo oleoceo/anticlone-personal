@@ -1,3 +1,4 @@
+import {restrictedRuntimeRoles} from './restricted-runtime-roles.js';
 import assert from 'node:assert/strict';
 import {execFileSync, spawn} from 'node:child_process';
 import {createHmac, randomUUID, scryptSync} from 'node:crypto';
@@ -34,9 +35,12 @@ async function fixture(test: TestContext, browserArgs?: string[]) {
   const schema = 'frontend_' + randomUUID().replaceAll('-', '');
   await root.query('CREATE SCHEMA ' + schema);
   const db = new Pool({connectionString: process.env.TEST_DATABASE_URL, options: '-c search_path=' + schema});
+  const restricted:{roles?:Awaited<ReturnType<typeof restrictedRuntimeRoles>>; db?:Pool; gateway?:Pool}={};
   test.after(async () => {
+    await restricted.db?.end();
+    await restricted.gateway?.end();
     await db.end();
-    try { await root.query('DROP SCHEMA ' + schema + ' CASCADE'); }
+    try { await root.query('DROP SCHEMA ' + schema + ' CASCADE'); await restricted.roles?.drop(root); }
     finally { await root.end(); }
   });
   for (const name of (await readdir('infra')).filter(name => /^\d{3}_.*\.sql$/.test(name)).sort()) {
@@ -44,6 +48,9 @@ async function fixture(test: TestContext, browserArgs?: string[]) {
   }
 
 
+  restricted.roles=await restrictedRuntimeRoles(db,schema,process.env.TEST_DATABASE_URL);
+  restricted.db=new Pool({connectionString:restricted.roles.admin,options:'-c search_path='+schema});
+  restricted.gateway=new Pool({connectionString:restricted.roles.publicGateway,options:'-c search_path='+schema});
   const savedOrigin = process.env.RUNTIME_PUBLIC_ORIGIN;
   const savedVerifier = process.env.INSTALLATION_VERIFIER_IMAGE;
   process.env.RUNTIME_PUBLIC_ORIGIN = endpoint;
@@ -60,7 +67,7 @@ async function fixture(test: TestContext, browserArgs?: string[]) {
   const totp = new TOTP({secret: Secret.fromBase32(secret)});
   const salt = Buffer.alloc(16, 43);
   const record = 'scrypt$' + salt.toString('hex') + '$' + scryptSync(password, salt, 64).toString('hex');
-  const server = createAdminServer(record, secret, db, () => clock).listen(0, '127.0.0.1');
+  const server = createAdminServer(record, secret, restricted.db, () => clock).listen(0, '127.0.0.1');
   await once(server, 'listening');
   test.after(() => new Promise<void>((resolve, reject) => {
     server.close(error => error ? reject(error) : resolve());
@@ -71,7 +78,7 @@ async function fixture(test: TestContext, browserArgs?: string[]) {
   test.after(() => browser.close());
 
   return {
-    db, schema, origin, browser, server,
+    db, gatewayDb:restricted.gateway, schema, origin, browser, server,
     code: () => totp.generate({timestamp: clock}),
     advance: (milliseconds: number) => { clock += milliseconds; },
   };
@@ -602,7 +609,7 @@ for (const width of [1440, 390]) {
       const raw = Buffer.from(JSON.stringify({event,order:event,product,amount:'89.00',currency:'BRL',status:'paid',occurred:new Date().toISOString()}));
       const timestamp = String(Math.floor(Date.now() / 1000));
       const signature = createHmac('sha256', Buffer.from(senderKey, 'hex')).update(commerceSigningInput(timestamp, raw)).digest('hex');
-      return receiveCommerce(lab.db, account.id, raw, timestamp, signature, checkoutEnv);
+      return receiveCommerce(lab.gatewayDb, account.id, raw, timestamp, signature, checkoutEnv);
     };
     assert.equal((await sale('outro-produto','test')).recorded, false);
     await commerceAdmin(lab.db, {action:'connection-state', id:account.id, expected_version:1, state:'ACTIVE'}, checkoutEnv);
@@ -1056,7 +1063,7 @@ for (const width of [1440, 390]) {
     const raw = Buffer.from(JSON.stringify(sample));
     const format = {version:2,test:true};
     const signature = createHmac('sha256', Buffer.from(key, 'hex')).update(commerceSigningInput(timestamp, raw, format)).digest('hex');
-    const handle = commerceWebhook(lab.db);
+    const handle = commerceWebhook(lab.gatewayDb);
     const receiver = createServer((req, res) => { if (!handle(req, res)) res.writeHead(404).end(); }).listen(0, '127.0.0.1');
     await once(receiver, 'listening');
     t.after(() => new Promise<void>(resolve => { receiver.close(() => resolve()); receiver.closeAllConnections(); }));

@@ -55,6 +55,9 @@ export function Incidents({api, project, id, action, setGuard}: {
     {label: 'Incidentes', path: id ? listPath : undefined, search: scopeSearch},
   ];
   const incidents = useQuery(project.id, signal => api.request<Incident[]>('incidents', {project: project.id}, signal));
+  const capacity = useQuery(!id ? project.id : '', signal =>
+    api.request<{total:number; common:number; totalLimit:number; commonLimit:number}>(
+      'health', {action:'incident-capacity',project:project.id}, signal));
   const pages = useQuery(project.id, signal => pageList(api, project.id, signal));
   const selected = pages.data?.pages.find(item => item.id === pid);
   const incident = incidents.data?.find(item => item.incident_id === id);
@@ -91,6 +94,10 @@ export function Incidents({api, project, id, action, setGuard}: {
     {!incidents.data && incidents.error === undefined && <Loading/>}
     {!id && incidents.data && <>
       <Heading title="Incidentes" description={project.name}/>
+      {capacity.data && (capacity.data.total>=capacity.data.totalLimit || capacity.data.common>=capacity.data.commonLimit) &&
+        <p role="status">{capacity.data.total>=capacity.data.totalLimit
+          ? 'Capacidade total atingida. Novos domínios podem ser recusados até a retenção liberar posições.'
+          : 'Capacidade comum atingida. Revise os sinais não verificados. Contextos já aprovados ainda podem usar a reserva.'}</p>}
       <section className="panel">
         <div className="filters">
           <label>Buscar domínio<input value={term} maxLength={253} onChange={event =>

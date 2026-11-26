@@ -23,9 +23,10 @@ export async function cleanup(db: Pool, project: string): Promise<void> {
   const pool=await db.connect();
   try {
   await pool.query('BEGIN');
-  await retainAdministrativeChanges(pool,project);
   const retention=await notificationRetention(pool,project);
+  await retainAdministrativeChanges(pool,project);
   await retainObservedMetrics(pool,project);
+  await pool.query('SELECT pg_advisory_xact_lock(hashtext($1))',[project]);
   await retainInvestigationReceipts(pool,project);
   const timeline = await pool.query("SELECT to_regclass('investigation_timeline') IS NOT NULL AS installed");
   if (timeline.rows[0].installed) await pool.query("DELETE FROM investigation_timeline WHERE project_id=$1 AND recorded_at < clock_timestamp()-interval '30 days'",[project]);
@@ -35,7 +36,11 @@ export async function cleanup(db: Pool, project: string): Promise<void> {
   await pool.query("DELETE FROM observations WHERE project_id = $1 AND observed_at < now() - interval '7 days'", [project]);
   await pool.query("DELETE FROM observation_source_days WHERE project_id = $1 AND day < (now() AT TIME ZONE 'UTC')::date - 7", [project]);
   await pool.query("DELETE FROM observation_days WHERE project_id = $1 AND day < (now() AT TIME ZONE 'UTC')::date - 7", [project]);
-  const expired = await pool.query(`DELETE FROM incidents i WHERE project_id = $1 AND last_seen < now() - interval '30 days' AND NOT EXISTS (SELECT 1 FROM alert_outbox a WHERE a.incident_id=i.id AND a.sent_at IS NULL AND a.expired_at IS NULL AND (NOT $2 OR ($3::timestamptz IS NOT NULL AND i.first_seen<=$3))) RETURNING id`, [project,retention.active,retention.cutoff]);
+  const triage=(await pool.query("SELECT to_regclass('incident_status_audit') IS NOT NULL AS installed")).rows[0].installed;
+  const expired = await pool.query(`DELETE FROM incidents i WHERE project_id = $1
+    AND CASE WHEN status='unverified' AND COALESCE(to_jsonb(i)->>'triage_version','0')='0' THEN LEAST(first_seen,last_seen) ELSE last_seen END < now() - interval '30 days'
+    ${triage ? "AND NOT EXISTS (SELECT 1 FROM incident_status_audit r WHERE r.incident_id=i.id AND r.recorded_at>=statement_timestamp()-interval '30 days')" : ''}
+    AND NOT EXISTS (SELECT 1 FROM alert_outbox a WHERE a.incident_id=i.id AND a.sent_at IS NULL AND a.expired_at IS NULL AND (NOT $2 OR ($3::timestamptz IS NOT NULL AND i.first_seen<=$3))) RETURNING id`, [project,retention.active,retention.cutoff]);
   if (expired.rowCount) process.stderr.write(`Expired ${expired.rowCount} inactive incident(s) and associated alerts under retention policy\n`);
   await pool.query('COMMIT');
   } catch(error) { await pool.query('ROLLBACK'); throw error; } finally {pool.release();}
@@ -53,6 +58,13 @@ export async function observe(pool: Pool, project: string, allowedOrigin: string
   finally { client.release(); }
 }
 
+export async function incidentCapacity(db: Pick<Pool,'query'>, project: string) {
+  const {rows:[row]}=await db.query(`SELECT count(*)::int AS total,
+    count(*) FILTER (WHERE status<>'false_positive')::int AS common
+    FROM incidents WHERE project_id=$1`,[project]);
+  return {total:Number(row.total),common:Number(row.common),totalLimit:100,commonLimit:90};
+}
+
 // The caller owns the transaction and any eligibility checks.
 export async function recordObservation(client: PoolClient, project: string, origin: string, source: 'core' | 'fallback', evidence?: unknown, corroborated?: () => Promise<boolean>): Promise<'observed' | 'capacity'> {
   const host = hostFromUrl(origin);
@@ -60,12 +72,13 @@ export async function recordObservation(client: PoolClient, project: string, ori
   await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [project]);
   const existing = await client.query('SELECT id FROM incidents WHERE project_id=$1 AND host=$2', [project, host]);
   if (!existing.rowCount) {
-    const count = await client.query('SELECT count(*)::int AS n FROM incidents WHERE project_id=$1', [project]);
-    const total = count.rows[0].n;
-    if (total >= 100 || (total >= 90 && !await corroborated?.())) return 'capacity';
+    const {total, common, totalLimit, commonLimit}=await incidentCapacity(client,project);
+    if (total>=totalLimit || (common>=commonLimit && !await corroborated?.())) return 'capacity';
   }
   const incident = await client.query(`INSERT INTO incidents (project_id, host) VALUES ($1, $2)
-    ON CONFLICT (project_id, host) DO UPDATE SET last_seen = now() RETURNING id`, [project, host]);
+    ON CONFLICT (project_id, host) DO UPDATE SET last_seen =
+      CASE WHEN incidents.status='false_positive' THEN incidents.last_seen ELSE now() END
+    RETURNING id`, [project, host]);
   const day = await client.query(`INSERT INTO observation_source_days(project_id,host,day,source) VALUES($1,$2,(now() AT TIME ZONE 'UTC')::date,$3)
     ON CONFLICT DO NOTHING RETURNING host`, [project, host, source]);
   if (day.rowCount) {

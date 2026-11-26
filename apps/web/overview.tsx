@@ -24,6 +24,8 @@ type OverviewReport = {
 };
 type DailyHistory = {
   copies: Copy[];
+  points: {copy_origin:string; copy_path:string; marker:string; surface:string|null; clicks:string}[];
+  points_truncated:boolean;
   coverage: {project_id: string; first_day: string; complete_before: string}[];
   days: {day: string; action: string; traffic_class: keyof typeof trafficLabels; events: string}[];
 };
@@ -215,6 +217,20 @@ export function Overview({api, projects}: {api: AdminApi; projects: Project[]}) 
                 </tr>)}</tbody>
             </table>
           </div>
+          {history.data.daily_history.points.length>0 && <>
+            <h3>Cliques históricos por CTA</h3>
+            {history.data.daily_history.points_truncated && <p className="muted">Exibindo os 200 CTAs com mais cliques no recorte.</p>}
+            <div className="finance-table-wrap" tabIndex={0} role="region" aria-label="Cliques históricos por CTA">
+              <table className="activity-table finance-table overview-table">
+                <thead><tr><th scope="col">CTA</th><th scope="col">Cópia</th><th scope="col">Cliques</th></tr></thead>
+                <tbody>{history.data.daily_history.points.map(point=><tr key={JSON.stringify([point.copy_origin,point.copy_path,point.marker,point.surface])}>
+                  <th scope="row">{point.marker}{point.surface && <small>{point.surface}</small>}</th>
+                  <td data-heading="Cópia">{point.copy_origin}{point.copy_path}</td>
+                  <td data-heading="Cliques">{point.clicks}</td>
+                </tr>)}</tbody>
+              </table>
+            </div>
+          </>}
         </> : <p className="muted">Sem dias completos consolidados no recorte.</p>}
     </details>
     <section className="panel overview-estimate" aria-labelledby="overview-estimate">

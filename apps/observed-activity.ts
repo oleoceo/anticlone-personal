@@ -99,6 +99,12 @@ export async function observedDailyHistory(db: Pool, filters: unknown[], copy: R
       SELECT DISTINCT copy_origin AS origin,copy_path AS pathname FROM eligible
       WHERE $2::uuid IS NOT NULL AND copy_origin IS NOT NULL AND copy_path IS NOT NULL
       ORDER BY origin,pathname LIMIT 200
+    ), points AS (
+      SELECT copy_origin,copy_path,marker,surface,sum(events)::text AS clicks
+      FROM eligible WHERE $2::uuid IS NOT NULL AND action='CTA_CLICK_OBSERVED' AND marker IS NOT NULL
+      AND ($7::text IS NULL OR (copy_origin=$7 AND copy_path=$8))
+      GROUP BY copy_origin,copy_path,marker,surface
+      ORDER BY sum(events) DESC,copy_origin,copy_path,marker,surface LIMIT 201
     ), totals AS (
       SELECT day, action, traffic_class, COALESCE(sum(events),0)::text AS events
       FROM eligible WHERE $7::text IS NULL OR (copy_origin=$7 AND copy_path=$8)
@@ -106,7 +112,9 @@ export async function observedDailyHistory(db: Pool, filters: unknown[], copy: R
     )
     SELECT COALESCE((SELECT json_agg(c ORDER BY project_id) FROM coverage c WHERE first_day<complete_before),'[]') AS coverage,
       COALESCE((SELECT json_agg(t ORDER BY day,action,traffic_class) FROM totals t),'[]') AS days,
-      COALESCE((SELECT json_agg(c ORDER BY origin,pathname) FROM copies c),'[]') AS copies
+      COALESCE((SELECT json_agg(c ORDER BY origin,pathname) FROM copies c),'[]') AS copies,
+      COALESCE((SELECT json_agg(p) FROM points p),'[]') AS points
   `,[...filters,copy?.origin ?? null,copy?.pathname ?? null]);
-  return result.rows[0];
+  const {points,...history}=result.rows[0];
+  return {...history,points:points.slice(0,200),points_truncated:points.length>200};
 }

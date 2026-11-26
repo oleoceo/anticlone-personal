@@ -52,6 +52,11 @@ const activeProject: string = project ?? '';
 if (!project && process.env.GATEWAY_MODE!=='OPERATIONAL' && (process.env.GATEWAY_MODE === 'PILOT_OBSERVE' || process.env.GATEWAY_TRANSPORT || process.env.ALLOWED_ORIGIN || process.env.LAB_CONTROLLED_ORIGIN || process.env.LAB_CONTROLLED_RISK)) throw Error('multiproject pilot configuration unavailable');
 const pool = new Pool({ connectionString, max: 5, connectionTimeoutMillis: 2000, statement_timeout: 3000, query_timeout: 4000 });
 if (configuredSmtp || process.env.SMTP_PANEL_KEY) await pool.query('SELECT outbox_id,attempt,transport,started_at,finished_at,outcome FROM clone_delivery_attempts LIMIT 0');
+const maintenanceUrl=process.env.MAINTENANCE_DATABASE_URL;
+if (maintenanceUrl && (maintenanceOff || !notificationsOff))
+  throw new Error('separate maintenance requires active sweep and disabled Gateway notification delivery');
+const maintenancePool=maintenanceUrl ? new Pool({connectionString:maintenanceUrl,max:1,connectionTimeoutMillis:2000,statement_timeout:3000,query_timeout:4000}) : pool;
+if (maintenancePool!==pool) maintenancePool.on('error',()=>process.stderr.write('maintenance database connection failed\n'));
 pool.on('error', () => process.stderr.write('database connection failed\n'));
 if (process.env.GATEWAY_MODE === 'PILOT_OBSERVE' && (process.env.ALLOWED_ORIGIN || process.env.LAB_CONTROLLED_ORIGIN || process.env.LAB_CONTROLLED_RISK)) throw Error('laboratory configuration forbidden in pilot');
 // One-time legacy import is driven solely by the local operator's old configuration.
@@ -87,7 +92,7 @@ const bootstrap = runtimeWithDiscovery('bootstrap.js');
 const core = runtimeWithDiscovery('core.js');
 const inventoryScript = readFileSync('runtime/cta-inventory.js');
 const fallback = readFileSync('runtime/fallback.js');
-const maintainProjects = projectMaintenance(pool,process.env,project);
+const maintainProjects = projectMaintenance(maintenancePool,process.env,project,pool);
 const layerObservations=runtimeLayerObservations(pool,process.env);
 const scoped = scopedGateway(pool, {'runtime.js':bootstrap,'core.js':core,'fallback.js':fallback},async(id,page,origin,source)=>{
   const key='scoped_'+randomUUID();
@@ -331,22 +336,22 @@ let installationCleanupAfter = 0;
 let healthCleanupAfter = 0;
 async function reconcileMaintenanceFailure() {
   await failures.reconcile(async pending => {
-    if (pending.key) await reconcileOperationalEpisode(pool,activeProject,pending.source,pending.key,pending.openedAt,pending.recoveredAt,pending.safeCode);
-    else await recoverOperationalSource(pool,activeProject,pending.source,pending.openedAt);
+    if (pending.key) await reconcileOperationalEpisode(maintenancePool,activeProject,pending.source,pending.key,pending.openedAt,pending.recoveredAt,pending.safeCode);
+    else await recoverOperationalSource(maintenancePool,activeProject,pending.source,pending.openedAt);
   });
 }
 async function maintenance() {
   if (busy) return;
   busy = true;
   try {
-    const active=await operationallyEligible(pool,activeProject);
-    const cloneSmtp = active && !notificationsOff ? await currentSmtpProvider(pool, configuredSmtp) : undefined;
+    const active=await operationallyEligible(maintenancePool,activeProject);
+    const cloneSmtp = active && !notificationsOff ? await currentSmtpProvider(maintenancePool, configuredSmtp) : undefined;
     const delivery = cloneSmtp ?? (notificationsOff || process.env.SMTP_PANEL_KEY ? undefined : smtpPort);
-    const temporalOrigin = !mode.pilot && optional.canaryDegradation.state !== 'NOT_INSTALLED' ? controlledOrigin ?? await scopedCorrelationOrigin(pool,activeProject,process.env) : undefined;
-    await degradationTask('maintenance', () => maintainDegradation(pool, activeProject, temporalOrigin, optional.canaryDegradation.state !== 'NOT_INSTALLED'));
+    const temporalOrigin = !mode.pilot && optional.canaryDegradation.state !== 'NOT_INSTALLED' ? controlledOrigin ?? await scopedCorrelationOrigin(maintenancePool,activeProject,process.env) : undefined;
+    await degradationTask('maintenance', () => maintainDegradation(maintenancePool, activeProject, temporalOrigin, optional.canaryDegradation.state !== 'NOT_INSTALLED'));
     try {
-      await cleanup(pool,activeProject);
-      if (active && delivery !== undefined) await deliverOne(pool, activeProject, delivery);
+      await cleanup(maintenancePool,activeProject);
+      if (active && delivery !== undefined) await deliverOne(maintenancePool, activeProject, delivery);
       observeFailure('maintenance',false);
     } catch (error) {
       const code=(error as {code?:unknown} | null)?.code;
@@ -354,29 +359,29 @@ async function maintenance() {
       observeFailure('maintenance',true,safeCode);
       process.stderr.write('maintenance MAINTENANCE_ERROR; persistence pending\n');
     }
-    if(active&&cloneSmtp&&Date.now()>=ctaDeliveryAfter){try{await deliverProviderCta(pool,activeProject,cloneSmtp);observeFailure('cta_delivery',false);}catch{ctaDeliveryAfter=Date.now()+60000;observeFailure('cta_delivery',true,'UNKNOWN');}}
+    if(active&&cloneSmtp&&Date.now()>=ctaDeliveryAfter){try{await deliverProviderCta(maintenancePool,activeProject,cloneSmtp);observeFailure('cta_delivery',false);}catch{ctaDeliveryAfter=Date.now()+60000;observeFailure('cta_delivery',true,'UNKNOWN');}}
     if (active) {
     await optional.health.run('maintenance', async () => {
       if (healthBaselineVersion !== healthBaselinePersisted) {
         const version=healthBaselineVersion;
-        await invalidateInactivity(pool,activeProject,version > 1);
+        await invalidateInactivity(maintenancePool,activeProject,version > 1);
         healthBaselinePersisted = version;
       }
       await reconcileMaintenanceFailure();
       const version=healthBaselineVersion;
       if (version === healthBaselinePersisted && claimPending.size === 0)
-        await evaluateInactivity(pool, activeProject, () => version===healthBaselineVersion && claimPending.size===0);
-      if (delivery !== undefined && version === healthBaselineVersion && version === healthBaselinePersisted) await deliverHealth(pool, activeProject, delivery, () => version===healthBaselineVersion);
+        await evaluateInactivity(maintenancePool, activeProject, () => version===healthBaselineVersion && claimPending.size===0);
+      if (delivery !== undefined && version === healthBaselineVersion && version === healthBaselinePersisted) await deliverHealth(maintenancePool, activeProject, delivery, () => version===healthBaselineVersion);
     });
     }
     await optional.health.run('retention',async()=>{
       if (Date.now() >= healthCleanupAfter) {
-        await maintainHealthHistory(pool, activeProject);
+        await maintainHealthHistory(maintenancePool, activeProject);
         healthCleanupAfter = Date.now() + 60 * 60_000;
       }
     });
     if (Date.now() >= installationCleanupAfter) {
-      const completed = await optional.installation.run('retention', () => pool.query("DELETE FROM installation_signals WHERE project_id=$1 AND last_observed_at < now()-interval '7 days'", [activeProject]));
+      const completed = await optional.installation.run('retention', () => maintenancePool.query("DELETE FROM installation_signals WHERE project_id=$1 AND last_observed_at < now()-interval '7 days'", [activeProject]));
       if (completed) installationCleanupAfter = Date.now() + 60 * 60_000;
     }
   }
@@ -392,15 +397,15 @@ async function infrastructureMaintenance() {
   if (dnsBusy) return;
   dnsBusy = true;
   try {
-    const installed = await pool.query("SELECT to_regclass('infrastructure_dns_observations') IS NOT NULL AS installed");
+    const installed = await maintenancePool.query("SELECT to_regclass('infrastructure_dns_observations') IS NOT NULL AS installed");
     if (!installed.rows[0].installed) return;
     if (Date.now() >= dnsRetentionAfter) {
-      await pool.query("DELETE FROM infrastructure_dns_observations WHERE project_id=$1 AND observed_at<now()-interval '30 days'",[activeProject]);
+      await maintenancePool.query("DELETE FROM infrastructure_dns_observations WHERE project_id=$1 AND observed_at<now()-interval '30 days'",[activeProject]);
       dnsRetentionAfter=Date.now()+3600_000;
     }
-    if (dnsResolver && await operationallyEligible(pool,activeProject)) {
+    if (dnsResolver && await operationallyEligible(maintenancePool,activeProject)) {
       const host = dnsHosts[dnsIndex++ % dnsHosts.length];
-      await collectInfrastructure(pool,activeProject,host,dnsHosts,dnsResolver,`configured-dns:${process.env.INFRASTRUCTURE_DNS_SERVER}`);
+      await collectInfrastructure(maintenancePool,activeProject,host,dnsHosts,dnsResolver,`configured-dns:${process.env.INFRASTRUCTURE_DNS_SERVER}`);
     }
   } catch { process.stderr.write('infrastructure DNS maintenance failed\n'); }
   finally { dnsBusy = false; }
@@ -418,4 +423,4 @@ if (!maintenanceOff) {
   void maintainProjects();
   timer = setInterval(sweep, 1000);
 }
-process.on('SIGTERM', () => { clearInterval(timer); clearInterval(dnsTimer); server.close(() => { void pool.end().finally(() => process.exit()); }); });
+process.on('SIGTERM', () => { clearInterval(timer); clearInterval(dnsTimer); server.close(() => { void Promise.all([pool.end(),...(maintenancePool===pool ? [] : [maintenancePool.end()])]).finally(() => process.exit()); }); });

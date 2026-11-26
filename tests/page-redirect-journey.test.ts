@@ -1,9 +1,11 @@
+import {syntheticTls} from './npm-fixture.js';
+import {restrictedRuntimeRoles} from './restricted-runtime-roles.js';
 import {notificationWorkerRole} from './notification-worker-role.js';
 import assert from 'node:assert/strict';
 import {createHash,randomUUID,scryptSync,X509Certificate} from 'node:crypto';
 import {once} from 'node:events';
 import {execFileSync,spawn,type ChildProcess} from 'node:child_process';
-import {createServer as httpServer,request} from 'node:http';
+import {createServer as httpServer} from 'node:http';
 import {createServer as httpsServer,request as httpsRequest} from 'node:https';
 import type {AddressInfo} from 'node:net';
 import {mkdtemp,readFile,readdir,rm} from 'node:fs/promises';
@@ -46,6 +48,7 @@ test('authenticated copy rules, native CTA restoration, 150 ms browser navigatio
   const root=new Pool({connectionString:process.env.TEST_DATABASE_URL});
   await root.query(`CREATE SCHEMA ${schema}`);
   const db=new Pool({connectionString:process.env.TEST_DATABASE_URL,options:`-c search_path=${schema}`});
+  let runtimeRoles:Awaited<ReturnType<typeof restrictedRuntimeRoles>>|undefined;
   let workerRole:Awaited<ReturnType<typeof notificationWorkerRole>>|undefined;
   const dir=await mkdtemp(join(tmpdir(),'redirect-journey-'));
   const processes:ChildProcess[]=[];
@@ -84,11 +87,14 @@ test('authenticated copy rules, native CTA restoration, 150 ms browser navigatio
     const pin=createHash('sha256').update(new X509Certificate(tls.cert).publicKey.export({type:'spki',format:'der'})).digest('base64');
     const reservation=httpServer(), port=await listen(reservation);
     await close(reservation);
+    const npmTls=await syntheticTls(dir);
+    const upstreamTls={servername:browserHost,ca:await readFile(join(dir,'server.crt')),
+      cert:await readFile(join(dir,'proxy.crt')),key:await readFile(join(dir,'proxy.key'))};
     let advertisedContract: string | undefined;
     proxy=httpsServer(tls,(req,res)=>{
       if (delays.error && /\/g$/.test(req.url??'')) {res.writeHead(503,{'Access-Control-Allow-Origin':'*'}).end();return;}
       const fixtureClient = /^AntiCloneFixture-([2-5])$/.exec(req.headers['user-agent']??'');
-      const upstream=request({hostname:'127.0.0.1',port,path:req.url,method:req.method,
+      const upstream=httpsRequest({hostname:'127.0.0.1',port,...upstreamTls,path:req.url,method:req.method,
         headers:{...req.headers,host:browserHost,'x-forwarded-proto':'https','x-forwarded-for':'127.0.0.'+(fixtureClient?.[1]??'1')}},answer=>{
         if (req.url==='/healthz' && advertisedContract) answer.headers['x-anticlone-redirect-contract']=advertisedContract;
         const relay=()=>{res.writeHead(answer.statusCode??502,answer.headers);answer.pipe(res);};
@@ -101,9 +107,21 @@ test('authenticated copy rules, native CTA restoration, 150 ms browser navigatio
     const proxyPort=await listen(proxy);
     // Both the Admin Node process and Chromium must resolve the fixture gateway.
     const gateway='https://localhost:'+proxyPort;
+    runtimeRoles=await restrictedRuntimeRoles(db,schema,process.env.TEST_DATABASE_URL);
+    for(const [connectionString,denied] of [
+      [runtimeRoles.admin,'ALTER TABLE projects ADD COLUMN denied integer'],
+      [runtimeRoles.publicGateway,"UPDATE projects SET lifecycle_state='ARCHIVED'"],
+      [runtimeRoles.privateGateway,'SELECT * FROM admin_totp_replay'],
+      [runtimeRoles.maintenance,'SELECT session_id FROM observed_action_facts'],
+    ]) {
+      const restricted=new Pool({connectionString,options:`-c search_path=${schema}`});
+      try {await assert.rejects(restricted.query(denied),{code:'42501'});}
+      finally {await restricted.end();}
+    }
     const privateEnv={...process.env,PROJECT_ID:undefined,DATABASE_URL:process.env.TEST_DATABASE_URL,
       PGOPTIONS:`-c search_path=${schema}`,SMTP_PORT:'1',NODE_EXTRA_CA_CERTS:join(dir,'cert')};
-    launch('server.js',{...privateEnv,PORT:String(port),GATEWAY_MODE:'OPERATIONAL',GATEWAY_TRANSPORT:'HTTPS_PROXY',PUBLIC_GATEWAY_HOST:browserHost,GATEWAY_NOTIFICATION_DELIVERY:'off'});
+    launch('server.js',{...privateEnv,...npmTls,DATABASE_URL:runtimeRoles.publicGateway,PORT:String(port),
+      GATEWAY_BACKGROUND_MAINTENANCE:'off',NPM_LISTEN_ADDRESS:'127.0.0.1',NPM_PROXY_PEER_ADDRESS:'127.0.0.1',GATEWAY_NOTIFICATION_DELIVERY:'off'});
     await until(()=>new Promise<boolean>(resolve=>{
       const probe=httpsRequest({hostname:'127.0.0.1',port:proxyPort,servername:browserHost,ca:tls.cert,path:'/healthz'},reply=>{
         let body='';reply.on('data',chunk=>body+=String(chunk));
@@ -114,6 +132,11 @@ test('authenticated copy rules, native CTA restoration, 150 ms browser navigatio
       });
       probe.on('error',()=>resolve(false));probe.end();
     }),'operational gateway');
+    const privateReservation=httpServer(), privatePort=await listen(privateReservation);
+    await close(privateReservation);
+    launch('server.js',{...privateEnv,DATABASE_URL:runtimeRoles.privateGateway,PORT:String(privatePort),
+      MAINTENANCE_DATABASE_URL:runtimeRoles.maintenance,GATEWAY_NOTIFICATION_DELIVERY:'off'});
+    await until(async()=>{try{return (await fetch('http://127.0.0.1:'+privatePort+'/healthz')).ok;}catch{return false;}},'restricted private Gateway');
     const landingPage=await readFile('tests/fixtures/page-redirect-copy.html','utf8');
     let html='', frozenHtml='', frozenBootstrap='';
     sites=httpsServer(tls,(req,res)=>{
@@ -135,11 +158,20 @@ test('authenticated copy rules, native CTA restoration, 150 ms browser navigatio
     const destinationB='https://destination-b.test:'+sitePort+'/ponto';
     const project='redirect-acceptance';
     await db.query('INSERT INTO projects(id,name,origin) VALUES($1,$2,$3)',[project,'Jornada de redirecionamento',original]);
+    await until(async()=>(await db.query('SELECT 1 FROM observed_daily_progress WHERE project_id=$1',[project])).rowCount===1,
+      'restricted maintenance retained and consolidated the project');
     const pageResult=await managePages(db,{project,action:'create',name:'LP de homologação',url:original+'/lp'});
     assert.ok('page' in pageResult && typeof pageResult.page==='string');
     const pageId=pageResult.page;
     const published=await distributionAdmin(db,{project,page:pageId,action:'publish'},{RUNTIME_PUBLIC_ORIGIN:gateway});
     assert.ok(published.distribution?.paths && published.snippets);
+    const privateClaim=await fetch('http://127.0.0.1:'+privatePort+'/i/'+published.distribution.installation+'/observe',{
+      method:'POST',headers:{origin:original,'content-type':'text/plain'},
+      body:JSON.stringify({origin:original,pathname:'/lp',signals:{}}),
+    });
+    assert.equal(privateClaim.status,204,'restricted private Gateway accepts the original');
+    assert.equal((await db.query("SELECT 1 FROM page_installation_signals WHERE project_id=$1 AND source='core'",[project])).rowCount,1);
+
     const entry=published.distribution.bases.TELEMETRY+published.distribution.paths['entry-decision'];
     const runtime=published.distribution.bases.SCRIPT+published.distribution.paths['runtime.js'];
     html=landingPage.replace('<!-- ANTICLONE_INSTALLATION -->',published.snippets.html).replace('</body>', `
@@ -163,7 +195,7 @@ test('authenticated copy rules, native CTA restoration, 150 ms browser navigatio
     await close(adminReservation);
     const adminOrigin='http://127.0.0.1:'+adminPort;
     const salt='0123456789abcdef0123456789abcdef', password='synthetic-panel-password', secret='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
-    launch('admin-server.js',{...privateEnv,...smtpEnv,ADMIN_PORT:String(adminPort),RUNTIME_PUBLIC_ORIGIN:gateway,ADMIN_OPERATIONAL_GATEWAY_ORIGIN:gateway,
+    launch('admin-server.js',{...privateEnv,...smtpEnv,DATABASE_URL:runtimeRoles.admin,ADMIN_PORT:String(adminPort),RUNTIME_PUBLIC_ORIGIN:gateway,ADMIN_OPERATIONAL_GATEWAY_ORIGIN:gateway,
       ADMIN_TOTP_SECRET:secret,ADMIN_PASSWORD_RECORD:`scrypt$${salt}$${scryptSync(password,Buffer.from(salt,'hex'),64).toString('hex')}`});
     await until(async()=>{try{return (await fetch(adminOrigin+'/admin/ui/novo/')).ok;}catch{return false;}},'authenticated panel fixture');
     browser=await chromium.launch({args:['--no-proxy-server',hostRules+', MAP lp-clone-tawny.vercel.app 127.0.0.1:'+sitePort,`--ignore-certificate-errors-spki-list=${pin}`]});
@@ -455,6 +487,7 @@ test('authenticated copy rules, native CTA restoration, 150 ms browser navigatio
     await db.end();
     await root.query(`DROP SCHEMA ${schema} CASCADE`);
     await workerRole?.drop(root);
+    await runtimeRoles?.drop(root);
     await root.end();
     await rm(dir,{recursive:true,force:true});
   }

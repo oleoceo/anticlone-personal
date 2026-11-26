@@ -11,8 +11,14 @@ export async function recordObservedFact(db:Pool, project:string, fact:ObservedF
     if(!await operationallyEligible(client,project,fact.page,true))throw new Error('inactive context');
     const prior=await client.query(`SELECT page_id,session_id,action,traffic_class,policy_version,evidence,COALESCE(to_jsonb(observed_action_facts)->'copy_cta','null'::jsonb)=$3::jsonb AND COALESCE(to_jsonb(observed_action_facts)->'session_copy','null'::jsonb)=$4::jsonb AS matches_copy FROM observed_action_facts WHERE project_id=$1 AND event_id=$2`,[project,fact.event,JSON.stringify(fact.copyCta ?? null),JSON.stringify(fact.sessionCopy ?? null)]);
     if(prior.rowCount){const row=prior.rows[0];if(row.page_id!==fact.page || row.session_id!==fact.session || row.action!==fact.action || row.traffic_class!==fact.traffic || row.policy_version!==fact.version || row.evidence!==fact.evidence || !row.matches_copy)throw new TypeError('event conflict');return {duplicate:true};}
-    await client.query("DELETE FROM observed_action_facts WHERE project_id=$1 AND received_at < clock_timestamp()-interval '7 days' AND to_regclass('observed_daily_actions') IS NULL",[project]);
-    const count=await client.query("SELECT count(*)::int n FROM observed_action_facts WHERE project_id=$1",[project]);
+    const count=await client.query(`WITH schema AS (
+      SELECT to_regclass('observed_daily_actions') IS NOT NULL AS daily
+    )
+    SELECT daily,(SELECT count(*)::int FROM observed_action_facts
+      WHERE project_id=$1 AND (daily OR received_at>=statement_timestamp()-interval '7 days')) AS n
+    FROM schema`,[project]);
+    if(!count.rows[0].daily)
+      await client.query("DELETE FROM observed_action_facts WHERE project_id=$1 AND received_at < statement_timestamp()-interval '7 days'",[project]);
     if(count.rows[0].n>=10000)throw new Error('fact capacity');
     const values=[project,fact.page,fact.event,fact.session,fact.action,fact.traffic,fact.version,fact.evidence];
     if (fact.copyCta) {
