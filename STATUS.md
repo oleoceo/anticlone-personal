@@ -53,6 +53,12 @@
 - Worker isolado: um SMTP aceito em uma tentativa para incidente novo, zero tentativas no anterior e nenhuma duplicata após recargas.
 - **BLOCKED** na suíte local completa: topologia Docker rootless/portas do host. Publicação e CI oficial pendentes de login GitHub. Homologação pública pendente. [Provas e procedimento](docs/ACEITACAO-PR88.md).
 
+## PR #88 — decisão de aceite do proprietário (25/11/2026)
+- O proprietário aceitou PAGE_REDIRECT com a eficácia atual. Na amostra Dev via Cloudflare do #95, 2 de 12 decisões elegíveis foram aplicadas e 10 foram descartadas por atraso, com navegação nativa preservada.
+- Prazo de 150 ms, fail-open e runtime vigente preservados. A otimização fica para trabalho futuro e sai dos gates da integração #88–#95.
+- O aceite Dev restante cobre descoberta e substituição de CTAs, escopo e persistência das regras, LP oficial e destino nativo, métricas e notificações. Reutilizar as provas dos PRs em páginas próprias autorizadas.
+- [Decisão registrada no PR #88](https://github.com/oleoceo/anticlone-personal/pull/88#issuecomment-7175801563).
+
 ## Redirecionamento e alertas na homologação Dev
 - Público OPERATIONAL via mTLS e privado PILOT_OBSERVE. A LP oficial permaneceu em sua URL no Chromium.
 - Política v2 autoriza só a cópia HTTPS em `/`, com direto/desconhecido em 100%. A cópia recebe HTTP 200/PAGE_REDIRECT em 275–337 ms e mantém fail-open.
