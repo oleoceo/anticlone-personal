@@ -161,7 +161,7 @@ type CopyAdmission = {
 };
 
 // One database snapshot checks the exact approval, its generations and the current project default.
-export async function copyRedirectAdmission(db: Pool, installation: string, origin: string, pathname: string) {
+export async function copyRedirectAdmission(db: Pick<Pool, 'query'>, installation: string, origin: string, pathname: string) {
   if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(installation)) return null;
   try {
     const result = await db.query<CopyAdmission>(`SELECT p.id AS project,pp.id AS page,official.origin AS original,

@@ -69,3 +69,44 @@ export async function observedActivity(db: Pool, filters: unknown[], copy: Retur
   }
   return activity;
 }
+
+export async function observedDailyHistory(db: Pool, filters: unknown[], copy: ReturnType<typeof activityCopy>) {
+  const {rows:[{ready}]}=await db.query("SELECT to_regclass('observed_daily_actions') IS NOT NULL AS ready");
+  if (!ready) return null;
+  const result=await db.query(`
+    WITH bounds AS (
+      SELECT GREATEST(
+        ((installed_at-interval '7 days') AT TIME ZONE 'UTC')::date+1,
+        (statement_timestamp() AT TIME ZONE 'UTC')::date-90,
+        ($3::timestamptz AT TIME ZONE 'UTC')::date+
+          CASE WHEN ($3::timestamptz AT TIME ZONE 'UTC')::time='00:00' THEN 0 ELSE 1 END
+      ) AS first_day, ($4::timestamptz AT TIME ZONE 'UTC')::date AS requested_end
+      FROM observed_daily_installation
+    ), coverage AS (
+      SELECT p.id AS project_id, first_day,
+        LEAST(requested_end,h.complete_before) AS complete_before
+      FROM projects p CROSS JOIN bounds LEFT JOIN observed_daily_progress h ON h.project_id=p.id
+      WHERE ($1::text IS NULL OR p.id=$1)
+      AND ($2::uuid IS NULL OR EXISTS (SELECT 1 FROM protected_pages l WHERE l.id=$2 AND l.project_id=p.id))
+      AND h.complete_before IS NOT NULL
+    ), eligible AS (
+      SELECT a.* FROM observed_daily_actions a JOIN coverage c USING(project_id)
+      WHERE a.day>=c.first_day AND a.day<c.complete_before AND ($2::uuid IS NULL OR a.page_id=$2)
+      AND ($5::text IS NULL OR a.traffic_class=$5)
+      AND ($6::text IS NULL OR ($6='PAGE_REDIRECT' AND a.action='PAGE_REDIRECT_ATTEMPT')
+        OR ($6='REPLACE_CONVERSION' AND a.action='CTA_CLICK_OBSERVED'))
+    ), copies AS (
+      SELECT DISTINCT copy_origin AS origin,copy_path AS pathname FROM eligible
+      WHERE $2::uuid IS NOT NULL AND copy_origin IS NOT NULL AND copy_path IS NOT NULL
+      ORDER BY origin,pathname LIMIT 200
+    ), totals AS (
+      SELECT day, action, traffic_class, COALESCE(sum(events),0)::text AS events
+      FROM eligible WHERE $7::text IS NULL OR (copy_origin=$7 AND copy_path=$8)
+      GROUP BY day,action,traffic_class
+    )
+    SELECT COALESCE((SELECT json_agg(c ORDER BY project_id) FROM coverage c WHERE first_day<complete_before),'[]') AS coverage,
+      COALESCE((SELECT json_agg(t ORDER BY day,action,traffic_class) FROM totals t),'[]') AS days,
+      COALESCE((SELECT json_agg(c ORDER BY origin,pathname) FROM copies c),'[]') AS copies
+  `,[...filters,copy?.origin ?? null,copy?.pathname ?? null]);
+  return result.rows[0];
+}

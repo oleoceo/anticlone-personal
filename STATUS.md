@@ -1,11 +1,11 @@
 # STATUS — AntiClone Personal
 
 ## Segurança e estabilização do Dev
-- Aceite FlowMembers preservado, incluindo 150 ms e fail-open.
-- Migration 078 tira DDL de autenticação do boot. PostgreSQL de laboratório aceitou login restrito e recusou DDL. Gateway público Dev usa superusuário.
-- Coleta scoped reutiliza uma conexão. Jornadas isoladas de CTA, redirect, detecção e e-mail passaram. Perfil comparativo coletado em laboratório; capacidade no limite pendente.
-- Artefato Admin conferido com a base #96 e prontidão FlowMembers confirmada em leitura. O recibo 6d00d0c está desatualizado.
-- S1 integral, S2 e S5 bloqueiam integração. D2 confirmado e aguardando avaliação da solução mínima. [Evidências](docs/ESTABILIZACAO-SEGURANCA-DEV.md).
+- PR #97 preserva o aceite FlowMembers, aliases e fail-open de 150 ms.
+- S1 parcial: MFA, worker SMTP e consolidação testados com permissões restritas. Admin integral, Gateways e manutenção geral continuam bloqueadores.
+- S2 e fronteira operacional S6/S7 aguardam a verificação de leoceo. S4 confirmado; atualizar recibo somente em publicação aprovada.
+- S5 contém a pressão em capacidade comum e reserva lugares para contextos já aprovados. Cópias novas sem aprovação continuam expostas ao teto.
+- D2 consolida eventos diários no PostgreSQL. D1 e DNS seguem sem ampliação de coleta. [Roteiro e evidências](docs/ESTABILIZACAO-SEGURANCA-DEV.md).
 
 ## F17/F20 — disponibilidade das regras por cópia no Dev
 - A revisão 2 da FlowMembers publica telemetria em `static-layer.com`. O Admin em `6d00d0c` exigia o host de controle `protect.leoceo.online` nas duas confirmações e retornava `TELEMETRY_MISMATCH`.

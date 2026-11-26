@@ -22,6 +22,11 @@ type OverviewReport = {
   estimate_projects?: {project: string; clicks: number; currency: string; numerator: string}[];
   estimate_assumptions?: {project: string; currency: string; ticket_minor: string; rate: number; version: string; configured_at: string}[];
 };
+type DailyHistory = {
+  copies: Copy[];
+  coverage: {project_id: string; first_day: string; complete_before: string}[];
+  days: {day: string; action: string; traffic_class: keyof typeof trafficLabels; events: string}[];
+};
 const reviewStates: Record<string, string> = {unverified: 'Não verificado', investigating: 'Em investigação',
   confirmed_copy: 'Cópia confirmada', false_positive: 'Falso positivo'};
 const dayMs = 86_400_000;
@@ -38,6 +43,7 @@ export function Overview({api, projects}: {api: AdminApi; projects: Project[]}) 
   const project = projects.find(item => item.id === filters.get('projeto'));
   const days = filters.get('dias') === '1' ? 1 : 7;
   const [until, setUntil] = useState(Date.now);
+  const [showHistory, setShowHistory] = useState(false);
   const from = until - days * dayMs;
   const scope = project ? [project] : projects;
   const inventory = useQuery(JSON.stringify(scope.map(item => item.id)), async signal => {
@@ -69,6 +75,11 @@ export function Overview({api, projects}: {api: AdminApi; projects: Project[]}) 
     api.request<OverviewReport>('commerce', {action:'report',activity:true,...(project ? {project:project.id} : {}),
       ...(metricPage ? {page:metricPage.id} : {}),...(copyValue ? {copyOrigin,copyPath} : {}),
       from:new Date(from).toISOString(),until:new Date(until).toISOString()}, signal));
+  const history = useQuery(showHistory && validScope ? JSON.stringify([project?.id,metricPage?.id,copyValue,until]) : '', signal =>
+    api.request<{daily_history: DailyHistory | null}>('commerce', {action:'report', activity:true, history:true,
+      ...(project ? {project:project.id} : {}), ...(metricPage ? {page:metricPage.id} : {}),
+      ...(copyValue ? {copyOrigin,copyPath} : {}), from:new Date(until-90*dayMs).toISOString(),
+      until:new Date(until).toISOString()}, signal));
   const installation = useQuery(page && project ? project.id + ':' + page.id : '', signal =>
     api.request<InstallationStatus>('distribution', {action: 'inspect', project: project!.id, page: page!.id}, signal));
   const alerts = useQuery(project?.id ?? '', signal => api.request<{state: string; items: unknown[]}>(
@@ -105,7 +116,8 @@ export function Overview({api, projects}: {api: AdminApi; projects: Project[]}) 
   }
   const clicks = observations?.reduce((sum, row) => sum + (row.action === 'CTA_CLICK_OBSERVED' ? row.events : 0), 0);
   const sessions = observations?.reduce((sum,row) => sum + (row.action === 'SESSION_OBSERVED' ? row.events : 0), 0);
-  const copies = report.data?.copies ?? [];
+  const copies = [...new Map([...(report.data?.copies ?? []),...(history.data?.daily_history?.copies ?? [])]
+    .map(item=>[JSON.stringify([item.origin,item.pathname]),item])).values()];
   const estimates = new Map(report.data?.estimate_projects?.map(row => [row.project, row] as const));
   const premises = new Map(report.data?.estimate_assumptions?.map(row => [row.project, row] as const));
   const count=(value: number|null|undefined, pending: boolean)=>value?.toLocaleString('pt-BR') ?? (pending ? 'Consultando' : 'Indisponível');
@@ -186,6 +198,25 @@ export function Overview({api, projects}: {api: AdminApi; projects: Project[]}) 
         </div>
       </> : <p className="muted">Sem cliques vinculados a um CTA neste período.</p>}
     </section>}
+    <details className="panel" onToggle={event => setShowHistory(event.currentTarget.open)}>
+      <summary>Histórico diário de sessões e cliques</summary>
+      {history.pending ? <Loading/> : history.error !== undefined ? <Failure error={history.error} retry={history.retry}/> :
+        history.data?.daily_history?.coverage.length ? <>
+          <p className="muted">Eventos reportados pelo navegador, por dia UTC. A cobertura abaixo exclui dias parciais e a janela recente. Sessões únicas do período não estão disponíveis neste histórico.</p>
+          <ul>{history.data.daily_history.coverage.map(item =>
+            <li key={item.project_id}>{projects.find(value=>value.id===item.project_id)?.name ?? item.project_id} · {item.first_day} até {item.complete_before} (exclusive)</li>)}</ul>
+          <div className="finance-table-wrap" tabIndex={0} role="region" aria-label="Histórico diário observado">
+            <table className="activity-table finance-table overview-table">
+              <thead><tr><th scope="col">Dia UTC</th><th scope="col">Evento</th><th scope="col">Origem do tráfego</th><th scope="col">Total</th></tr></thead>
+              <tbody>{history.data.daily_history.days.filter(item=>item.action==='SESSION_OBSERVED'||item.action==='CTA_CLICK_OBSERVED')
+                .map(item=><tr key={[item.day,item.action,item.traffic_class].join(':')}>
+                  <th scope="row">{item.day}</th><td data-heading="Evento">{item.action==='SESSION_OBSERVED' ? 'Sessão observada' : 'Clique observado'}</td>
+                  <td data-heading="Origem do tráfego">{overviewTrafficLabels[item.traffic_class]}</td><td data-heading="Total">{item.events}</td>
+                </tr>)}</tbody>
+            </table>
+          </div>
+        </> : <p className="muted">Sem dias completos consolidados no recorte.</p>}
+    </details>
     <section className="panel overview-estimate" aria-labelledby="overview-estimate">
       <div className="panel-heading">
         <h2 id="overview-estimate">Configuração da estimativa</h2>

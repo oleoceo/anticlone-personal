@@ -54,14 +54,15 @@ export async function observe(pool: Pool, project: string, allowedOrigin: string
 }
 
 // The caller owns the transaction and any eligibility checks.
-export async function recordObservation(client: PoolClient, project: string, origin: string, source: 'core' | 'fallback', evidence?: unknown): Promise<'observed' | 'capacity'> {
+export async function recordObservation(client: PoolClient, project: string, origin: string, source: 'core' | 'fallback', evidence?: unknown, corroborated?: () => Promise<boolean>): Promise<'observed' | 'capacity'> {
   const host = hostFromUrl(origin);
   // Serialize admission per project, including across processes and restarts.
   await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [project]);
   const existing = await client.query('SELECT id FROM incidents WHERE project_id=$1 AND host=$2', [project, host]);
   if (!existing.rowCount) {
     const count = await client.query('SELECT count(*)::int AS n FROM incidents WHERE project_id=$1', [project]);
-    if (count.rows[0].n >= 100) return 'capacity';
+    const total = count.rows[0].n;
+    if (total >= 100 || (total >= 90 && !await corroborated?.())) return 'capacity';
   }
   const incident = await client.query(`INSERT INTO incidents (project_id, host) VALUES ($1, $2)
     ON CONFLICT (project_id, host) DO UPDATE SET last_seen = now() RETURNING id`, [project, host]);

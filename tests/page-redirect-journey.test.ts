@@ -1,3 +1,4 @@
+import {notificationWorkerRole} from './notification-worker-role.js';
 import assert from 'node:assert/strict';
 import {createHash,randomUUID,scryptSync,X509Certificate} from 'node:crypto';
 import {once} from 'node:events';
@@ -45,6 +46,7 @@ test('authenticated copy rules, native CTA restoration, 150 ms browser navigatio
   const root=new Pool({connectionString:process.env.TEST_DATABASE_URL});
   await root.query(`CREATE SCHEMA ${schema}`);
   const db=new Pool({connectionString:process.env.TEST_DATABASE_URL,options:`-c search_path=${schema}`});
+  let workerRole:Awaited<ReturnType<typeof notificationWorkerRole>>|undefined;
   const dir=await mkdtemp(join(tmpdir(),'redirect-journey-'));
   const processes:ChildProcess[]=[];
   let smtp:SMTPServer|undefined;
@@ -415,8 +417,9 @@ test('authenticated copy rules, native CTA restoration, 150 ms browser navigatio
     await confirm('Revisar configuração SMTP','Salvar configuração SMTP','Configuração SMTP salva.');
     await confirm('Ativar alertas','Ativar novos alertas','Envio habilitado para novos eventos.');
     assert.equal(deliveries.length,0);
+    workerRole=await notificationWorkerRole(db,schema,process.env.TEST_DATABASE_URL);
     const workerStatus=join(dir,'worker.json');
-    const worker=launch('cta-delivery-worker.js',{...privateEnv,...smtpEnv,PROJECT_ID:project,NOTIFICATION_WORKER_MODE:'PROVIDER',NOTIFICATION_WORKER_STATUS_PATH:workerStatus});
+    const worker=launch('cta-delivery-worker.js',{...privateEnv,...smtpEnv,DATABASE_URL:workerRole.url,PROJECT_ID:project,NOTIFICATION_WORKER_MODE:'PROVIDER',NOTIFICATION_WORKER_STATUS_PATH:workerStatus});
     await until(async()=>{
       try { return JSON.parse(await readFile(workerStatus,'utf8')).state==='READY'; } catch { return false; }
     },'separate worker resolves the encrypted SMTP credential');
@@ -451,6 +454,7 @@ test('authenticated copy rules, native CTA restoration, 150 ms browser navigatio
     if (smtp) await new Promise<void>(resolve=>smtp!.close(()=>resolve()));
     await db.end();
     await root.query(`DROP SCHEMA ${schema} CASCADE`);
+    await workerRole?.drop(root);
     await root.end();
     await rm(dir,{recursive:true,force:true});
   }

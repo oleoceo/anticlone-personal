@@ -1,4 +1,4 @@
-import {copyCtaDecision, ctaPointKey, rememberCopyCtas, validateCopyCtaInventory} from './copy-cta-rules.js';
+import {copyCtaDecision, hasApprovedCopyCta, ctaPointKey, rememberCopyCtas, validateCopyCtaInventory} from './copy-cta-rules.js';
 import {validCopyPath,recordCopyDecision,redirectVisit,rememberCopyContext} from './page-copy-contexts.js';
 import { copyRedirectAdmission } from './page-redirect-rules.js';
 import { operationalAuthorization } from './operational-authorization.js';
@@ -195,7 +195,13 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>, collect
             res.writeHead(204).end();
             return;
           }
-          const result = authorized ? 'authorized' : await recordObservation(client, context.project, origin, core ? 'core' : 'fallback', core ? fields.signals : undefined);
+          const {project, page} = context;
+          const result = authorized ? 'authorized' : await recordObservation(client, context.project, origin, core ? 'core' : 'fallback', core ? fields.signals : undefined,
+            operational ? async () =>
+              Boolean(await operationalAuthorization(client, project, page, origin, url.pathname)) ||
+              ((await client.query("SELECT to_regclass('page_redirect_rules') IS NOT NULL AS ready")).rows[0].ready &&
+                (await copyRedirectAdmission(client, match[1], origin, url.pathname))?.admitted === true) ||
+              await hasApprovedCopyCta(client, {project, page, origin, pathname:url.pathname}) : undefined);
           await client.query('COMMIT');
           client.release();
           released = true;

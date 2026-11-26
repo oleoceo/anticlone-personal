@@ -1,3 +1,4 @@
+import {notificationWorkerRole} from './notification-worker-role.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID,scryptSync} from 'node:crypto';
@@ -52,10 +53,18 @@ test('CTA/health provider TLS + independent worker + audited backlog in Chromium
   let gateway:ChildProcess|undefined,worker:ChildProcess|undefined,browser:Awaited<ReturnType<typeof chromium.launch>>|undefined,admin:ChildProcess|undefined;
   const launch=(file:string,extra:Record<string,string>={})=>{const child=spawn(process.execPath,['dist/apps/'+file],{env:{...env,...extra},stdio:['ignore','ignore','pipe']});child.stderr!.on('data',chunk=>logs+=String(chunk));return child;};
   const startGateway=async()=>{gateway=launch('server.js');await until(async()=>{try{return(await fetch('http://127.0.0.1:'+port+'/healthz')).ok;}catch{return false;}},'real gateway ready');};
-  const startWorker=()=>worker=launch('cta-delivery-worker.js',{NOTIFICATION_WORKER_MODE:'PROVIDER',MONITOR_LOCAL_GATEWAY:'1',MONITOR_GATEWAY_PORT:String(port)});
+  let workerRole:Awaited<ReturnType<typeof notificationWorkerRole>>|undefined;
+  const startWorker=()=>worker=launch('cta-delivery-worker.js',{DATABASE_URL:workerRole!.url,NOTIFICATION_WORKER_MODE:'PROVIDER',MONITOR_LOCAL_GATEWAY:'1',MONITOR_GATEWAY_PORT:String(port)});
   const inventory=(first:string,second:string)=>importInventory(db,'one',{surface:'main',candidates:[{marker:'checkout01',kind:'a',parent:'div',ordinal:1,url:original+first},{marker:'checkout02',kind:'a',parent:'div',ordinal:2,url:original+second}]});
   try{
     for(const file of (await readdir('infra')).filter(f=>/^\d{3}_.*\.sql$/.test(f)).sort())await db.query((await readFile('infra/'+file,'utf8')).replace(/^\uFEFF/,''));
+    workerRole=await notificationWorkerRole(db,schema,process.env.TEST_DATABASE_URL);
+    const restricted=new Pool({connectionString:workerRole.url,options:`-c search_path=${schema}`});
+    try {
+      await assert.rejects(restricted.query('SELECT * FROM admin_totp_replay'),{code:'42501'});
+      await assert.rejects(restricted.query('UPDATE projects SET lifecycle_state=lifecycle_state'),{code:'42501'});
+      await assert.rejects(restricted.query('DELETE FROM incidents'),{code:'42501'});
+    } finally { await restricted.end(); }
     mark('migrated');
     await db.query("INSERT INTO projects(id,name,origin) VALUES('one','One',$1),('two','Two','https://other.test')",[original]);
     await enableInstallation(db,'one');await enableInstallation(db,'two');await configureHealth(db,'one',false,60,true);
@@ -178,7 +187,7 @@ test('CTA/health provider TLS + independent worker + audited backlog in Chromium
     assert.ok(!logs.includes(privateEnv.SMTP_PASSWORD)&&!logs.includes(privateEnv.SMTP_USER),'provider failures never log credentials');
     process.stdout.write('PROVIDER_NOTIFICATIONS '+JSON.stringify({smtp_acceptances:accepted.length,cta:result.attempts.filter(r=>r.queue==='CTA'),health:result.attempts.filter(r=>r.queue==='HEALTH'),reviews:result.history.map(r=>r.decision)})+'\n');
   }catch(error){process.stdout.write('PROVIDER_FAILURE '+phase+' '+String(error)+'\n');throw error;}
-  finally{await stop(worker);await stop(gateway);if(browser)await browser.close();await stop(admin);site.closeAllConnections();await new Promise<void>(r=>site.close(()=>r()));for(const socket of sockets)socket.destroy();await new Promise<void>(r=>smtp.close(()=>r()));await db.end();await root.query(`DROP SCHEMA ${schema} CASCADE`);await root.end();await rm(dir,{recursive:true,force:true});}
+  finally{await stop(worker);await stop(gateway);if(browser)await browser.close();await stop(admin);site.closeAllConnections();await new Promise<void>(r=>site.close(()=>r()));for(const socket of sockets)socket.destroy();await new Promise<void>(r=>smtp.close(()=>r()));await db.end();await root.query(`DROP SCHEMA ${schema} CASCADE`);await workerRole?.drop(root);await root.end();await rm(dir,{recursive:true,force:true});}
 });
 
 test('provider worker isolates failing queues/projects, respects paused monitor generations and stops new admissions',{timeout:90000},async()=>{

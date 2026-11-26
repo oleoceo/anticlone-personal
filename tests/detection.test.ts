@@ -57,12 +57,47 @@ test('real postgres: original, repeated simulated clone and reconnect', async ()
     const observations = await pool.query('SELECT host, source FROM observations WHERE project_id=$1', [project]);
     assert.deepEqual(incidents.rows, [{host:'clone.test', status:'unverified'}]); assert.equal(observations.rowCount, 1);
     assert.ok(observations.rows.every(row => row.host === 'clone.test' && row.source === 'core'));
-    await pool.query("INSERT INTO incidents(project_id,host) SELECT $1, 'host-' || n || '.test' FROM generate_series(1,99) n", [project]);
+    await pool.query("INSERT INTO incidents(project_id,host) SELECT $1, 'host-' || n || '.test' FROM generate_series(1,89) n", [project]);
     assert.equal(await observe(pool, project, 'https://original.test', 'https://overflow.test'), 'capacity');
     assert.equal(await observe(pool, project, 'https://original.test', 'https://clone.test'), 'observed');
   } finally {
     await pool.query('DELETE FROM observation_source_days WHERE project_id=$1',[project]);
       await pool.query('DELETE FROM observation_days WHERE project_id=$1', [project]);
     await pool.query('DELETE FROM observations WHERE project_id=$1', [project]); await pool.query('DELETE FROM incidents WHERE project_id=$1', [project]); await pool.end();
+  }
+});
+
+test('reserved incident capacity preserves a first alert and deduplicates concurrent normal observations', async () => {
+  assert.ok(process.env.TEST_DATABASE_URL);
+  const db = new Pool({connectionString:process.env.TEST_DATABASE_URL,max:2,connectionTimeoutMillis:1000});
+  const project = 'reserve_' + crypto.randomUUID();
+  try {
+    for (const file of ['001_initial','002_alerts','004_observation_sources','005_canaries','019_alert_outbox_expiry'])
+      await db.query(await readFile(`infra/${file}.sql`,'utf8'));
+    await db.query("INSERT INTO incidents(project_id,host) SELECT $1, 'fixture-' || n || '.test' FROM generate_series(1,90) n",[project]);
+    const {recordObservation}=await import('../apps/detection.js');
+    const admit=async () => {
+      const client=await db.connect();
+      try {
+        await client.query('BEGIN');
+        const result=await recordObservation(client,project,'https://confirmed-fixture.test','core',undefined,async()=>true);
+        await client.query('COMMIT');
+        return result;
+      } catch(error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {client.release();}
+    };
+    assert.deepEqual(await Promise.all([admit(),admit()]),['observed','observed']);
+    const {rows:[row]}=await db.query(`SELECT i.status,count(DISTINCT a.id)::int AS alerts,count(DISTINCT o.id)::int AS observations
+      FROM incidents i LEFT JOIN alert_outbox a ON a.incident_id=i.id
+      LEFT JOIN observations o ON o.project_id=i.project_id AND o.host=i.host
+      WHERE i.project_id=$1 AND i.host='confirmed-fixture.test' GROUP BY i.status`,[project]);
+    assert.deepEqual(row,{status:'unverified',alerts:1,observations:1});
+    assert.equal(db.waitingCount,0);
+  } finally {
+    for(const table of ['observation_source_days','observations','incidents'])
+      await db.query('DELETE FROM '+table+' WHERE project_id=$1',[project]);
+    await db.end();
   }
 });

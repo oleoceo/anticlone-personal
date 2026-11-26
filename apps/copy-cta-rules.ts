@@ -109,6 +109,24 @@ async function pointsForCopy(db:Pick<Pool,'query'>, scope:Scope):Promise<Point[]
   scopeParameters(scope))).rows[0]?.points ?? [];
 }
 
+// Admission priority comes from a current administrative rule, independently
+// of the input session, browser claims, or decision allocation.
+export async function hasApprovedCopyCta(client: PoolClient, scope: Scope) {
+  if (!await installed(client)) return false;
+  const {rows:[row]}=await client.query(`
+    SELECT EXISTS(
+      SELECT 1 FROM (
+        SELECT DISTINCT ON (surface,marker) enabled,url_generation,config_generation
+        FROM copy_cta_rules
+        WHERE project_id=$1 AND page_id=$2 AND copy_origin=$3 AND copy_pathname=$4
+        ORDER BY surface,marker,version DESC
+      ) r JOIN protected_pages p ON p.project_id=$1 AND p.id=$2
+      WHERE r.enabled AND r.url_generation=p.url_generation AND r.config_generation=p.config_generation
+    ) AS approved
+  `,scopeParameters(scope));
+  return row.approved===true;
+}
+
 export async function copyCtaDecision(client:PoolClient, scope:Scope, session:unknown, trafficClass:string, discoveryRuntime=false) {
   if (!await installed(client)) return null;
   const rules=await rulesForCopy(client,scope);

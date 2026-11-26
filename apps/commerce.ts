@@ -1,4 +1,4 @@
-import {activityCopy, observedActivity} from './observed-activity.js';
+import {activityCopy, observedActivity, observedDailyHistory} from './observed-activity.js';
 import {createCipheriv,createDecipheriv,createHash,createHmac,randomBytes,randomUUID,timingSafeEqual} from 'node:crypto';
 import type {IncomingMessage,ServerResponse} from 'node:http';
 import type {Pool,PoolClient} from 'pg';
@@ -179,13 +179,17 @@ export function commerceWebhook(db:Pool,env:NodeJS.ProcessEnv=process.env){
 }
 
 async function commerceReport(db:Pool,d:Record<string,unknown>){
- only(d,['project','page','offer','checkout','provider','from','until','traffic','protection','activity','copyOrigin','copyPath']);
+ only(d,['project','page','offer','checkout','provider','from','until','traffic','protection','activity','copyOrigin','copyPath','history']);
  if(typeof d.from!=='string'||typeof d.until!=='string'||!Number.isFinite(Date.parse(d.from))||!Number.isFinite(Date.parse(d.until))||Date.parse(d.until)<=Date.parse(d.from)||Date.parse(d.until)-Date.parse(d.from)>366*86400000)throw new TypeError('invalid report period');
- if(d.activity!==undefined&&(d.activity!==true||Date.parse(d.until)-Date.parse(d.from)>7*86400000))throw new TypeError('invalid activity period');
+ if(d.activity!==undefined&&(d.activity!==true||Date.parse(d.until)-Date.parse(d.from)>(d.history===true?90:7)*86400000))throw new TypeError('invalid activity period');
  const project=d.project?identifier(d.project):null,page=d.page?uuid(d.page):null,offer=d.offer?identifier(d.offer):null,checkout=d.checkout?identifier(d.checkout):null,provider=d.provider?uuid(d.provider):null;
  const traffic=d.traffic?String(d.traffic):null,protection=d.protection?String(d.protection):null;
  if(traffic&&!['PAID_ATTRIBUTED','ORGANIC','REFERRAL','DIRECT_UNKNOWN'].includes(traffic)||protection&&!['PAGE_REDIRECT','REPLACE_CONVERSION'].includes(protection))throw new TypeError('invalid observation filter');
  const copy=activityCopy(d,project,page);
+ if(d.history!==undefined) {
+   if(d.history!==true||d.activity!==true||offer||checkout||provider)throw new TypeError('invalid history scope');
+   return {daily_history:await observedDailyHistory(db,[project,page,d.from,d.until,traffic,protection],copy)};
+ }
  // Orders have no demonstrable traffic/action chain; never assign them the browser's class.
  const currencies=traffic||protection||copy?null:(await db.query(`SELECT o.currency,count(*) FILTER(WHERE o.paid_at >= $6 AND o.paid_at < $7)::int reported_sales,
  coalesce(sum(o.amount_minor) FILTER(WHERE o.paid_at >= $6 AND o.paid_at < $7),0)::text reported_amount_minor,
