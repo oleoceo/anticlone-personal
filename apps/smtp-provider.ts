@@ -17,11 +17,23 @@ export function smtpProvider(env: NodeJS.ProcessEnv): SmtpProvider | undefined {
   return Object.freeze({provider:provider as SmtpProvider['provider'],host,port,tls_mode:tls_mode as SmtpProvider['tls_mode'],sender,recipient,user,password});
 }
 
-export async function providerAuthorized(db: Pick<PoolClient,'query'>, config:SmtpProvider): Promise<boolean> {
+export function providerMatchesSettings(config: SmtpProvider, row: Record<string, unknown> | undefined) {
+  if (!row) return false;
+  const matchesRevision = config.settingsVersion === undefined
+    ? row.smtp_secret_encrypted == null
+    : row.version === config.settingsVersion;
+  return matchesRevision && (['provider','host','port','tls_mode','sender','recipient'] as const).every(key=>row[key]===config[key]);
+}
+
+export async function providerAdmission(db: Pick<PoolClient,'query'>, config:SmtpProvider): Promise<string | null | false> {
   const result=await db.query(`SELECT provider,host,port,tls_mode,sender,recipient,requested,version,
-    to_jsonb(notification_settings)->>'smtp_secret_encrypted' IS NOT NULL AS panel_credentials FROM notification_settings WHERE singleton=true`);
+    CASE WHEN to_jsonb(notification_settings)->>'smtp_secret_encrypted' IS NOT NULL THEN true END AS smtp_secret_encrypted
+    FROM notification_settings WHERE singleton=true FOR SHARE`);
   const row=result.rows[0];
-  return !!row?.requested && (config.settingsVersion === undefined ? !row.panel_credentials : row.version === config.settingsVersion) && (['provider','host','port','tls_mode','sender','recipient'] as const).every(key=>row[key]===config[key]);
+  if (!row?.requested || !providerMatchesSettings(config,row)) return false;
+  const cutoff=await db.query<{delivery_after:string|null}>(`SELECT max(created_at)::text AS delivery_after
+    FROM notification_settings_audit WHERE version<=$1 AND action='enable' AND 'new_events_only'=ANY(changed_fields)`,[row.version]);
+  return cutoff.rows[0].delivery_after;
 }
 
 export async function sendProviderAlert(config: SmtpProvider, alert: CloneAlert): Promise<void> {

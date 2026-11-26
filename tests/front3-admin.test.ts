@@ -17,7 +17,6 @@ test('Front3: desktop/mobile project registration, atomic audit, navigation and 
  let server:ReturnType<typeof createAdminServer>|undefined,browser:Awaited<ReturnType<typeof chromium.launch>>|undefined;
  try{
   for(const file of (await readdir('infra')).filter(f=>/^\d{3}_.*\.sql$/.test(f)).sort())await db.query((await readFile('infra/'+file,'utf8')).replace(/^\uFEFF/,''));
-  await db.query('CREATE TABLE admin_totp_replay(factor_id text PRIMARY KEY,last_counter bigint NOT NULL); CREATE TABLE admin_totp_codes(factor_id text,digest text,valid_until bigint,PRIMARY KEY(factor_id,digest))');
   // Force the complementary write to fail: the project must never be committed.
   await db.query("CREATE FUNCTION reject_registration() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic audit failure'; END $$; CREATE TRIGGER reject_registration BEFORE INSERT ON project_registration_audit FOR EACH ROW EXECUTE FUNCTION reject_registration()");
   await assert.rejects(registerProject(db,{name:'Must rollback',origin:'https://rollback.test'}));

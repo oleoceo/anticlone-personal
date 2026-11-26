@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto';
 const classes = ['PAID_ATTRIBUTED','ORGANIC','REFERRAL','DIRECT_UNKNOWN'] as const;
 export type Allocation = Record<(typeof classes)[number], number>;
-export function validateAllocation(value: unknown): Allocation {
+export function validateAllocation(value: unknown, step = 10): Allocation {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).sort().join(',') !== [...classes].sort().join(',')) throw Error('invalid allocation');
   const input = value as Record<string, unknown>;
-  for (const key of classes) if (typeof input[key] !== 'number' || !Number.isInteger(input[key]) || (input[key] as number) < 0 || (input[key] as number) > 100 || (input[key] as number) % 10 !== 0) throw Error('invalid allocation');
+  for (const key of classes) if (typeof input[key] !== 'number' || !Number.isInteger(input[key]) || (input[key] as number) < 0 || (input[key] as number) > 100 || (input[key] as number) % step !== 0) throw Error('invalid allocation');
   return input as Allocation;
 }
 export function selected(session: unknown, rule: string, version: number, allocation: Allocation, trafficClass: string): boolean {

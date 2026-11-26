@@ -1,7 +1,7 @@
 import {useState} from 'react';
 import {Link, useLocation, useNavigate} from 'react-router-dom';
 import {AdminApi, pageList, type Project} from './admin-api';
-import {Back, Breadcrumbs, incidentPath, pagePath, projectIncidentsPath, projectPath, searchOf, sectionParams, useContextNavigation} from './navigation';
+import {Back, Breadcrumbs, incidentPath, pagePath, projectIncidentsPath, projectPath, searchOf, sectionParams, settingsPath, useContextNavigation} from './navigation';
 import {DetailsData, formData, formatDate, InputError, useOperation, uuid, value, type SetGuard} from './operations';
 import {ProtectionScreen} from './protection';
 import type {Incident, ProtectionAction} from './protection-contracts';
@@ -13,6 +13,11 @@ const statuses: Record<string, string> = {
 const sources: Record<string, string> = {
   core: 'Core', fallback: 'Fallback', html_canary: 'Canário HTML', css_canary: 'Canário CSS', runtime: 'Runtime',
 };
+const alertStates = new Map([
+  ['PENDING', 'Aguardando envio'], ['EXPIRED', 'Prazo de envio expirado'],
+  ['EXHAUSTED', 'Limite de tentativas atingido'], ['ACCEPTED_BY_TRANSPORT', 'Aceito pelo servidor de e-mail'],
+  ['SUSPENDED', 'Envio suspenso'], ['REVIEW_REQUIRED', 'Aguardando revisão'],
+]);
 
 export function IncidentProjects({projects}: {projects: Project[]}) {
   const navigation = useContextNavigation();
@@ -50,6 +55,9 @@ export function Incidents({api, project, id, action, setGuard}: {
     {label: 'Incidentes', path: id ? listPath : undefined, search: scopeSearch},
   ];
   const incidents = useQuery(project.id, signal => api.request<Incident[]>('incidents', {project: project.id}, signal));
+  const capacity = useQuery(!id ? project.id : '', signal =>
+    api.request<{total:number; common:number; totalLimit:number; commonLimit:number}>(
+      'health', {action:'incident-capacity',project:project.id}, signal));
   const pages = useQuery(project.id, signal => pageList(api, project.id, signal));
   const selected = pages.data?.pages.find(item => item.id === pid);
   const incident = incidents.data?.find(item => item.incident_id === id);
@@ -86,6 +94,10 @@ export function Incidents({api, project, id, action, setGuard}: {
     {!incidents.data && incidents.error === undefined && <Loading/>}
     {!id && incidents.data && <>
       <Heading title="Incidentes" description={project.name}/>
+      {capacity.data && (capacity.data.total>=capacity.data.totalLimit || capacity.data.common>=capacity.data.commonLimit) &&
+        <p role="status">{capacity.data.total>=capacity.data.totalLimit
+          ? 'Capacidade total atingida. Novos domínios podem ser recusados até a retenção liberar posições.'
+          : 'Capacidade comum atingida. Revise os sinais não verificados. Contextos já aprovados ainda podem usar a reserva.'}</p>}
       <section className="panel">
         <div className="filters">
           <label>Buscar domínio<input value={term} maxLength={253} onChange={event =>
@@ -134,11 +146,20 @@ function IncidentDetail({incident, project, api, pid, actionUrl, search, refresh
 }) {
   const nav = useContextNavigation();
   const operation = useOperation(setGuard);
+  const outbox = incident.notification?.outbox;
   return <>
     {operation.notice()}
     <section className="panel">
+      <h2>Alerta por e-mail</h2>
+      <p>{outbox ? alertStates.get(outbox.state) ?? 'Consulte o histórico de notificações' :
+        incident.notification?.available ? 'Sem alerta registrado para este incidente' : 'Histórico de alertas indisponível'}</p>
+      {outbox && <p>Tentativas de envio · {outbox.attempts}</p>}
+      {outbox?.state === 'ACCEPTED_BY_TRANSPORT' && <p>O recebimento na caixa de destino precisa ser confirmado separadamente.</p>}
+      <Link {...nav.link(settingsPath + '/notificacoes')}>Ver configurações de SMTP</Link>
+    </section>
+    <section className="panel">
       <h2>Ações de proteção</h2>
-      <p>Selecione a LP e revise as etapas de publicação, aprovação e autorização para o contexto observado.</p>
+      <p>Selecione a LP para abrir a regra de redirecionamento da cópia identificada ou revisar os CTAs.</p>
       <div className="action-links">
         <Link className="button primary" {...nav.link(actionUrl + '/redirecionar', search)}>Redirecionar página</Link>
         <Link className="button" {...nav.link(actionUrl + '/substituir-cta', search)}>Substituir checkout/CTA</Link>

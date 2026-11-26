@@ -1,3 +1,4 @@
+import {restrictedRuntimeRoles} from './restricted-runtime-roles.js';
 import assert from 'node:assert/strict';
 import {execFileSync, spawn} from 'node:child_process';
 import {createHmac, randomUUID, scryptSync} from 'node:crypto';
@@ -12,6 +13,9 @@ import {test, type TestContext} from 'node:test';
 import {TOTP, Secret} from 'otpauth';
 import {Pool} from 'pg';
 import {chromium, type Page} from 'playwright';
+const namedDistribution = process.env.RUNTIME_COMPACT_ALIASES === 'true';
+const distributionPrefix = namedDistribution ? '/assets/' : '/r/v2/';
+const decisionSuffix = namedDistribution ? /\/api\/config\.[0-9a-f]{20}$/ : /\/g$/;
 import {createAdminServer} from '../apps/admin-auth.js';
 import {join} from 'node:path';
 import {commerceAdmin, commerceSigningInput, commerceWebhook, provisionCommerceSender, receiveCommerce} from '../apps/commerce.js';
@@ -25,24 +29,28 @@ const password = 'frontend lab only';
 const endpoint = 'https://runtime.frontend.test';
 const action = (page: Page, name: string) => page.getByRole('button', {name, exact: true});
 
-async function fixture(test: TestContext, browserArgs?: string[], webSessionWithoutTimeout = false) {
+async function fixture(test: TestContext, browserArgs?: string[]) {
   assert.ok(process.env.TEST_DATABASE_URL);
   const root = new Pool({connectionString: process.env.TEST_DATABASE_URL});
   const schema = 'frontend_' + randomUUID().replaceAll('-', '');
   await root.query('CREATE SCHEMA ' + schema);
   const db = new Pool({connectionString: process.env.TEST_DATABASE_URL, options: '-c search_path=' + schema});
+  const restricted:{roles?:Awaited<ReturnType<typeof restrictedRuntimeRoles>>; db?:Pool; gateway?:Pool}={};
   test.after(async () => {
+    await restricted.db?.end();
+    await restricted.gateway?.end();
     await db.end();
-    try { await root.query('DROP SCHEMA ' + schema + ' CASCADE'); }
+    try { await root.query('DROP SCHEMA ' + schema + ' CASCADE'); await restricted.roles?.drop(root); }
     finally { await root.end(); }
   });
   for (const name of (await readdir('infra')).filter(name => /^\d{3}_.*\.sql$/.test(name)).sort()) {
     await db.query((await readFile('infra/' + name, 'utf8')).replace(/^\uFEFF/, ''));
   }
 
-  await db.query('CREATE TABLE admin_totp_replay (factor_id text PRIMARY KEY, last_counter bigint NOT NULL)');
-  await db.query('CREATE TABLE admin_totp_codes (factor_id text NOT NULL, digest text NOT NULL, valid_until bigint NOT NULL, PRIMARY KEY (factor_id,digest))');
 
+  restricted.roles=await restrictedRuntimeRoles(db,schema,process.env.TEST_DATABASE_URL);
+  restricted.db=new Pool({connectionString:restricted.roles.admin,options:'-c search_path='+schema});
+  restricted.gateway=new Pool({connectionString:restricted.roles.publicGateway,options:'-c search_path='+schema});
   const savedOrigin = process.env.RUNTIME_PUBLIC_ORIGIN;
   const savedVerifier = process.env.INSTALLATION_VERIFIER_IMAGE;
   process.env.RUNTIME_PUBLIC_ORIGIN = endpoint;
@@ -59,7 +67,7 @@ async function fixture(test: TestContext, browserArgs?: string[], webSessionWith
   const totp = new TOTP({secret: Secret.fromBase32(secret)});
   const salt = Buffer.alloc(16, 43);
   const record = 'scrypt$' + salt.toString('hex') + '$' + scryptSync(password, salt, 64).toString('hex');
-  const server = createAdminServer(record, secret, db, () => clock, {webSessionWithoutTimeout}).listen(0, '127.0.0.1');
+  const server = createAdminServer(record, secret, restricted.db, () => clock).listen(0, '127.0.0.1');
   await once(server, 'listening');
   test.after(() => new Promise<void>((resolve, reject) => {
     server.close(error => error ? reject(error) : resolve());
@@ -70,7 +78,7 @@ async function fixture(test: TestContext, browserArgs?: string[], webSessionWith
   test.after(() => browser.close());
 
   return {
-    db, schema, origin, browser, server,
+    db, gatewayDb:restricted.gateway, schema, origin, browser, server,
     code: () => totp.generate({timestamp: clock}),
     advance: (milliseconds: number) => { clock += milliseconds; },
   };
@@ -158,13 +166,20 @@ for (const width of [1440, 390]) {
     await page.getByRole('dialog').waitFor();
     await action(page, 'Confirmar').click();
     await page.getByText('Revisão 1', {exact: true}).waitFor();
-    assert.match(await page.getByRole('region', {name: 'Trecho HTML'}).locator('code').innerText(), /runtime\.frontend\.test\/r\/v2\//);
-    const technology = page.getByLabel('Tecnologia');
-    await technology.selectOption('React / Vite');
-    await page.getByText(/Adicione o CSS aos estilos globais/).waitFor();
-    await technology.selectOption('WordPress');
-    await page.getByText(/Aplique a classe anticlone-canary a um bloco/).waitFor();
-    await technology.selectOption('HTML');
+    const scripts = await page.getByRole('region', {name: 'Trecho HEAD'}).locator('code').innerText();
+    const source = scripts.match(/<script async src="([^"]+)"/)?.[1];
+    assert.ok(source && source.startsWith('https://runtime.frontend.test'+distributionPrefix));
+    assert.ok((namedDistribution ? /\/js\/app\.[0-9a-f]{20}\.js$/ : /\/a\.js$/).test(source));
+    assert.match(scripts, namedDistribution ? /\/js\/events\.[0-9a-f]{20}\.js/ : /\/c\.js/);
+    assert.doesNotMatch(scripts, /\/(?:e|b\.js|api\/collect\.[0-9a-f]{20}|js\/common\.[0-9a-f]{20}\.js)"/);
+    assert.match(await page.getByRole('region', {name: 'Trecho BODY'}).locator('code').innerText(), namedDistribution ? /\/img\/pixel\.[0-9a-f]{20}\.gif/ : /\/m\.gif/);
+    assert.match(await page.getByRole('region', {name: 'Trecho CSS'}).locator('code').innerText(), namedDistribution ? /\/img\/style\.[0-9a-f]{20}\.gif/ : /\/n\.gif/);
+    await page.getByLabel('Tecnologia do site').selectOption('React/Vite');
+    await page.getByText('<main className="conteudo anticlone-canary">…</main>', {exact: true}).waitFor();
+    await page.getByLabel('Tecnologia do site').selectOption('WordPress');
+    await page.getByText(/bloco HTML personalizado/).waitFor();
+    assert.equal(await page.getByRole('region', {name: 'Trecho HEAD'}).locator('code').innerText(), scripts);
+    await page.getByLabel('Tecnologia do site').selectOption('HTML');
     assert.equal(await page.getByRole('link', {name:'Abrir página oficial em nova aba'}).getAttribute('href'),
       'https://offer.frontend.test/inicio');
     const diagnose = page.getByRole('link', {name:'Ir para o diagnóstico'});
@@ -175,7 +190,7 @@ for (const width of [1440, 390]) {
     await page.goBack();
     assert.equal(page.url(), installation);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
-    await page.getByText('Recursos, revisões e rotação', {exact: true}).click();
+    await page.getByText('Diagnóstico avançado e histórico de revisões', {exact: true}).click();
     assert.equal(await page.locator('.resources li').count(), 12);
     await action(page, 'Publicar nova revisão').click();
     await action(page, 'Confirmar').click();
@@ -461,7 +476,7 @@ test('new and legacy consoles share the same MFA, session lifetime and private r
   assert.ok(session?.httpOnly);
   assert.equal(session.sameSite, 'Strict');
   assert.equal(session.path, '/admin/ui/');
-  assert.ok(session.expires > Date.now() / 1000 + 850);
+  assert.equal(session.expires, -1);
 
   const block = await fetch(lab.origin + ui, {headers: {origin: 'https://outside.test', 'sec-fetch-site': 'cross-site'}});
   assert.equal(block.status, 403);
@@ -482,20 +497,17 @@ test('new and legacy consoles share the same MFA, session lifetime and private r
   })).status, 403);
 
   await modern.getByRole('link', {name: 'Proteger oferta'}).click();
-  await modern.getByLabel('Nome da oferta').fill('Rascunho na expiração');
-  lab.advance(15 * 60_000 - 1);
+  await modern.getByLabel('Nome da oferta').fill('Rascunho da oferta');
+  lab.advance(8 * 60 * 60_000);
   const stillActive = await fetch(lab.origin + '/admin/ui/projects', {headers: {
     'sec-fetch-site': 'same-origin', cookie: 'admin_session=' + session.value,
   }});
   assert.equal(stillActive.status, 200);
-  lab.advance(1);
+  const bootstrap = modern.waitForResponse(response => response.url().endsWith('/admin/ui/bootstrap'));
   await modern.bringToFront();
   await modern.evaluate(() => window.dispatchEvent(new Event('focus')));
-  await modern.getByText('Sua sessão terminou. Entre novamente para continuar.').waitFor();
-  await legacy.reload();
-  await legacy.getByLabel('Código TOTP').waitFor();
-  assert.equal(await login(modern, lab.code()), 204);
-  assert.equal(await modern.getByLabel('Nome da oferta').inputValue(), 'Rascunho na expiração');
+  assert.equal((await (await bootstrap).json()).authenticated, true);
+  assert.equal(await modern.getByLabel('Nome da oferta').inputValue(), 'Rascunho da oferta');
   await legacy.reload();
   await legacy.getByText('Configuração incompleta', {exact: true}).waitFor();
 
@@ -541,8 +553,8 @@ test('new and legacy consoles share the same MFA, session lifetime and private r
   assert.equal((await context.cookies()).some(cookie => cookie.name === 'admin_session'), false);
 });
 
-test('private Dev web session remains active after 15 minutes and still supports revocation', {timeout: 60_000}, async t => {
-  const lab = await fixture(t, undefined, true);
+test('private web session remains active after 15 minutes and still supports revocation', {timeout: 60_000}, async t => {
+  const lab = await fixture(t);
   const context = await lab.browser.newContext();
   const page = await context.newPage();
   await page.goto(lab.origin + ui + '/visao-geral');
@@ -597,7 +609,7 @@ for (const width of [1440, 390]) {
       const raw = Buffer.from(JSON.stringify({event,order:event,product,amount:'89.00',currency:'BRL',status:'paid',occurred:new Date().toISOString()}));
       const timestamp = String(Math.floor(Date.now() / 1000));
       const signature = createHmac('sha256', Buffer.from(senderKey, 'hex')).update(commerceSigningInput(timestamp, raw)).digest('hex');
-      return receiveCommerce(lab.db, account.id, raw, timestamp, signature, checkoutEnv);
+      return receiveCommerce(lab.gatewayDb, account.id, raw, timestamp, signature, checkoutEnv);
     };
     assert.equal((await sale('outro-produto','test')).recorded, false);
     await commerceAdmin(lab.db, {action:'connection-state', id:account.id, expected_version:1, state:'ACTIVE'}, checkoutEnv);
@@ -630,6 +642,11 @@ for (const width of [1440, 390]) {
     await capture('01-incidentes');
     await page.getByRole('link', {name: 'Investigar observado.frontend.test'}).click();
     await page.getByRole('heading', {name: 'observado.frontend.test', exact:true}).waitFor();
+    const alert = page.locator('section').filter({has: page.getByRole('heading', {name: 'Alerta por e-mail'})});
+    await alert.getByText('Aguardando envio', {exact: true}).waitFor();
+    await alert.getByText('Tentativas de envio · 0', {exact: true}).waitFor();
+    assert.equal(await alert.getByRole('link', {name: 'Ver configurações de SMTP'}).getAttribute('href'),
+      ui + '/configuracoes/notificacoes');
     await page.getByLabel('Página protegida').selectOption(lp.page);
     await page.getByLabel('Nova situação').selectOption('investigating');
     await page.getByLabel('Justificativa').fill('Revisão administrativa no ambiente de teste');
@@ -644,6 +661,7 @@ for (const width of [1440, 390]) {
     await capture('02-investigacao');
     await page.getByRole('link', {name: 'Redirecionar página', exact: true}).click();
     await page.getByRole('heading', {name: 'Redirecionar página', exact: true}).waitFor();
+    await page.getByText('Configuração anterior da LP', {exact:true}).click();
     await page.getByLabel('Destino da página').fill(original + '/segura');
     await page.goBack().catch(() => undefined);
     await page.getByRole('dialog', {name:'Descartar alterações?'}).waitFor();
@@ -673,7 +691,6 @@ for (const width of [1440, 390]) {
     await page.getByText('Aprovação registrada.', {exact:false}).waitFor();
     await page.getByLabel('Origem HTTPS observada').fill(observedDomain);
     await page.getByLabel('Caminho exato da cópia').fill('/evidencia');
-    await page.getByLabel('Conferi o contexto', {exact: false}).check();
     await action(page, 'Revisar autorização').click();
     await page.getByRole('dialog', {name:'Autorizar contexto', exact:true}).waitFor();
     await page.route('**/admin/ui/operational', async route => {
@@ -764,7 +781,6 @@ for (const width of [1440, 390]) {
     await page.getByText('Aprovação registrada.', {exact:false}).waitFor();
     await page.getByLabel('Origem HTTPS observada').fill(observedDomain);
     await page.getByLabel('Caminho exato da cópia').fill('/evidencia');
-    await page.getByLabel('Conferi o contexto', {exact:false}).check();
     await action(page, 'Revisar autorização').click();
     await action(page, 'Confirmar').click();
     await page.getByText('Autorização registrada. Revisão 3.').waitFor();
@@ -782,17 +798,17 @@ for (const width of [1440, 390]) {
     assert.equal((await page.goto(base + '?dias=1'))?.status(), 200);
     await page.getByRole('link', {name:'Configurar estimativa'}).click();
     await page.getByLabel('Ticket médio', {exact:true}).fill('100,00');
-    await page.getByLabel('Taxa de conversão (%)').fill('5');
-    await action(page, 'Revisar premissas').click();
+    await page.getByLabel('Conversão estimada (%)').fill('5');
+    await action(page, 'Revisar e salvar').click();
     await action(page, 'Confirmar').click();
     await page.getByText('Estimativa configurada. Versão 1', {exact:false}).waitFor();
     const estimate = page.getByRole('region', {name:'Resultado da estimativa'});
-    await estimate.getByText('R$ 100,00', {exact:true}).waitFor();
-    await estimate.getByText('5,00%', {exact:true}).waitFor();
+    await estimate.getByText('1 × 5,00% × R$ 100,00', {exact:true}).waitFor();
+    await estimate.getByText('Estimativa, não vendas confirmadas', {exact:true}).waitFor();
     await estimate.getByText('R$ 5,00', {exact:true}).waitFor();
     await estimate.getByText('Versão 1', {exact:false}).waitFor();
     assert.equal(await estimate.getByText('Receita recuperada comprovada').count(), 0);
-    await capture('06-estimativa', 'Premissas do projeto');
+    await capture('06-estimativa', 'Moeda, ticket e conversão');
     await action(page, '← Voltar para Conversões').click();
     await page.getByText('R$ 5,00', {exact:true}).waitFor();
     assert.equal(await page.getByLabel('Período').inputValue(), '1');
@@ -871,10 +887,15 @@ for (const width of [1440, 390]) {
     assert.equal(await login(page, lab.code()), 204);
     await page.getByRole('heading', {name:'Visão Geral'}).waitFor();
     await page.getByText('R$ 6,00', {exact:true}).waitFor();
+    await page.getByText('Estimativa por projeto', {exact:true}).click();
+    const finance = page.getByRole('region', {name:'Detalhamento das estimativas'});
+    await finance.getByText('R$ 120,00 · 5% · v1', {exact:true}).waitFor();
+    await finance.getByText('Estimativa R$ 6,00', {exact:true}).waitFor();
+    await page.getByText('Saúde, instalações e investigações', {exact:true}).click();
     await page.getByRole('link', {name:'sinal.frontend.test'}).waitFor();
     await page.getByText('1 LP habilitada e ativa no cadastro', {exact:false}).waitFor();
-    await page.getByText('1 incidente no histórico retornado', {exact:true}).waitFor();
-    await page.getByLabel('Período dos resultados').selectOption('1');
+    await page.getByText('1 possível cópia detectada', {exact:true}).waitFor();
+    await page.getByLabel('Período').selectOption('1');
     await page.getByRole('combobox', {name:/^Projeto/}).selectOption(project.id);
     await page.getByLabel('LP para diagnóstico').selectOption(lp.page);
     await page.getByText('Pronta para publicar', {exact:true}).waitFor();
@@ -882,14 +903,13 @@ for (const width of [1440, 390]) {
     await capture('01-visao-geral');
     await page.getByRole('combobox', {name:'Métrica', exact:true}).selectOption('CTA_CLICK_OBSERVED');
     await page.getByLabel('Origem declarada').selectOption('DIRECT_UNKNOWN');
-    const chart = page.getByRole('img', {name:/Cliques de CTA por dia em UTC/});
+    const chart = page.getByRole('img', {name:/Cliques nos CTAs por dia em UTC/});
     assert.equal(await chart.locator('circle[data-count="1"]').count(), 1);
     await capture('13-grafico', 'Atividade observada');
     await action(page, 'Tabela').click();
     await page.getByRole('region', {name:'Atividade observada'}).getByRole('table').getByRole('cell', {name: '1', exact: true}).waitFor();
-    const finance = page.getByRole('region', {name:'Detalhamento das estimativas'});
-    await finance.getByText('R$ 120,00 · 5% · v1', {exact:true}).waitFor();
-    await finance.getByText('Estimativa R$ 6,00', {exact:true}).waitFor();
+    assert.equal(await finance.count(), 0);
+    await page.getByRole('region', {name:'Configuração da estimativa'}).getByText('R$ 120,00', {exact:true}).waitFor();
     const traffic = page.getByRole('region', {name:'Origem do tráfego'});
     assert.equal(await traffic.getByRole('meter', {name:'Direto ou desconhecido'}).getAttribute('value'), '1');
     for (const viewport of [360, 768, 1024, 1920]) {
@@ -967,14 +987,10 @@ for (const width of [1440, 390]) {
     await page.getByLabel('Destinatário').fill('destino@frontend.test');
     await action(page, 'Revisar configuração SMTP').click();
     await action(page, 'Confirmar').click();
-    await action(page, 'Solicitar habilitação').click();
-    await action(page, 'Confirmar').click();
-    await page.getByText('Habilitação solicitada', {exact:true}).waitFor();
+    await page.getByText('Configuração SMTP salva.', {exact:true}).waitFor();
     await page.getByText('Ambiente privado sem SMTP configurado', {exact:true}).waitFor();
+    assert.equal(await action(page, 'Ativar alertas').isDisabled(), true);
     await capture('05-notificacoes', 'Notificações e SMTP');
-    await action(page, 'Desativar solicitação').click();
-    await action(page, 'Confirmar').click();
-    await page.getByText('Solicitação desativada.',{exact:true}).waitFor();
     await page.getByLabel('Projeto dos alertas').selectOption(project.id);
     const alert = (await lab.db.query('SELECT id::text FROM alert_outbox')).rows[0].id;
     await page.getByText(/^CLONE · /).click();
@@ -1047,7 +1063,7 @@ for (const width of [1440, 390]) {
     const raw = Buffer.from(JSON.stringify(sample));
     const format = {version:2,test:true};
     const signature = createHmac('sha256', Buffer.from(key, 'hex')).update(commerceSigningInput(timestamp, raw, format)).digest('hex');
-    const handle = commerceWebhook(lab.db);
+    const handle = commerceWebhook(lab.gatewayDb);
     const receiver = createServer((req, res) => { if (!handle(req, res)) res.writeHead(404).end(); }).listen(0, '127.0.0.1');
     await once(receiver, 'listening');
     t.after(() => new Promise<void>(resolve => { receiver.close(() => resolve()); receiver.closeAllConnections(); }));
@@ -1213,7 +1229,7 @@ test('React provisions an original LP and copy, then real gateway applies scoped
     const ids = (await lab.db.query('SELECT project_id AS project, id AS page FROM protected_pages')).rows[0];
     assert.ok(ids?.project && ids.page);
     await confirm('Publicar endereços de instalação', 'Revisão 1');
-    html = await panel.getByRole('region', {name: 'Trecho HTML'}).locator('code').innerText();
+    html = (await Promise.all(['HEAD','BODY'].map(piece=>panel.getByRole('region',{name:'Trecho '+piece}).locator('code').innerText()))).join('\n');
     css = await panel.getByRole('region', {name: 'Trecho CSS'}).locator('code').innerText();
     await capture(panel, '04-instalacao-publicada');
 
@@ -1254,8 +1270,9 @@ test('React provisions an original LP and copy, then real gateway applies scoped
     await capture(panel, '06-investigacao');
 
     await panel.getByRole('link', {name: 'Redirecionar página', exact: true}).click();
+    await panel.getByText('Configuração anterior da LP', {exact:true}).click();
     await panel.getByLabel('Destino da página').fill(original + '/segura');
-    await panel.getByLabel('Direto ou desconhecido').selectOption('100');
+    await panel.getByRole('combobox', {name:'Direto ou desconhecido', exact:true}).selectOption('100');
     await panel.getByLabel('Habilitar nesta versão').check();
     await confirm('Revisar publicação', 'Política publicada. Versão 1.');
     await panel.getByLabel('Versão de redirecionamento').selectOption('1');
@@ -1263,7 +1280,6 @@ test('React provisions an original LP and copy, then real gateway applies scoped
     async function authorize(revision: number) {
       await panel.getByLabel('Origem HTTPS observada').fill(copy);
       await panel.getByLabel('Caminho exato da cópia').fill('/lp');
-      await panel.getByLabel('Conferi o contexto', {exact: false}).check();
       await confirm('Revisar autorização', 'Autorização registrada. Revisão ' + revision + '.');
     }
     await authorize(1);
@@ -1280,7 +1296,8 @@ test('React provisions an original LP and copy, then real gateway applies scoped
     await panel.getByRole('link', {name: 'Abrir Página de vendas na oferta'}).click();
     await panel.getByRole('link', {name: 'Políticas de proteção'}).click();
     assert.equal((await panel.reload())?.status(), 200);
-    await panel.getByLabel('Direto ou desconhecido').selectOption('0');
+    await panel.getByText('Configuração anterior da LP', {exact:true}).click();
+    await panel.getByRole('combobox', {name:'Direto ou desconhecido', exact:true}).selectOption('0');
     await confirm('Revisar publicação', 'Política publicada. Versão 2.');
     await panel.getByText('Selecionar versão de entrada do projeto', {exact: true}).click();
     await panel.getByLabel('Versão publicada').selectOption('1');
@@ -1292,7 +1309,7 @@ test('React provisions an original LP and copy, then real gateway applies scoped
     await panel.getByRole('link', {name: 'Substituir CTAs'}).click();
     await panel.getByLabel('Superfície de CTA').fill('landing');
     await panel.getByLabel('Habilitar nesta versão').check();
-    await panel.getByLabel('Direto ou desconhecido').selectOption('100');
+    await panel.getByRole('combobox', {name:'Direto ou desconhecido', exact:true}).selectOption('100');
     await confirm('Revisar publicação', 'Política publicada. Versão 1.');
     await panel.getByText('Cadastrar destino aprovado', {exact: true}).click();
     for (const point of candidates) {
@@ -1325,7 +1342,7 @@ test('React provisions an original LP and copy, then real gateway applies scoped
     await authorize(2);
     await capture(panel, '07-politica-cta');
     for (const point of candidates) {
-      const decision = visit.waitForResponse(response => response.url().startsWith(gatewayOrigin + '/r/v2/') && response.url().endsWith('/g'));
+      const decision = visit.waitForResponse(response => response.url().startsWith(gatewayOrigin + distributionPrefix) && decisionSuffix.test(response.url()));
       await visit.goto(copy + '/lp');
       assert.equal((await (await decision).json()).action, 'REPLACE_CONVERSION');
       const cta = visit.locator('[data-anticlone-point="' + point.marker + '"]');
@@ -1333,6 +1350,27 @@ test('React provisions an original LP and copy, then real gateway applies scoped
       await visit.waitForURL(original + point.target);
     }
     assert.equal((await lab.db.query('SELECT count(*)::int n FROM cta_mappings')).rows[0].n, 2);
+    const editedPoint=candidates[0];
+    const editedTarget=original+'/checkout-editado';
+    await panel.getByLabel('Identificador da oferta').fill(editedPoint.marker);
+    await panel.getByLabel('URL do destino do CTA').fill(editedTarget);
+    await confirm('Revisar destino', 'Destino cadastrado.');
+    const editedCard=panel.getByRole('article').filter({has:panel.getByRole('heading',{name:editedPoint.marker,exact:true})});
+    await editedCard.getByRole('button',{name:'Editar destino do CTA'}).click();
+    await editedCard.getByLabel('Destino aprovado para '+editedPoint.marker).selectOption({label:editedPoint.marker+' · '+editedTarget});
+    await editedCard.getByRole('button',{name:'Revisar mapeamento'}).click();
+    await action(panel,'Confirmar').click();
+    await panel.getByText('Mapeamento salvo.',{exact:true}).waitFor();
+    await confirm('Revisar aprovação', /^Aprovação registrada\./);
+    await authorize(3);
+    for (const point of candidates) {
+      const decision=visit.waitForResponse(response=>response.url().startsWith(gatewayOrigin+distributionPrefix) && decisionSuffix.test(response.url()));
+      await visit.goto(copy+'/lp');
+      assert.equal((await (await decision).json()).action,'REPLACE_CONVERSION');
+      await visit.locator('[data-anticlone-point="'+point.marker+'"]').click();
+      await visit.waitForURL(point===editedPoint ? editedTarget : original+point.target);
+    }
+
     await action(panel, 'Suspender autorização').click();
     await action(panel, 'Confirmar').click();
     await panel.getByRole('status').getByText('Autorização suspensa.', {exact: true}).waitFor();

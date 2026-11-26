@@ -10,13 +10,21 @@ import {HealthOperations} from './health';
 
 type Smtp = {version: number; provider: string | null; host: string | null; port: number | null;
   tls_mode: string | null; sender: string | null; recipient: string | null; status: string;
-  preference_requested: boolean; clone_transport: string; smtp_login: string | null; smtp_key_saved: boolean; panel_smtp_available: boolean};
+  preference_requested: boolean; clone_transport: string; worker?: {state: string; scoped?: boolean}; delivery_after?: string | null; smtp_login: string | null; smtp_key_saved: boolean; panel_smtp_available: boolean};
 const smtpState: Record<string, string> = {incomplete: 'Configuração incompleta', configured_disabled: 'Configuração salva · habilitação desativada',
-  enablement_requested: 'Habilitação solicitada'};
+  enablement_requested: 'Preferência de alertas ativa'};
 const transportState: Record<string, string> = {PRIVATE_ENVIRONMENT_NOT_CONFIGURED: 'Ambiente privado sem SMTP configurado',
   PRIVATE_ENVIRONMENT_MISMATCH: 'A configuração salva diverge do ambiente privado',
   PRIVATE_ENVIRONMENT_INVALID: 'Configuração do ambiente privado inválida',
   AUTHORIZED_CONFIGURATION: 'Configuração compatível com o transporte privado', DISABLED: 'Transporte privado configurado · alertas desativados'};
+const workerState: Record<string, string> = {
+  NOT_CONFIGURED: 'Sem sonda do processo de envio. Confira a configuração privada do worker.',
+  OFFLINE: 'Worker de notificações sem resposta. Confira o serviço privado.',
+  TRANSPORT_UNAVAILABLE: 'Worker ativo, sem acesso ao transporte SMTP salvo. Confira a chave de cifragem e o endpoint autorizado no worker.',
+  SETTINGS_CHANGED: 'Aguardando o worker ler a configuração SMTP atual.',
+  QUEUE_ERROR: 'Worker ativo, com erro no processamento da fila. Confira os logs do serviço.',
+  READY: 'Worker de notificações ativo e com acesso ao transporte.',
+};
 const reviewLabels = {RELEASE: 'Liberar para nova tentativa', CANCEL: 'Cancelar futuras tentativas', ACK_UNKNOWN: 'Registrar resultado desconhecido'} as const;
 
 export function Settings({api, projects, section, setGuard}: {api: AdminApi; projects: Project[];
@@ -61,12 +69,12 @@ function NotificationSettings({api, setGuard}: {api: AdminApi; setGuard: SetGuar
   }
   function preference(enabled: boolean) {
     if (!config) return;
-    operation.review(enabled ? 'Solicitar habilitação de alertas' : 'Desativar solicitação de alertas',
-      <p>{enabled ? 'O transporte depende da configuração privada correspondente. Esta solicitação não verifica entrega.' :
+    operation.review(enabled ? 'Ativar novos alertas' : 'Desativar alertas',
+      <p>{enabled ? 'O worker poderá enviar alertas de eventos criados após a ativação.' :
         'O servidor registra a desativação da preferência de envio.'}</p>, async () => {
-        await api.request('preference', enabled ? {enabled, version: config.version} : {enabled});
+        await api.request('preference', enabled ? {enabled, version: config.version, newEventsOnly: true} : {enabled});
         query.revalidate();
-        return enabled ? 'Habilitação solicitada.' : 'Solicitação desativada.';
+        return enabled ? 'Envio habilitado para novos eventos.' : 'Alertas desativados.';
       });
   }
   return <div className="notification-workspace"><section className="panel form-panel">
@@ -75,6 +83,8 @@ function NotificationSettings({api, setGuard}: {api: AdminApi; setGuard: SetGuar
     {query.error !== undefined ? <Failure error={query.error} retry={query.revalidate}/> : !config ? <Loading/> : <>
       <p><strong>{smtpState[config.status] ?? 'Situação indisponível'}</strong> · versão {config.version}</p>
       <p>{transportState[config.clone_transport] ?? 'Transporte privado indisponível'}</p>
+      <p>{workerState[config.worker?.state ?? 'NOT_CONFIGURED']}{config.worker?.scoped ? ' Escopo restrito a um projeto.' : ''}</p>
+      {config.delivery_after && <p>Envio automático para eventos posteriores a {formatDate(config.delivery_after)}.</p>}
       <p className="muted">A chave salva fica cifrada. A aceitação SMTP pode ser conferida separadamente da chegada à caixa postal.</p>
       <form key={config.version} onChange={() => setEdited(true)} onSubmit={event => {
         const fields = formData(event);
@@ -119,8 +129,8 @@ function NotificationSettings({api, setGuard}: {api: AdminApi; setGuard: SetGuar
         <button type="button" disabled={query.pending || operation.busy || edited ||
           !['AUTHORIZED_CONFIGURATION', 'DISABLED'].includes(config.clone_transport)} onClick={() => testConnection(true)}>Enviar e-mail de teste</button>
         {!config.preference_requested ? <button type="button" disabled={query.pending || operation.busy ||
-          edited || config.status === 'incomplete'} onClick={() => preference(true)}>Solicitar habilitação</button> :
-          <button type="button" disabled={query.pending || operation.busy || edited} onClick={() => preference(false)}>Desativar solicitação</button>}
+          edited || config.clone_transport !== 'DISABLED' || (config.worker !== undefined && config.worker.state !== 'READY' && config.worker.state !== 'NOT_CONFIGURED')} onClick={() => preference(true)}>Ativar alertas</button> :
+          <button type="button" disabled={query.pending || operation.busy || edited} onClick={() => preference(false)}>Desativar alertas</button>}
         <button type="button" disabled={query.pending || operation.busy} onClick={query.revalidate}>Reconsultar configuração</button>
       </div>
     </>}

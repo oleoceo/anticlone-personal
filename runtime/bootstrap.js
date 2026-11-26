@@ -1,6 +1,7 @@
 (() => {
   try {
     const distribution = null;
+    /* CTA_DISCOVERY */
     const source = document.currentScript && document.currentScript.src;
     if (!source) return;
     const endpoint = path => new URL(distribution?.paths?.[path] ?? path, distribution ? distribution.bases.TELEMETRY : source).href;
@@ -15,7 +16,20 @@
         script.onerror = () => script.remove(); document.head.appendChild(script);
       } catch (_) { /* Untrusted message. */ }
     });
-    const deadline = performance.now() + 150;
+    const started = performance.now(), deadline = started + 150;
+    const discoveryVersion = typeof discoverCtas !== 'undefined' ? ';ac-discovery=2' : '';
+    const scoped = !!distribution || new URL(source).pathname.startsWith('/i/');
+    let visit, outcome, handoffElapsed;
+    const initialEntryPath = location.pathname;
+    const reportEntry = phase => {
+      if (!visit || outcome === phase) return;
+      outcome = phase;
+      try {
+        const measured = Math.max(0,Math.min(60000,Math.round(performance.now()-started)));
+        const elapsed = ['REDIRECT_HANDOFF','PAGE_LEFT'].includes(phase) ? handoffElapsed ?? measured : measured;
+        navigator.sendBeacon(endpoint('observed-action'),new Blob([JSON.stringify({pathname:initialEntryPath,visit,phase,elapsed})],{type:'text/plain'}));
+      } catch (_) { /* Diagnostics are best effort. */ }
+    };
     // Optional owner-authored visual scope. Never infer a page-wide gate.
     // Opacity keeps layout and native hit-testing intact during early interaction.
     const gated = [];
@@ -33,12 +47,20 @@
       }
     };
     let redirectPending = true, redirectInteracted = false, abandoned = false, suspended = false;
-    let suspendCtas = () => {}, resumeCtas = () => {}, startCore = () => {}, coreLoaded = false, coreStarted = false;
+    let suspendCtas = () => {}, resumeCtas = () => {};
     let initialPath = location.pathname, initialSearch = location.search;
     const validContext = () => !abandoned && !suspended && location.pathname === initialPath && location.search === initialSearch;
     const abandon = () => { abandoned = true; cancelRedirect(); };
-    const cancelRedirect = () => { redirectPending = false; redirectInteracted = true; releaseGate(); };
-    setTimeout(() => { redirectPending = false; releaseGate(); }, Math.max(0,deadline-performance.now()));
+    const cancelRedirect = phase => {
+      const pending = redirectPending;
+      redirectPending = false; redirectInteracted = true; releaseGate();
+      if (pending && phase) reportEntry(phase);
+    };
+    setTimeout(() => {
+      const pending = redirectPending;
+      redirectPending = false; releaseGate();
+      if (pending) reportEntry('TIMEOUT');
+    }, Math.max(0,deadline-performance.now()));
     const scopes = document.querySelectorAll('[data-anticlone-render-gate]');
     if (scopes.length <= 20) for (const node of scopes) {
       try {
@@ -49,16 +71,16 @@
         node.style.setProperty('opacity','0','important');
       } catch (_) { /* Missing or invalid explicit scope remains visible. */ }
     }
-    addEventListener('pagehide', event => { cancelRedirect(); if (event.persisted) { suspended = true; suspendCtas(); } else abandon(); });
-    addEventListener('pageshow', event => { if (event.persisted && suspended && !abandoned) { suspended = false; if (validContext()) { if (coreStarted) resumeCtas(); else if (coreLoaded) startCore(); } else abandon(); } });
-    addEventListener('beforeunload', cancelRedirect);
-    addEventListener('pointerdown', cancelRedirect, {once:true, capture:true});
-    addEventListener('keydown', cancelRedirect, {once:true, capture:true});
-    addEventListener('click', cancelRedirect, {once:true, capture:true});
+    addEventListener('pagehide', event => { if (outcome==='REDIRECT_HANDOFF') reportEntry('PAGE_LEFT'); cancelRedirect(); if (event.persisted) { suspended = true; suspendCtas(); } else abandon(); });
+    addEventListener('pageshow', event => { if (event.persisted && suspended && !abandoned) { suspended = false; if (validContext()) resumeCtas(true); else abandon(); } });
+    addEventListener('beforeunload', () => cancelRedirect());
+    addEventListener('pointerdown', () => cancelRedirect('INTERACTION'), {once:true, capture:true});
+    addEventListener('keydown', () => cancelRedirect('INTERACTION'), {once:true, capture:true});
+    addEventListener('click', () => cancelRedirect('INTERACTION'), {once:true, capture:true});
     const routeChanged = () => {
       if (location.pathname === initialPath && location.search === initialSearch) return;
-      cancelRedirect(); suspendCtas(); initialPath = location.pathname; initialSearch = location.search;
-      if (!abandoned && !suspended) { if (coreStarted) resumeCtas(); else if (coreLoaded) startCore(); }
+      cancelRedirect('CONTEXT_CHANGED'); suspendCtas(); latestCtaVersion = 0; initialPath = location.pathname; initialSearch = location.search;
+      if (!abandoned && !suspended) resumeCtas();
     };
     addEventListener('popstate', routeChanged);
     for (const method of ['pushState', 'replaceState']) {
@@ -87,9 +109,23 @@
       }
       return target.href;
     };
+    // CORS keeps the receipt bound to the document Origin. Keepalive lets
+    // the observation outlive the document without blocking navigation.
+    const observe = (path, payload) => {
+      try {
+        void fetch(endpoint(path), {method:'POST', headers:{'Content-Type':'text/plain'},
+          body:JSON.stringify(payload), credentials:'omit', keepalive:true}).catch(() => {});
+      } catch (_) { /* Observation never gates navigation. */ }
+    };
     const reportAction = (receipt, marker, surface) => {
       if (typeof receipt !== 'string') return;
-      try { const hex=Array.from(crypto.getRandomValues(new Uint8Array(16)),x=>x.toString(16).padStart(2,'0')).join(''); const event=[hex.slice(0,8),hex.slice(8,12),hex.slice(12,16),hex.slice(16,20),hex.slice(20)].join('-'); navigator.sendBeacon(endpoint('observed-action'), new Blob([JSON.stringify({receipt,event,marker,surface})],{type:'text/plain'})); } catch (_) { /* Observation never gates navigation. */ }
+      try {
+        const hex = Array.from(crypto.getRandomValues(new Uint8Array(16)), x => x.toString(16).padStart(2,'0')).join('');
+        const event = [hex.slice(0,8),hex.slice(8,12),hex.slice(12,16),hex.slice(16,20),hex.slice(20)].join('-');
+        const payload = {receipt,event,marker,surface};
+        if (marker !== null) observe('observed-action', payload);
+        else navigator.sendBeacon(endpoint('observed-action'), new Blob([JSON.stringify(payload)], {type:'text/plain'}));
+      } catch (_) { /* Observation never gates navigation. */ }
     };
     const operationalContextMatches = decision => {
       const context=decision.operationalContext;
@@ -104,44 +140,103 @@
         const external = decision.externalDestinations ?? [];
         if (!Array.isArray(external) || external.length > 100 || external.some(url => typeof url !== 'string' || url.length > 2048)) return;
         for (const row of decision.mappings) {
-          if (!row || typeof row.marker !== 'string' || !/^[a-zA-Z0-9_-]{8,64}$/.test(row.marker) || (row.surface !== undefined && (typeof row.surface !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(row.surface))) || !['a','form'].includes(row.kind) || typeof row.destination !== 'string') return;
+          if (!row || typeof row.marker !== 'string' || !/^[a-zA-Z0-9_-]{8,64}$/.test(row.marker) || (row.surface !== undefined && (typeof row.surface !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(row.surface))) || !['a','form','button'].includes(row.kind) || row.kind==='button' && (typeof discoverCtas==='undefined' || !row.nativeDigest) || typeof row.destination !== 'string') return;
           const target = new URL(row.destination);
-          if ((target.origin !== original.origin && (target.protocol !== 'https:' || !external.includes(target.href))) || target.username || target.password || target.hash || !['http:', 'https:'].includes(target.protocol)) return;
+          if ((target.origin !== original.origin && (target.protocol !== 'https:' || !external.includes(target.href))) || target.username || target.password || (!row.nativeDigest && target.hash) || !['http:', 'https:'].includes(target.protocol)) return;
+          if (row.nativeDigest !== undefined && (!/^[a-f0-9]{64}$/.test(row.nativeDigest) || target.protocol!=='https:')) return;
           const entries = mappings.get(row.marker) || [];
           if (entries.some(item => item.surface === row.surface)) return;
           if (row.requiresSurface !== undefined && typeof row.requiresSurface !== 'boolean') return;
-          entries.push({surface:row.surface, requiresSurface:row.requiresSurface, kind:row.kind, destination:attributed(target.href, decision.attribution)}); mappings.set(row.marker, entries);
+          entries.push({surface:row.surface, requiresSurface:row.requiresSurface, kind:row.kind, nativeDigest:row.nativeDigest, destination:attributed(target.href, decision.attribution)}); mappings.set(row.marker, entries);
         }
         if (!validContext() || Date.now() < startedWall || Date.now() - startedWall > 5000 || performance.now() - startedMono > 5000) return;
         latestCtaVersion = decision.version;
-        activeCtas = {receipt:decision.observationReceipt,mappings, pathname:decision.pathname, startedWall, startedMono};
+        activeCtas = {receipt:decision.observationReceipt,mappings, pathname:decision.pathname, startedWall, startedMono, checked:new WeakMap()};
+        if (decision.mappings.some(row=>row.nativeDigest)) {
+          watchNativeLinks();
+          checkNativeLinks();
+        }
         if (!listenerInstalled) { listenerInstalled = true; install(); }
       } catch (_) { /* Keep original links. */ }
+    };
+    const entryFor = (node,mappings) => {
+      const entries = mappings.get(node.getAttribute('data-anticlone-point') ?? describe(node)?.marker) || [];
+      const scope = node.closest('[data-anticlone-surface]')?.getAttribute('data-anticlone-surface');
+      if (scope) return entries.find(item => item.surface === scope);
+      const fallback = entries.filter(item => !item.requiresSurface);
+      return fallback.length === 1 ? fallback[0] : null;
+    };
+    const describe = node => typeof discoverCtas === 'undefined' ? null : discoverCtas.describe(node);
+    const selector = typeof discoverCtas === 'undefined' ? 'a[data-anticlone-point][href]' : discoverCtas.selector;
+    const commercialLink = node => node.matches('[data-anticlone-price-minor],[data-anticlone-currency],[data-anticlone-offer]');
+    const checkNativeLinks = () => {
+      const snapshot = activeCtas;
+      if (!snapshot || !validContext() || !crypto.subtle) return;
+      const nodes = typeof discoverCtas === 'undefined'
+        ? document.querySelectorAll(selector)
+        : discoverCtas.collect().filter(item=>item.unique && item.point.compatible).map(item=>item.node);
+      if (nodes.length > 1000) return;
+      for (const node of nodes) {
+        const entry = entryFor(node,snapshot.mappings), href = describe(node)?.href ?? node.href;
+        if (!entry?.nativeDigest || !href || href.length > 2048 || commercialLink(node)) continue;
+        const cached = snapshot.checked.get(node);
+        if (cached?.href === href && cached.entry === entry) continue;
+        const check = {href,entry,valid:false};
+        snapshot.checked.set(node,check);
+        void crypto.subtle.digest('SHA-256',new TextEncoder().encode(href)).then(hash=>{
+          const digest = Array.from(new Uint8Array(hash),byte=>byte.toString(16).padStart(2,'0')).join('');
+          check.valid = digest === entry.nativeDigest;
+        }).catch(()=>{});
+      }
+    };
+    let watchingNative = false, nativeFrame = false;
+    const watchNativeLinks = () => {
+      if (watchingNative) return;
+      watchingNative = true;
+      const observer = new MutationObserver(() => {
+        if (!activeCtas || nativeFrame) return;
+        nativeFrame = true;
+        requestAnimationFrame(() => { nativeFrame = false; checkNativeLinks(); });
+      });
+      observer.observe(document.documentElement,{subtree:true,childList:true,attributes:true,
+        attributeFilter:typeof discoverCtas !== 'undefined' ? discoverCtas.attributes : ['href','data-anticlone-point','data-anticlone-surface','data-anticlone-price-minor','data-anticlone-currency','data-anticlone-offer']});
     };
     const install = () => {
           document.addEventListener('click', event => {
             try {
               if (!(event.target instanceof Element)) return;
-              const node = event.target.closest('a[data-anticlone-point][href]');
+              const node = event.target.closest(selector);
               if (!node || !node.isConnected) return;
               const activate = currentEvent => {
                 if (currentEvent !== event) return;
                 try {
                   const snapshot = activeCtas;
                   if (!snapshot || Date.now() < snapshot.startedWall || Date.now() - snapshot.startedWall >= ctaTtlMs || performance.now() - snapshot.startedMono >= ctaTtlMs) { activeCtas = null; return; }
-                  if (event.defaultPrevented || !validContext() || location.pathname !== snapshot.pathname || !node.isConnected || !node.hasAttribute('href')) return;
-                  const mappings = snapshot.mappings;
-                  const marker = node.getAttribute('data-anticlone-point');
-                  const entries = mappings.get(marker) || [];
+                  if (event.defaultPrevented || !validContext() || location.pathname !== snapshot.pathname || !node.isConnected) return;
+                  const point = describe(node);
+                  const marker = node.getAttribute('data-anticlone-point') ?? point?.marker;
                   const scope = node.closest('[data-anticlone-surface]')?.getAttribute('data-anticlone-surface');
-                  const entry = scope ? entries.find(item => item.surface === scope) : entries.length === 1 && !entries[0].requiresSurface ? entries[0] : null;
-                  if (!entry || entry.kind !== 'a') return;
-                  const current = Array.from(document.querySelectorAll('[data-anticlone-point]'));
-                  if (current.length > 1000 || current.filter(item => item.getAttribute('data-anticlone-point') === marker && (!scope || item.closest('[data-anticlone-surface]')?.getAttribute('data-anticlone-surface') === scope)).length !== 1) return;
+                  const entry = entryFor(node,snapshot.mappings);
+                  if (!entry || entry.kind !== (node instanceof HTMLAnchorElement ? 'a' : 'button')) return;
+                  const current = Array.from(document.querySelectorAll(marker?.startsWith('auto-') ? selector : '[data-anticlone-point]'));
+                  if (current.length > 1000 || current.filter(item => (item.getAttribute('data-anticlone-point') ?? describe(item)?.marker) === marker && (!scope || item.closest('[data-anticlone-surface]')?.getAttribute('data-anticlone-surface') === scope)).length !== 1) return;
                   const previous = node.getAttribute('href');
+                  if (entry.nativeDigest) {
+                    const checked = snapshot.checked.get(node);
+                    if (!checked?.valid || checked.entry !== entry || checked.href !== (point?.href ?? node.href) || commercialLink(node) || point && !point.compatible) return;
+                  }
                   const replacement = entry.destination;
+                  if (point?.navigation) {
+                    if (!entry.nativeDigest || !event.isTrusted || event.button!==0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                    reportAction(snapshot.receipt, marker, entry.surface ?? null);
+                    location.assign(replacement);
+                    event.preventDefault();
+                    event.stopImmediatePropagation();
+                    return;
+                  }
+                  if (!(node instanceof HTMLAnchorElement) || previous===null) return;
                   node.setAttribute('href', replacement);
-                  reportAction(snapshot.receipt, marker, entry.surface ?? null);
+                  if (event.isTrusted) reportAction(snapshot.receipt, marker, entry.surface ?? null);
                   setTimeout(() => { if (node.getAttribute('href') === replacement) node.setAttribute('href', previous); }, 0);
                 } catch (_) { /* Preserve the page on incompatible DOM implementations. */ }
               };
@@ -154,10 +249,9 @@
     const core = document.createElement('script');
     core.src = new URL(distribution?.paths?.['core.js'] ?? 'core.js', distribution ? distribution.bases.SCRIPT : source).href;
     core.async = true;
-    startCore = () => {
-      if (!validContext()) return;
-      if (coreStarted) return;
-      coreStarted = true;
+    if (typeof discoverCtas !== 'undefined') core.dataset.acCta = '2';
+    // The deadline starts in the bootstrap. Core only collects observations.
+    const startDecision = () => {
       try {
         let session = sessionStorage.getItem('anticlone.lab.session');
         if (!session) { const bytes = crypto.getRandomValues(new Uint8Array(16)); session = Array.from(bytes, x => x.toString(16).padStart(2, '0')).join(''); sessionStorage.setItem('anticlone.lab.session', session); }
@@ -174,56 +268,82 @@
         const stored = sessionStorage.getItem('anticlone.lab.attribution');
         if (stored === null) sessionStorage.setItem('anticlone.lab.attribution', JSON.stringify(signals));
         else { const initial = JSON.parse(stored); if (!initial || typeof initial !== 'object' || Array.isArray(initial)) return; Object.keys(signals).forEach(key => delete signals[key]); Object.assign(signals, initial); }
-        if (distribution || /\/i\/[a-f0-9-]{36}\/runtime\.js$/.test(new URL(source).pathname)) { try { navigator.sendBeacon(endpoint('observed-session'), new Blob([JSON.stringify({session,signals})],{type:'text/plain'})); } catch (_) { /* Passive metrics never block navigation. */ } }
         let inFlight = false, sequence = 0, lastAttempt = Date.now(), backoff = refreshIntervalMs, failed = false, controller, returnTimer;
         const expired = () => !activeCtas || Date.now() < activeCtas.startedWall || Date.now() - activeCtas.startedWall >= ctaTtlMs || performance.now() - activeCtas.startedMono >= ctaTtlMs;
+        let restoredFromHistory = false;
         const refresh = (onReturn = false, afterEntry = false) => {
           const elapsed = Date.now() - lastAttempt;
           if (!validContext() || document.hidden || inFlight || elapsed < 0) return;
-          const delay = failed ? backoff : onReturn && expired() ? 5000 : refreshIntervalMs;
+          // BFCache invalidates the previous snapshot even on a quick return.
+          // Keep the failure backoff, but skip the normal cooldown after a successful visit.
+          const delay = failed ? backoff : restoredFromHistory ? 0 : onReturn && expired() ? 5000 : refreshIntervalMs;
           if (!afterEntry && elapsed < delay) {
             if (onReturn && expired() && !returnTimer) returnTimer = setTimeout(() => { returnTimer = undefined; refresh(true); }, delay - elapsed);
             return;
           }
           if (returnTimer) { clearTimeout(returnTimer); returnTimer = undefined; }
+          restoredFromHistory = false;
           inFlight = true; const id = ++sequence, wall = Date.now(), mono = performance.now(); lastAttempt = wall;
           controller = new AbortController();
           const requestController = controller, timeout = setTimeout(() => requestController.abort(), 5000);
-          fetch(endpoint('cta-refresh'), {method:'POST', headers:{'Content-Type':'text/plain'}, body:JSON.stringify({session,signals,pathname:initialPath}), cache:'no-store', signal:requestController.signal})
+          fetch(endpoint('cta-refresh'), {method:'POST', headers:{'Content-Type':scoped ? 'text/plain;ac-cta=1'+discoveryVersion : 'text/plain'}, body:JSON.stringify({session,signals,pathname:initialPath}), cache:'no-store', signal:requestController.signal})
             .then(response => { if (!response.ok) throw Error('unavailable'); return response.json(); })
             .then(decision => { if (id !== sequence || !validContext()) return; failed = false; backoff = refreshIntervalMs; activeCtas = null; observeCtaVersion(decision); if (decision && decision.action === 'REPLACE_CONVERSION') prepareCtas(decision, wall, mono); })
             .catch(() => { if (id === sequence) { activeCtas = null; failed = true; backoff = Math.min(backoff * 2, 240000); } })
             .finally(() => { clearTimeout(timeout); if (id === sequence) { inFlight = false; controller = undefined; } });
         };
-        suspendCtas = () => { activeCtas = null; ++sequence; if (controller) controller.abort(); if (returnTimer) clearTimeout(returnTimer); returnTimer = undefined; inFlight = false; controller = undefined; };
-        resumeCtas = () => refresh(true);
+        suspendCtas = () => { restoredFromHistory = false; activeCtas = null; ++sequence; if (controller) controller.abort(); if (returnTimer) clearTimeout(returnTimer); returnTimer = undefined; inFlight = false; controller = undefined; };
+        resumeCtas = (fromHistory = false) => {
+          restoredFromHistory = fromHistory;
+          refresh(true);
+        };
         const timer = setInterval(() => refresh(), refreshIntervalMs);
         addEventListener('pagehide', event => { if (!event.persisted) { clearInterval(timer); suspendCtas(); } });
         document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(true); });
         const entryWall = Date.now(), entryMono = performance.now(), entrySequence = sequence;
-        fetch(endpoint('entry-decision'), { method:'POST', headers:{'Content-Type':'text/plain'}, body:JSON.stringify({session,signals,pathname:initialPath}), cache: 'no-store' })
+        if (scoped && location.protocol==='https:') visit=Array.from(crypto.getRandomValues(new Uint8Array(16)),x=>x.toString(16).padStart(2,'0')).join('');
+        fetch(endpoint('entry-decision'), { method:'POST', headers:{'Content-Type':visit ? 'text/plain;ac-visit='+visit+';ac-cta=1'+discoveryVersion : 'text/plain'}, body:JSON.stringify({session,signals,pathname:initialPath}), cache: 'no-store', credentials:'omit', priority:'high' })
           .then(response => { if (!response.ok) throw new Error('decision unavailable'); return response.json(); })
           .then(decision => {
             if (!validContext()) return;
             if (entrySequence === sequence) observeCtaVersion(decision);
-            if (decision.action === 'REPLACE_CONVERSION') { releaseGate(); if (entrySequence === sequence) prepareCtas(decision, entryWall, entryMono); return; }
-            if (decision.action !== 'PAGE_REDIRECT') releaseGate();
-            if (!redirectPending || redirectInteracted || performance.now() >= deadline) {
-              if (decision.action === 'PAGE_REDIRECT' && entrySequence === sequence) refresh(false, true);
+            if (decision.action === 'REPLACE_CONVERSION') {
+              redirectPending = false; releaseGate();
+              if (entrySequence === sequence) prepareCtas(decision, entryWall, entryMono);
               return;
             }
-            redirectPending = false;
-            if (decision.action !== 'PAGE_REDIRECT' || !Number.isSafeInteger(decision.version) || decision.version < 1 || typeof decision.destination !== 'string') return;
-            if(decision.operationalContext && !operationalContextMatches(decision)) return;
+            if (decision.action !== 'PAGE_REDIRECT') {
+              if (decision.action!=='OBSERVE_ONLY') reportEntry('RUNTIME_ERROR');
+              redirectPending = false; releaseGate(); return;
+            }
+            if (!redirectPending || redirectInteracted || performance.now() >= deadline) {
+              if (!redirectInteracted) reportEntry('LATE_REDIRECT');
+              if (entrySequence === sequence) refresh(false, true);
+              return;
+            }
+            if (!Number.isSafeInteger(decision.version) || decision.version < 1 || typeof decision.destination !== 'string' ||
+                (decision.operationalContext && !operationalContextMatches(decision))) { cancelRedirect('INVALID_REDIRECT'); return; }
             const target = new URL(decision.destination);
-            if (!['http:', 'https:'].includes(target.protocol) || target.username || target.password || target.hash || target.href === location.href || target.origin === location.origin) return;
+            if ((target.protocol !== 'https:' && !(target.protocol === 'http:' && !decision.operationalContext && ['localhost','127.0.0.1'].includes(target.hostname))) || target.username || target.password || target.href === location.href || target.origin === location.origin) {
+              cancelRedirect('INVALID_REDIRECT'); return;
+            }
+            const destination = attributed(target.href, decision.attribution);
+            if (!redirectPending || redirectInteracted || performance.now() >= deadline) {
+              reportEntry('LATE_REDIRECT');
+              if (entrySequence === sequence) refresh(false,true);
+              return;
+            }
+            handoffElapsed = Math.round(performance.now()-started);
+            location.replace(destination);
+            redirectPending = false;
+            reportEntry('REDIRECT_HANDOFF');
             reportAction(decision.observationReceipt, null, null);
-            location.replace(attributed(target.href, decision.attribution));
-          }).catch(cancelRedirect);
+          }).catch(() => { reportEntry('RUNTIME_ERROR'); cancelRedirect(); });
+        if (scoped) observe('observed-session', {session,signals,
+          ...(initialPath.length <= 384 ? {pathname:initialPath} : {})});
       } catch (_) { cancelRedirect(); }
     };
-    core.onload = () => { coreLoaded = true; startCore(); };
-    core.onerror = cancelRedirect;
+    startDecision();
     document.head.appendChild(core);
   } catch (_) { /* Leave the page operational. */ }
 })();

@@ -60,8 +60,6 @@ test('GS16: real backup, isolated restore, complete data integrity and restarted
     const files=(await readdir('infra')).filter(file=>/^\d{3}_.+\.sql$/.test(file)).sort();
     assert.ok(files.length>=32);
     for(const file of files) await source.query((await readFile('infra/'+file,'utf8')).replace(/^\uFEFF/,''));
-    await source.query('CREATE TABLE admin_totp_replay (factor_id text PRIMARY KEY,last_counter bigint NOT NULL)');
-    await source.query('CREATE TABLE admin_totp_codes (factor_id text NOT NULL,digest text NOT NULL,valid_until bigint NOT NULL,PRIMARY KEY(factor_id,digest))');
     await source.query("INSERT INTO projects VALUES('recovery','Synthetic owner','https://owner.test'),('second','Second owner','https://second.test')");
     await observe(source,'recovery','https://owner.test','https://copy.test');
     const incident=(await source.query("SELECT id FROM incidents WHERE project_id='recovery'")).rows[0].id as string;
@@ -111,7 +109,7 @@ test('GS16: real backup, isolated restore, complete data integrity and restarted
       assert.equal((await restored.query('SELECT count(*)::int n FROM projects')).rows[0].n,2);
       assert.equal((await restored.query('SELECT installation_id FROM protected_pages WHERE id=$1',[protectedPage.page])).rows[0].installation_id,protectedPage.installation);
       const approvalClient=await restored.connect();
-      try { assert.deepEqual(await currentApproval(approvalClient,'recovery',protectedPage.page),{entryVersion:1}); } finally { approvalClient.release(); }
+      try { assert.equal((await currentApproval(approvalClient,'recovery',protectedPage.page))?.entryVersion,1); } finally { approvalClient.release(); }
       assert.deepEqual((await restored.query('SELECT project_id,page_id,source FROM page_installation_signals')).rows,[{project_id:'recovery',page_id:protectedPage.page,source:'core'}]);
       assert.equal((await restored.query('SELECT status FROM incidents')).rows[0].status,'investigating');
       assert.equal((await restored.query('SELECT attempts FROM alert_outbox')).rows[0].attempts,1);

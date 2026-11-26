@@ -109,8 +109,6 @@ test('operational v2 + MFA/CSRF admin: HTTPS publication, rotation, PAGE/CTA, su
     }
     const base='https://gateway.test'+(proxy?'':':'+address.port);
     process.env.RUNTIME_PUBLIC_ORIGIN=base;
-    await db.query('CREATE TABLE admin_totp_replay(factor_id text PRIMARY KEY,last_counter bigint NOT NULL)');
-    await db.query('CREATE TABLE admin_totp_codes(factor_id text NOT NULL,digest text NOT NULL,valid_until bigint NOT NULL,PRIMARY KEY(factor_id,digest))');
     const secret='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',salt='0123456789abcdef0123456789abcdef';
     const passwordRecord=`scrypt$${salt}$${scryptSync('password',Buffer.from(salt,'hex'),64).toString('hex')}`;
     admin=createAdminServer(passwordRecord,secret,db).listen(0,'127.0.0.1');await once(admin,'listening');
@@ -153,7 +151,7 @@ test('operational v2 + MFA/CSRF admin: HTTPS publication, rotation, PAGE/CTA, su
       assert.equal(result.status(),200);return await result.json() as {distribution:Distribution;snippets:{html:string};diagnostic:{status:string}};
     };
     for(const p of pages){
-      const published=await publication(p,'publish');assert.ok(published.distribution.bases.SCRIPT.includes('/r/v2/'));
+      const published=await publication(p,'publish');assert.ok(published.distribution.bases.SCRIPT.includes(process.env.RUNTIME_COMPACT_ALIASES === 'true' ? '/assets/' : '/r/v2/'));
       assert.deepEqual((await publication(p,'inspect')).distribution,published.distribution);
       distributions.set(p.page,published.distribution);snippets.set(p.page,published.snippets.html);
     }
@@ -167,9 +165,15 @@ test('operational v2 + MFA/CSRF admin: HTTPS publication, rotation, PAGE/CTA, su
       await operationalForm.locator('[name="project"]').fill(p.project);await operationalForm.locator('[name="page"]').fill(p.page);
       await operationalForm.locator('[name="revision"]').fill(String(revision));
       await operationalForm.locator('[name="copyOrigin"]').fill(copy);await operationalForm.locator('[name="copyPathname"]').fill(p.path);
-      await operationalForm.locator('[name="acknowledge"]').check();
+      const confirmation=action==='authorize' ? panel.waitForEvent('dialog').then(async dialog=>{
+        assert.equal(dialog.type(),'confirm');
+        assert.equal(dialog.message(),'Confirme o contexto '+copy+p.path);
+        await dialog.accept();
+      }) : null;
       const response=panel.waitForResponse(r=>r.url().endsWith('/admin/ui/operational'));
-      await operationalForm.locator('button[value="'+action+'"]').click();assert.equal((await response).status(),200);
+      await operationalForm.locator('button[value="'+action+'"]').click();
+      if (confirmation) await confirmation;
+      assert.equal((await response).status(),200);
     };
     const decide=async(p:typeof pages[number],origin=copy,endpoint='cta-refresh',path=p.path)=>{
       if(proxy)await new Promise(r=>setTimeout(r,550)); // honor the real proxy budget

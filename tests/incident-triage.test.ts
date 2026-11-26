@@ -95,7 +95,12 @@ test('incident triage: atomic audit, concurrency, observations, API and browser'
     await classifyIncident(db,stale);
     await classifyIncident(db,{...stale,version:'1',expected:'investigating',status:'unverified'});
     await assert.rejects(classifyIncident(db,stale));
-    await db.query("UPDATE incidents SET last_seen=now()-interval '31 days' WHERE project_id='a'"); await cleanup(db,'a');
-    assert.equal((await db.query("SELECT count(*)::int n FROM incident_status_audit a JOIN incidents i ON i.id=a.incident_id WHERE i.project_id='a'")).rows[0].n,0);
+    const retainedAudits="SELECT count(*)::int n FROM incident_status_audit a JOIN incidents i ON i.id=a.incident_id WHERE i.project_id='a'";
+    await db.query("UPDATE incidents SET last_seen=now()-interval '31 days' WHERE project_id='a'");
+    await cleanup(db,'a');
+    assert.ok((await db.query(retainedAudits)).rows[0].n>0,'recent triage keeps its review history');
+    await db.query("UPDATE incident_status_audit a SET recorded_at=now()-interval '31 days' FROM incidents i WHERE i.id=a.incident_id AND i.project_id='a'");
+    await cleanup(db,'a');
+    assert.equal((await db.query(retainedAudits)).rows[0].n,0,'expired triage and incident release the position');
   } finally { if(browser) await browser.close(); if(server) {server.close(); await once(server,'close')} await db.end(); await root.query(`DROP SCHEMA ${schema} CASCADE`); await root.end(); }
 });

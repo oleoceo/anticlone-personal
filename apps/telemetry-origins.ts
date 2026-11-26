@@ -1,5 +1,12 @@
+import {abbreviatedPaths, assetFilePatterns, assetProbeToken, compactPaths} from './distribution-paths.js';
 import type {Pool, PoolClient} from 'pg';
 import {PublicDnsFailure, publicHttpsBroker} from './installation-verifier.js';
+
+// A 16-byte base64url token cannot end in '1'. Probe the real script location.
+const distributionProbeBase = '/assets/0000000000000000000001/';
+export const distributionHealthPath = '/assets/'+assetFilePatterns['runtime.js'].replace('*',assetProbeToken);
+export const namedDistributionHealthPath = distributionProbeBase+compactPaths['runtime.js'];
+export const abbreviatedDistributionHealthPath = distributionProbeBase+abbreviatedPaths['runtime.js'];
 
 type Database = Pick<Pool | PoolClient, 'query'>;
 type CheckStatus = 'OPERATIONAL' | 'DNS_FAILED' | 'HTTPS_FAILED' | 'GATEWAY_NOT_READY';
@@ -21,6 +28,10 @@ function authorized(origin: string, env: NodeJS.ProcessEnv) {
   if (env.ADMIN_PUBLIC_ORIGIN) {
     try {if (new URL(env.ADMIN_PUBLIC_ORIGIN).hostname === url.hostname) return false;} catch {return false;}
   }
+  return listedTelemetryOrigin(origin,env);
+}
+
+export function listedTelemetryOrigin(origin:string, env:NodeJS.ProcessEnv) {
   return (env.RUNTIME_TELEMETRY_POOL_ORIGINS ?? '').split(',').some(entry => {
     try {return httpsOrigin(entry.trim()) === origin;} catch {return false;}
   });
@@ -69,7 +80,7 @@ export async function checkTelemetryEndpoint(origin: string,
   request = publicHttpsBroker(undefined,undefined,{responseLimit:2048,returnHttpErrors:true})): Promise<CheckStatus> {
   let reply;
   try {
-    reply = await request({url:origin+'/healthz',method:'GET',body:''});
+    reply = await request({url:origin+distributionHealthPath,method:'GET',body:''});
   } catch (error) {
     return error instanceof PublicDnsFailure ? 'DNS_FAILED' : 'HTTPS_FAILED';
   }

@@ -15,10 +15,11 @@ import {deliverProviderCta} from './cta-delivery.js';
 
 // One serialized sweep, keyset batches, independent failure/backoff state per project.
 // Paused projects retain cleanup, but cannot collect or reconcile operations.
-export function projectMaintenance(db: Pool, env: NodeJS.ProcessEnv, exclude?: string) {
+export function projectMaintenance(db: Pool, env: NodeJS.ProcessEnv, exclude?: string, collectionDb=db) {
   const states=new Map<string,Promise<Awaited<ReturnType<typeof createState>>>>();
   const hosts=authorizedHosts(env), resolver=hosts.length ? realResolver(env.INFRASTRUCTURE_DNS_SERVER!) : undefined;
-  const configuredSmtp=smtpProvider(env);
+  const notificationsOff=env.GATEWAY_NOTIFICATION_DELIVERY==='off';
+  const configuredSmtp=notificationsOff ? undefined : smtpProvider(env);
   let busy=false;
   const pageRetention=new Map<string,number>();
   async function createState() {
@@ -37,8 +38,8 @@ export function projectMaintenance(db: Pool, env: NodeJS.ProcessEnv, exclude?: s
     if (busy) return;
     busy=true;
     try {
-      const smtp=await currentSmtpProvider(db, configuredSmtp, env);
-      const delivery=smtp ?? (env.SMTP_PANEL_KEY ? undefined : Number(env.SMTP_PORT));
+      const smtp=notificationsOff ? undefined : await currentSmtpProvider(db, configuredSmtp, env);
+      const delivery=smtp ?? (notificationsOff || env.SMTP_PANEL_KEY ? undefined : Number(env.SMTP_PORT));
       let after='';
       for (;;) {
         const projects=await db.query('SELECT id FROM projects WHERE id>$1 ORDER BY id LIMIT 25',[after]);
@@ -112,7 +113,7 @@ export function projectMaintenance(db: Pool, env: NodeJS.ProcessEnv, exclude?: s
     state.pending++;
     let ownsClaim=false;
     try {
-      const client=await db.connect();
+      const client=await collectionDb.connect();
       try {
       await client.query('BEGIN');
       if (!await operationallyEligible(client,id,page,true)) { await client.query('ROLLBACK'); return false; }
@@ -122,7 +123,7 @@ export function projectMaintenance(db: Pool, env: NodeJS.ProcessEnv, exclude?: s
       } catch(error) {await client.query('ROLLBACK');throw error;} finally {client.release();}
       if (state.claims.has(source) || Date.now()<(state.claimAfter.get(source) ?? 0)) return state.optional.installation.state!=='DATABASE_ERROR';
       state.claims.add(source); ownsClaim=true; state.claimAfter.set(source,Date.now()+60_000);
-      const claimed=await state.optional.installation.run('claim',()=>recordInstallationClaim(db,id,origin,source));
+      const claimed=await state.optional.installation.run('claim',()=>recordInstallationClaim(collectionDb,id,origin,source));
       // Core/fallback cannot manufacture the independent activity required by F45.
       if (!claimed && state.optional.installation.state==='DATABASE_ERROR') { state.version++; return false; }
       state.failures.observe('installation_claim',false);

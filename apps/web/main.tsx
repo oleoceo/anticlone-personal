@@ -1,3 +1,4 @@
+import {ProjectRedirectDestination} from './project-redirect-destination';
 import {useEffect, useRef, useState, type FormEvent} from 'react';
 import {createRoot} from 'react-dom/client';
 import {DraftGuard, uuid} from './operations';
@@ -204,6 +205,7 @@ function Workspace({api, projects, project, pageId, installation, setGuard}: {
           </li>)}</ul>}
       </section>}
     {!installation && (!pageId || page) && <DraftGuard key={page?.id ?? project.id} setGuard={setGuard}>
+      {!page && <ProjectRedirectDestination api={api} project={project.id} setGuard={setGuard}/>}
       <LifecycleControls api={api} project={project} page={page} afterChange={()=>{list.revalidate(); status.revalidate();}} setGuard={setGuard}/>
       {page && page.enabled && page.lifecycle_state === 'ACTIVE' && <PageEvidence api={api} project={project.id} page={page.id} setGuard={setGuard}/>}
     </DraftGuard>}

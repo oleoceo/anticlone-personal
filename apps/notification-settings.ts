@@ -1,3 +1,4 @@
+import {notificationWorkerStatus} from './notification-worker-status.js';
 import type { Pool } from 'pg';
 import { sendProviderNotice, verifyProviderConnection } from './smtp-provider.js';
 import {panelSmtpAllowed, resolveSmtpRow, sealSmtpPassword} from './panel-smtp.js';
@@ -46,7 +47,12 @@ function present(row: Record<string, unknown>) {
 export async function getNotificationSettings(db:Pool) {
   const result=await db.query('SELECT * FROM notification_settings WHERE singleton=true');
   if (!result.rowCount) throw Error('settings missing');
-  return present(result.rows[0]);
+  const row=result.rows[0];
+  const worker=await notificationWorkerStatus();
+  const fresh=await db.query(`SELECT max(created_at) AS cutoff FROM notification_settings_audit
+    WHERE version<=$1 AND action='enable' AND 'new_events_only'=ANY(changed_fields)`,[row.version]);
+  return {...present(row), worker:worker.state==='READY' && worker.version!==row.version
+    ? {...worker,state:'SETTINGS_CHANGED'} : worker, delivery_after:row.requested ? fresh.rows[0].cutoff : null};
 }
 
 export async function testNotificationSmtp(db: Pool, input: unknown) {
@@ -125,12 +131,19 @@ export async function setNotificationPreference(db:Pool, input:unknown) {
     if (Object.keys(data).join(',') !== 'enabled') throw new TypeError('invalid fields');
     return mutate(db, async row=>row.requested ? {action:'disable',changed:['preference_requested'],values:row as Settings,requested:false} : null);
   }
-  if (data.enabled !== true || Object.keys(data).sort().join(',') !== 'enabled,version') throw new TypeError('invalid fields');
+  const fields = Object.keys(data).sort().join(',');
+  if (data.enabled !== true || (fields !== 'enabled,version' &&
+    (fields !== 'enabled,newEventsOnly,version' || data.newEventsOnly !== true))) throw new TypeError('invalid fields');
   const v=version(data.version);
   return mutate(db, async row=>{
     if (row.version !== v) throw new Conflict();
     if (names.some(n=>row[n] === null)) throw new TypeError('incomplete');
-    return row.requested ? null : {action:'enable',changed:['preference_requested'],values:row as Settings,requested:true};
+    if (data.newEventsOnly && !row.requested) {
+      if (present(row).clone_transport !== 'DISABLED') throw new TypeError('private transport unavailable');
+      const worker=await notificationWorkerStatus();
+      if (worker.state!=='NOT_CONFIGURED' && (worker.state!=='READY' || worker.version!==row.version)) throw new Conflict();
+    }
+    return row.requested ? null : {action:'enable',changed:data.newEventsOnly ? ['preference_requested','new_events_only'] : ['preference_requested'],values:row as Settings,requested:true};
   });
 }
 async function mutate(db:Pool, operation:(row:Record<string, unknown>)=>Promise<{action:string;changed:readonly string[];values:Settings;requested:boolean;credentials?:{login:string|null;encrypted:string|null}}|null>) {
@@ -145,10 +158,10 @@ async function mutate(db:Pool, operation:(row:Record<string, unknown>)=>Promise<
     const values=[s.provider,s.host,s.port,s.tls_mode,s.sender,s.recipient,change.requested];
     if (change.credentials) values.push(change.credentials.login, change.credentials.encrypted);
     const updated=await client.query(`UPDATE notification_settings
-      SET provider=$1,host=$2,port=$3,tls_mode=$4,sender=$5,recipient=$6,requested=$7,version=version+1,updated_at=now()
+      SET provider=$1,host=$2,port=$3,tls_mode=$4,sender=$5,recipient=$6,requested=$7,version=version+1,updated_at=clock_timestamp()
       ${change.credentials ? ',smtp_login=$8,smtp_secret_encrypted=$9' : ''}
       WHERE singleton=true RETURNING *`,values);
-    await client.query('INSERT INTO notification_settings_audit(version,action,changed_fields) VALUES($1,$2,$3)',[updated.rows[0].version,change.action,change.changed]);
+    await client.query('INSERT INTO notification_settings_audit(version,action,changed_fields,created_at) SELECT $1,$2,$3,updated_at FROM notification_settings WHERE singleton=true',[updated.rows[0].version,change.action,change.changed]);
     await client.query('COMMIT'); return present(updated.rows[0]);
   } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
 }

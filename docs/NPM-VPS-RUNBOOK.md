@@ -142,8 +142,9 @@ ssh -N -o ExitOnForwardFailure=yes -L 127.0.0.1:3001:127.0.0.1:3001 USUARIO@VPS
 
 Não usar localhost, domínio, outra porta local, bind0.0.0.0 ou encaminhamento remoto.
 Se3001 local estiver ocupada, liberar o processo local deliberadamente antes do túnel.
-Senha+TOTP, replay persistido, sessão de15min, cookies HttpOnly/SameSite Strict,
-CSRF, origem exata e logout permanecem. HTTP é somente loopback dentro do canal SSH
+O painel usa sessão web sem prazo fixo. O token bearer expira em 15 minutos.
+O acesso exige senha e TOTP, com proteção contra replay, CSRF e validação de origem.
+O cookie usa HttpOnly e SameSite Strict. HTTP é somente loopback dentro do canal SSH
 criptografado; não adicionar Secure ao cookie sem listener HTTPS privado.
 Confirmar login real, logout e rejeição de Origin/Host/proxy headers adulterados.
 `ss -lnt` deve mostrar3001 somente127.0.0.1; container em bridge não deve alcançar
@@ -447,3 +448,71 @@ sem P0/P1/P2 pendente; typecheck/diff-check próprios PASS. SHA256 dos arquivos:
 HTTP610E382D, host4D7657A0, localizaçãoDBF5A988, envelopeB869A316, helper97B53B8E,
 testeE611115A, integração20686122. Não declarar publicação ou homologação externa
 com base nessas provas. Sem VPS/Cloudflare/NPM existentes, deploy ou merge.
+
+## 11. Adicionar um domínio de distribuição
+
+O painel registra e diagnostica cada origem e habilita sua seleção após
+verificação. DNS, certificado público, NPM e allowlist privada exigem operação
+autorizada. O procedimento foi conferido no template da imagem NPM 2.13.7
+disponível no laboratório. Confira a versão e o `nginx -T` efetivos no
+ambiente autorizado antes de aplicar. [Configuração avançada do NPM](https://nginxproxymanager.com/advanced-config/)
+
+1. Em **Configurações → Integrações → Endpoints de telemetria**, cadastre
+   `https://<hostname>`. Publique os registros DNS para o ingresso autorizado
+   e provisione certificado público para o nome. Preserve a política DNS-only
+   ou Full (strict) e a fronteira de origem do ambiente aplicável.
+2. No NPM, prepare um Proxy Host separado, com somente o novo hostname,
+   esquema de upstream HTTPS, o mesmo endereço privado e a mesma porta do
+   Gateway atual, certificado público do novo nome, Force SSL e Cache Assets desativado. Confira
+   se o hook global `server_proxy.conf` interfere nas rotas ou no mTLS. Copie para
+   Advanced os includes exclusivos da distribuição. No fragmento de servidor,
+   os guards `$host` e `$http_host` usam o **novo hostname externo**.
+   No fragmento de localização, `proxy_ssl_name` e `proxy_set_header Host`
+   usam o **hostname canônico atual do Gateway**. Preserve certificado cliente,
+   CA, verificação de certificado, headers sanitizados, limites e timeouts.
+   O fallback gerado pelo NPM deve permanecer sem credencial mTLS. Preserve
+   os guards administrativos e o acesso ao painel apenas por túnel SSH.
+3. No mapa HTTP já incluído, acrescente uma entrada para o novo hostname
+   com a mesma chave de cliente. Reutilize as mesmas zonas de taxa e
+   concorrência nos dois vhosts para que o orçamento seja compartilhado.
+   Preserve o conteúdo preexistente do hook. No Dev, derive os includes da
+   configuração efetiva do Host 13, com upstream da bridge na porta 13003,
+   namespace de limites Dev, caminhos TLS privados e `$realip_remote_addr`.
+   O renderer em `infra/npm/dev` foi escrito para o Host 13.
+4. Valide o candidato isoladamente com `nginx -t` e confira o diff de
+   `nginx -T` antes do reload autorizado. Confirme que somente os vhosts
+   esperados e o mapa mudaram. Teste ambos os hostnames, TLS público, a
+   rota compacta reservada, aliases antigos, rejeição de rotas administrativas
+   e limite compartilhado. Preserve o listener, o pin e o health check do
+   monitor mTLS atual. Guarde a versão anterior dos fragmentos e da configuração.
+5. Inclua o novo endereço exato em `RUNTIME_TELEMETRY_POOL_ORIGINS` no
+   ambiente privado do admin e carregue a configuração pelo processo
+   existente. No painel, clique **Verificar endpoint**. Quando constar
+   **Operacional**, selecione-o na **Instalação** da LP e publique uma revisão.
+   DNS, TLS e rota têm pendências distintas no painel. Valide os trechos
+   publicados em uma LP de teste antes de instalar em uma página real.
+
+**Sequência da primeira publicação compacta.** Aplique as migrações 075 a 077 na ordem, em
+transações com escritas administrativas pausadas e substitua o admin antigo
+antes de reabrir publicação, para que somente o novo probe grave resultados.
+Atualize o Gateway e as regras de ingresso em todos os vhosts, inclusive
+os padrões já configurados. Confira as rotas históricas, o monitor e a
+prontidão em `/assets/js/app.00000000000000000000.js` em cada padrão. Revalide os endpoints
+cadastrados e só então habilite `RUNTIME_COMPACT_ALIASES=true` no admin.
+A LP original permanece fora deste procedimento de preparação.
+
+No smoke de distribuição, acesse o probe reservado e os recursos do
+contrato ativo com e sem uma query de teste, como `?smoke=1`. Confira o
+mesmo status e tipo de conteúdo nas duas variantes. Para as ações de
+telemetria, use os métodos HTTP e os payloads do cenário controlado e
+confira as rejeições de token, nome ou papel incorretos. O Gateway
+compara o caminho original até o primeiro `?`, sem decodificação ou
+normalização. O aceite Dev já registrado no [STATUS](../STATUS.md#f07--domínios-de-distribuição-e-aliases-compactos)
+cobre a revisão sintética pelo caminho público.
+
+**Rollback.** Retire a flag para voltar a emitir URLs v2 e desative no painel
+um domínio com problema para bloquear novas revisões. Preserve o Gateway
+compatível, as migrações 075 a 077, o proxy e o DNS dos endereços já instalados enquanto houver
+consumidores compactos. Uma reversão da aplicação e dos fragmentos exige checar quais formatos foram emitidos ou compartilhados e conservar suporte a todos eles. Mantenha as migrações aditivas. Se for necessário trocar a origem de uma LP
+de teste, emita outra revisão sobre um domínio saudável e substitua seus
+trechos sob autorização. Alterar a seleção no painel afeta futuras revisões.

@@ -117,8 +117,6 @@ test('network-none sandboxed Chromium + mediated real TLS/PostgreSQL: FULL, CSP 
     const code=new TOTP({secret:Secret.fromBase32(secret)}).generate({timestamp:clock});
     const password='control-panel fixture';
     const salt=Buffer.alloc(16,1);
-    await db.query('CREATE TABLE admin_totp_replay (factor_id text PRIMARY KEY,last_counter bigint NOT NULL)');
-    await db.query('CREATE TABLE admin_totp_codes (factor_id text NOT NULL,digest text NOT NULL,valid_until bigint NOT NULL,PRIMARY KEY (factor_id,digest))');
     const admin=createAdminServer('scrypt$'+salt.toString('hex')+'$'+scryptSync(password,salt,64).toString('hex'),secret,db,()=>clock)
       .listen(0,'127.0.0.1');
     await once(admin,'listening');
@@ -143,9 +141,9 @@ test('network-none sandboxed Chromium + mediated real TLS/PostgreSQL: FULL, CSP 
     } finally { await new Promise<void>(resolve=>{admin.close(()=>resolve());admin.closeAllConnections();}); }
     policy="default-src 'none'";const unsupported=await run(spec,image);assert.equal(unsupported.status,'UNSUPPORTED',JSON.stringify(unsupported));
     policy='';documentUnavailable=true;
-    const unavailable=await run(spec,image);assert.equal(unavailable.status,'NOT_VERIFIED');
+    const unavailable=await run(spec,image);assert.equal(unavailable.status,'NOT_VERIFIED');assert.equal(unavailable.reason,'OFFICIAL_SITE_UNAVAILABLE');
     documentUnavailable=false;gatewayUnavailable=true;
-    const gatewayDown=await run(spec,image);assert.equal(gatewayDown.status,'NOT_VERIFIED','loaded document with unavailable gateway is not unsupported');
+    const gatewayDown=await run(spec,image);assert.equal(gatewayDown.status,'NOT_VERIFIED','loaded document with unavailable gateway is not unsupported');assert.equal(gatewayDown.reason,'CHECK_FAILED');
     gatewayUnavailable=false;
     stale=true;const changed=await verifyPublishedInstallation(db,'owner',page,env,run);assert.equal(changed.status,'NOT_VERIFIED');assert.equal(changed.reason,'CONFIGURATION_CHANGED');
     assert.equal((await distributionAdmin(db,{action:'inspect',project:'owner',page})).diagnostic?.status,'NOT_VERIFIED','old successful revision never validates new configuration');

@@ -51,7 +51,7 @@ export function publicHttpsBroker(target?:string,signal?:AbortSignal,
         if(res.headers['content-encoding']&&res.headers['content-encoding']!=='identity'){res.destroy();reject(Error('encoded response denied'));return;}
         res.on('data',(chunk:Buffer)=>{size+=chunk.length;total+=chunk.length;if(size>(options.responseLimit??512*1024)||total>2*1024*1024){res.destroy();reject(Error('response budget'));}else chunks.push(chunk);});
         res.on('error',reject);
-        res.on('end',()=>accept({status:res.statusCode??500,headers:Object.fromEntries(['content-type','content-security-policy','referrer-policy','x-content-type-options','access-control-allow-origin','cross-origin-embedder-policy','cross-origin-opener-policy','cross-origin-resource-policy'].flatMap(name=>typeof res.headers[name]==='string'?[[name,res.headers[name] as string]]:[])),body:Buffer.concat(chunks)}));
+        res.on('end',()=>accept({status:res.statusCode??500,headers:Object.fromEntries(['content-type','content-security-policy','referrer-policy','x-content-type-options','access-control-allow-origin','cross-origin-embedder-policy','cross-origin-opener-policy','cross-origin-resource-policy','x-anticlone-redirect-contract'].flatMap(name=>typeof res.headers[name]==='string'?[[name,res.headers[name] as string]]:[])),body:Buffer.concat(chunks)}));
       });
       const timer=setTimeout(()=>req.destroy(Error('HTTPS deadline')),4000);
       req.once('close',()=>clearTimeout(timer));req.once('error',reject);req.end(value.method==='POST'?value.body:undefined);
@@ -94,14 +94,14 @@ export async function runControlledCheck(spec:VerificationSpec,image:string,brok
   busy=true;
   const child=spawn('docker',['run','--name',name,'--log-driver','none','--label','anticlone.installation-id='+spec.distribution.installation,'-i','--network','none','--read-only','--cap-drop','ALL','--user','1000:1000','--security-opt','no-new-privileges:true','--security-opt','seccomp='+resolve('infra/verifier/seccomp.json'),'--memory','512m','--pids-limit','128','--cpus','1','--tmpfs','/tmp:rw,nosuid,nodev,size=128m,mode=1777','--tmpfs','/home/pwuser:rw,nosuid,nodev,size=32m,uid=1000,gid=1000,mode=700',image],{stdio:['pipe','pipe','pipe']});
   const layers:Record<string,boolean>={bootstrap:false,core:false,core_observation:false,fallback:false,fallback_independent:false,html_canary:false,css_canary:false};
-  const hashes=new Map<string,string>();let incompatibleIsolation=false;
+  const hashes=new Map<string,string>();let incompatibleIsolation=false,officialSiteUnavailable=false;
   let blocked=0,count=0,buffer='',done=false,loaded=false,failed=false;
   const started=new Date().toISOString();
   let timer:ReturnType<typeof setTimeout>;
   let outcome:ControlledCheck|undefined;
   try {
     outcome=await new Promise<ControlledCheck>(accept=>{
-      const finish=()=>{const values=Object.values(layers),status=!done||!loaded||failed||incompatibleIsolation?'NOT_VERIFIED':values.every(Boolean)?'FULL':values.some(Boolean)?'PARTIAL':'UNSUPPORTED';accept({status,checkedAt:started,scope:'CONTROLLED_BROWSER_CURRENT_LOAD',reason:incompatibleIsolation?'ISOLATION_POLICY_NOT_REPRODUCED':status==='NOT_VERIFIED'?'CHECK_FAILED':status==='FULL'?'ALL_INSTALLATION_CHANNELS_OBSERVED':'CHANNELS_UNAVAILABLE',layers:{...layers},blocked,activeMitigation:'NOT_TESTED'});};
+      const finish=()=>{const values=Object.values(layers),status=!done||!loaded||failed||incompatibleIsolation?'NOT_VERIFIED':values.every(Boolean)?'FULL':values.some(Boolean)?'PARTIAL':'UNSUPPORTED';accept({status,checkedAt:started,scope:'CONTROLLED_BROWSER_CURRENT_LOAD',reason:incompatibleIsolation?'ISOLATION_POLICY_NOT_REPRODUCED':officialSiteUnavailable?'OFFICIAL_SITE_UNAVAILABLE':status==='NOT_VERIFIED'?'CHECK_FAILED':status==='FULL'?'ALL_INSTALLATION_CHANNELS_OBSERVED':'CHANNELS_UNAVAILABLE',layers:{...layers},blocked,activeMitigation:'NOT_TESTED'});};
       timer=setTimeout(()=>{failed=true;child.kill('SIGKILL');},25000);
       child.stderr.on('data',()=>{/* no browser/page diagnostics or credentials retained */});
       child.stdin.on('error',()=>{/* close handled below */});
@@ -147,6 +147,7 @@ export async function runControlledCheck(spec:VerificationSpec,image:string,brok
               if(data.mode==='without_javascript'&&request.url===spec.target)response.headers['content-security-policy']=(response.headers['content-security-policy']?response.headers['content-security-policy']+', ':'')+"script-src 'none'";
               child.stdin.write(JSON.stringify({id:data.id,...response,body:response.body.toString('base64')})+'\n');
             }catch{
+              if(authorized && request.url===spec.target && data.type==='document' && !abort.signal.aborted)officialSiteUnavailable=true;
               if(authorized&&(request.url===spec.target||Object.values(policy.urls).includes(request.url)))failed=true;
               blocked++;child.stdin.write(JSON.stringify({id:data.id,blocked:true})+'\n');
             }

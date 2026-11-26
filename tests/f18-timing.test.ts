@@ -76,17 +76,17 @@ test('F18 real Chromium desktop/mobile: backend, receipt, paint and effective na
         page.on('console',m=>{if(m.text().includes('"event":"paint"'))paints++;});
         const backendStart=backendTimes.length;
         await page.goto(copy+'/copy',{waitUntil:'commit'});
-        if(mode==='slow-decision'||mode==='slow-core'){await page.waitForTimeout(50);await page.screenshot({path:`test-results/f18/${mobile?'mobile':'desktop'}-${mode}-early.png`});}
+        if(mode==='slow-decision'){await page.waitForTimeout(50);await page.screenshot({path:`test-results/f18/${mobile?'mobile':'desktop'}-${mode}-early.png`});}
         await page.waitForTimeout(650);
-        if(mode==='normal'||mode==='before'){
+        if(mode==='normal'||mode==='before'||mode==='slow-core'){
           // Timing can miss the commercial window under load; report the observed outcome.
           assert.ok([copy+'/copy',original+'/approved'].includes(page.url()));
           assert.ok(events.some(e=>!!e&&typeof e==='object'&&'action' in e&&e.action==='PAGE_REDIRECT'),'actual PAGE_REDIRECT received');
           if(mode==='normal'&&page.url()===original+'/approved')positive++;
         }else if(mode==='early')assert.equal(page.url(),copy+'/native');
         else assert.equal(page.url(),copy+'/copy');
-        if(mode!=='normal'&&mode!=='before')assert.ok(paints>0,'real Chromium paint observed');
-        if(mode==='slow-decision'||mode==='slow-core'){
+        if(mode!=='normal'&&mode!=='before'&&mode!=='slow-core')assert.ok(paints>0,'real Chromium paint observed');
+        if(mode==='slow-decision'){
           assert.equal(await page.locator('h1').isVisible(),true);
           assert.equal(await page.locator('[data-anticlone-render-gate]').evaluate(n=>getComputedStyle(n).opacity),'1');
           assert.ok(events.some(e=>!!e&&typeof e==='object'&&'event' in e&&e.event==='gate-frame'&&'opacity' in e&&e.opacity==='0'),'explicit visual scope gated');

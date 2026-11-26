@@ -58,27 +58,36 @@ export function useOperation(setGuard: SetGuard) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>();
   const [message, setMessage] = useState('');
-  const [confirmation, setConfirmation] = useState<{title: string; summary: ReactNode; execute: () => Promise<string>; form?: HTMLFormElement; version?: number}>();
+  const [confirmation, setConfirmation] = useState<{title: string; summary: ReactNode; execute: () => Promise<string>; confirmLabel?: string; form?: HTMLFormElement; version?: number}>();
 
-  function review(title: string, summary: ReactNode, execute: () => Promise<string>, fields?: FormData) {
+  function review(title: string, summary: ReactNode, execute: () => Promise<string>, fields?: FormData, confirmLabel?: string) {
     if (!inFlight.current && !tracker?.saving()) {
       setError(undefined);
       setMessage('');
       const form = fields ? owners.get(fields) : undefined;
-      setConfirmation({title, summary, execute, form, version: form ? tracker?.version(form) : undefined});
+      setConfirmation({title, summary, execute, confirmLabel, form, version: form ? tracker?.version(form) : undefined});
     }
   }
 
-  async function execute() {
-    if (inFlight.current || tracker?.saving() || !confirmation) return;
+  async function run(task: () => Promise<string>, fields?: FormData) {
+    if (inFlight.current || tracker?.saving()) return;
+    const form = fields ? owners.get(fields) : undefined;
+    const version = form ? tracker?.version(form) : undefined;
+    await perform(task, form, version);
+  }
+
+  async function perform(task: () => Promise<string>, form?: HTMLFormElement, version?: number) {
+    if (inFlight.current || tracker?.saving()) return;
+    setError(undefined);
+    setMessage('');
     inFlight.current = true;
     setConfirmation(undefined);
     if (tracker) tracker.start();
     else setGuard('saving');
     setBusy(true);
     try {
-      setMessage(await confirmation.execute());
-      if (tracker) tracker.finish(confirmation.form, confirmation.version);
+      setMessage(await task());
+      if (tracker) tracker.finish(form, version);
       else setGuard('clean');
     } catch (error) {
       setError(error);
@@ -95,12 +104,12 @@ export function useOperation(setGuard: SetGuard) {
       {message && <p className="notice" role="status">{message}</p>}
       {error instanceof InputError ? <p className="notice danger" role="alert">{error.message}</p> : error !== undefined && <Failure error={error}/>}
       {error instanceof AdminError && error.status === 409 && <p>Consulte novamente a situação antes de revisar e enviar outra solicitação.</p>}
-      {confirmation && <Confirm title={confirmation.title} accept={() => void execute()}
+      {confirmation && <Confirm title={confirmation.title} confirmLabel={confirmation.confirmLabel} accept={() => void perform(confirmation.execute, confirmation.form, confirmation.version)}
         cancel={() => setConfirmation(undefined)}>{confirmation.summary}</Confirm>}
     </>;
   }
 
-  return {busy, review, notice, setError};
+  return {busy, review, run, notice, setError};
 }
 
 export function formData(event: FormEvent<HTMLFormElement>) {

@@ -1,14 +1,15 @@
-import {listTelemetryOrigins, telemetryOriginForPublication} from './telemetry-origins.js';
-import { randomUUID } from 'node:crypto';
+import {assetFileContract, assetFileDistributionSchema, assetFilePatterns, assetProbeToken, distributionPaths, distributionRoleByResource, namedDistributionSchema} from './distribution-paths.js';
+import {listedTelemetryOrigin, listTelemetryOrigins, telemetryOriginForPublication} from './telemetry-origins.js';
+import { randomBytes, randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import { assertProjectAdministrativeWrite, assertPageAdministrativeWrite } from './admin-project-write.js';
 import {runControlledCheck,verificationPolicy,validVerifierImage,type VerificationSpec,type ControlledCheck} from './installation-verifier.js';
 
 export const distributionRoles = ['SCRIPT','TELEMETRY','STATIC_ASSETS'] as const;
 type Role = typeof distributionRoles[number];
+type RoleOrigins = Record<Role,string>;
 export type Distribution = {installation:string; version:number; bases:Record<Role,string>;paths?:Record<string,string>};
-export const neutralPaths:Record<string,string>={'runtime.js':'a.js','core.js':'b.js','fallback.js':'c.js','observe':'e','observe/fallback':'f','entry-decision':'g','cta-refresh':'h','observed-session':'j','observed-action':'k','html.gif':'m.gif','css.gif':'n.gif','cta-inventory.js':'p.js'};
-type AliasRow = {alias:string;installation_id:string;version:number;role:Role;origin:string;contract_version:number};
+type AliasRow = {alias:string;public_token?:string|null;installation_id:string;version:number;role:Role;origin:string;contract_version:number};
 
 export class DistributionBlocked extends TypeError {
   constructor(readonly code: string) { super(code); }
@@ -50,14 +51,18 @@ function verifierConfiguration(env: NodeJS.ProcessEnv) {
 }
 
 export async function installationPrerequisites(db: Pick<Pool,'query'>, env=process.env) {
-  const schema = (await db.query<{distribution: boolean; rotation: boolean; verifier: boolean; activity: boolean; receipts: boolean}>(`
+  const schema = (await db.query<{distribution: boolean; rotation: boolean; verifier: boolean; activity: boolean; receipts: boolean; compact: boolean; named: boolean; assetFile: boolean}>(`
     SELECT to_regclass('runtime_aliases') IS NOT NULL AND to_regclass('page_installation_signals') IS NOT NULL
       AND to_regclass('runtime_distributions') IS NOT NULL AS distribution,
       EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('runtime_distributions')
         AND attname='publication_reason' AND NOT attisdropped) AS rotation,
       to_regclass('controlled_installation_checks') IS NOT NULL AS verifier,
       to_regclass('runtime_alias_activity') IS NOT NULL AS activity,
-      to_regclass('investigation_receipts') IS NOT NULL AS receipts`)).rows[0];
+      to_regclass('investigation_receipts') IS NOT NULL AS receipts,
+      EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('runtime_aliases')
+        AND attname='public_token' AND NOT attisdropped) AS compact,
+      (${namedDistributionSchema} OR ${assetFileDistributionSchema}) AS named,
+      ${assetFileDistributionSchema} AS "assetFile"`)).rows[0];
   const {origins,issues} = configuredOrigins(env);
   const publicationIssues: {code: string; role?: Role}[] = schema.distribution
     ? issues : [{code:'DISTRIBUTION_SCHEMA_MISSING'}, ...issues];
@@ -75,9 +80,18 @@ function verificationIssue(targets: string[], active: boolean, distribution: Dis
 }
 function fromRows(rows:AliasRow[]):Distribution|null {
   if (rows.length!==3 || new Set(rows.map(row=>row.role)).size!==3) return null;
+  if (rows[0].contract_version===assetFileContract) {
+    if (rows.some(row=>!row.public_token || !/^[0-9a-f]{20}$/.test(row.public_token) || row.public_token===assetProbeToken)) return null;
+    const byRole = new Map(rows.map(row=>[row.role,row]));
+    const paths = Object.fromEntries(Object.entries(assetFilePatterns).map(([resource,pattern])=>
+      [resource,pattern.replace('*',byRole.get(distributionRoleByResource[resource])!.public_token!)]));
+    return {installation:rows[0].installation_id,version:rows[0].version,paths,
+      bases:Object.fromEntries(rows.map(row=>[row.role,row.origin+'/assets/'])) as Record<Role,string>};
+  }
+  const paths = distributionPaths(rows[0].contract_version);
   return {installation:rows[0].installation_id,version:rows[0].version,
-    ...(rows[0].contract_version===2?{paths:neutralPaths}:{}),
-    bases:Object.fromEntries(rows.map(row=>[row.role,row.origin+(row.contract_version===2?'/r/v2/':'/d/v1/')+row.alias+'/'])) as Record<Role,string>};
+    ...(paths?{paths}:{}),
+    bases:Object.fromEntries(rows.map(row=>[row.role,row.origin+(row.public_token ? '/assets/'+row.public_token : (row.contract_version===2?'/r/v2/':'/d/v1/')+row.alias)+'/'])) as Record<Role,string>};
 }
 export async function readDistribution(db:Pool|PoolClient,installation:string,version?:number) {
   const rows=await db.query<AliasRow>(`SELECT a.*,d.contract_version FROM runtime_aliases a JOIN runtime_distributions d USING(installation_id,version) WHERE a.installation_id=$1 AND a.version=COALESCE($2,(SELECT max(version) FROM runtime_distributions WHERE installation_id=$1)) ORDER BY role`,[installation,version??null]);
@@ -86,16 +100,27 @@ export async function readDistribution(db:Pool|PoolClient,installation:string,ve
 export function distributionSnippets(distribution:Distribution) {
   const {bases}=distribution;
   const path=(name:string)=>distribution.paths?.[name]??name;
-  return {html:`<script async src="${bases.SCRIPT}${path('runtime.js')}"></script>\n<script async src="${bases.SCRIPT}${path('fallback.js')}"></script>\n<img src="${bases.STATIC_ASSETS}${path('html.gif')}" width="1" height="1" alt="" referrerpolicy="strict-origin-when-cross-origin">`,
+  return {html:`<link rel="preconnect" href="${new URL(bases.TELEMETRY).origin}" crossorigin>\n<script async src="${bases.SCRIPT}${path('runtime.js')}"></script>\n<script async src="${bases.SCRIPT}${path('fallback.js')}"></script>\n<img src="${bases.STATIC_ASSETS}${path('html.gif')}" width="1" height="1" alt="" referrerpolicy="strict-origin-when-cross-origin">`,
     css:`/* Aplique a classe a um elemento existente. Sinal passivo; sem mitigação. */\n.anticlone-canary { background-image: url("${bases.STATIC_ASSETS}${path('css.gif')}"); }`};
 }
 export async function distributionAdmin(db:Pool,body:unknown,env=process.env) {
   if (!body || typeof body!=='object' || Array.isArray(body)) throw new TypeError('invalid distribution');
   const data=body as Record<string,unknown>;
-  const explicit = Object.hasOwn(data,'telemetryOrigin');
-  if (explicit && (!['publish','rotate'].includes(String(data.action)) || (data.telemetryOrigin !== null &&
-    (typeof data.telemetryOrigin !== 'string' || !/^https:\/\/[a-z0-9.-]+(?::[0-9]+)?$/.test(data.telemetryOrigin))))) throw new TypeError('invalid telemetry origin');
-  if (Object.keys(data).sort().join(',')!==(explicit?'action,page,project,telemetryOrigin':'action,page,project') || typeof data.project!=='string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(data.project) || typeof data.page!=='string' || !/^[a-f0-9-]{36}$/i.test(data.page) || !['inspect','publish','rotate','verify'].includes(String(data.action))) throw new TypeError('invalid distribution');
+  const legacy = Object.hasOwn(data,'telemetryOrigin');
+  const explicit = Object.hasOwn(data,'roleOrigins');
+  const selectionKey = explicit ? ',roleOrigins' : legacy ? ',telemetryOrigin' : '';
+  if (Object.keys(data).sort().join(',')!=='action,page,project'+selectionKey || typeof data.project!=='string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(data.project) || typeof data.page!=='string' || !/^[a-f0-9-]{36}$/i.test(data.page) || !['inspect','publish','rotate','verify'].includes(String(data.action))) throw new TypeError('invalid distribution');
+  if (selectionKey && data.action!=='publish' && data.action!=='rotate') throw new TypeError('invalid distribution selection');
+  const isHttpsOrigin = (value: unknown): value is string =>
+    typeof value==='string' && /^https:\/\/[a-z0-9.-]+(?::[0-9]+)?$/.test(value);
+  if (legacy && data.telemetryOrigin!==null && !isHttpsOrigin(data.telemetryOrigin)) throw new TypeError('invalid telemetry origin');
+  let roleOrigins: RoleOrigins | undefined;
+  if (explicit) {
+    const input = data.roleOrigins as Partial<Record<Role,unknown>> | null;
+    if (!input || typeof input!=='object' || Object.keys(input).length!==distributionRoles.length ||
+        !distributionRoles.every(role => Object.hasOwn(input,role) && isHttpsOrigin(input[role]))) throw new TypeError('invalid role origins');
+    roleOrigins = input as RoleOrigins;
+  }
   if(data.action==='verify'){
     const attempt=await verifyPublishedInstallation(db,data.project,data.page,env);
     const current=await readOrPublish(db,{project:data.project,page:data.page,action:'inspect'},env);
@@ -106,7 +131,7 @@ export async function distributionAdmin(db:Pool,body:unknown,env=process.env) {
       {...attempt,status:'NOT_VERIFIED',reason:'VERIFICATION_SUPERSEDED'};
     return {...current,verificationAttempt};
   }
-  return readOrPublish(db,{project:data.project,page:data.page,action:String(data.action),telemetryOrigin:data.telemetryOrigin as string|null|undefined},env);
+  return readOrPublish(db,{project:data.project,page:data.page,action:String(data.action),telemetryOrigin:data.telemetryOrigin as string|null|undefined,roleOrigins},env);
 }
 
 async function distributionPage(client: PoolClient, project: string, page: string) {
@@ -122,7 +147,7 @@ async function distributionPage(client: PoolClient, project: string, page: strin
     [project,page])).rows[0];
 }
 
-async function readOrPublish(db: Pool, data: {project:string;page:string;action:string;telemetryOrigin?:string|null}, env: NodeJS.ProcessEnv) {
+async function readOrPublish(db: Pool, data: {project:string;page:string;action:string;telemetryOrigin?:string|null;roleOrigins?:RoleOrigins}, env: NodeJS.ProcessEnv) {
   const client=await db.connect();
   try {
     const inspecting=data.action==='inspect';
@@ -146,23 +171,26 @@ async function readOrPublish(db: Pool, data: {project:string;page:string;action:
     const registered = new Map(items.map(item => [item.origin,item.state]));
     const eligible = items.filter(item => item.state === 'OPERATIONAL').map(item => item.origin);
     const previous = distribution ? new URL(distribution.bases.TELEMETRY).origin : undefined;
-    const explicit = data.telemetryOrigin !== undefined;
-    const selected = explicit ? data.telemetryOrigin : previous && registered.has(previous) ? previous : undefined;
-    const persisted = distribution?.bases;
+    const selected = data.telemetryOrigin === undefined
+      ? previous && registered.has(previous) ? previous : undefined
+      : data.telemetryOrigin;
+    const uniform = data.telemetryOrigin;
+    const requested = data.roleOrigins ?? (uniform ? {SCRIPT:uniform,TELEMETRY:uniform,STATIC_ASSETS:uniform} : undefined);
+    const useDefaults = !requested && (!distribution || uniform===null);
     const origins = {...defaults};
-    if (selected) {
-      // Existing split-role revisions are kept by implicit publication and rotation.
-      for (const role of distributionRoles) origins[role] = explicit ? selected : new URL(persisted![role]).origin;
+    if (requested) Object.assign(origins,requested);
+    else if (!useDefaults && distribution) {
+      for (const role of distributionRoles) origins[role] = new URL(distribution.bases[role]).origin;
     }
     const unavailable = {code:'TELEMETRY_ORIGIN_UNAVAILABLE'};
-    const blockedDefault = Object.values(defaults).some(origin => registered.has(origin) && registered.get(origin) !== 'OPERATIONAL');
+    const requiresCheck = (origin: string) => registered.has(origin) || listedTelemetryOrigin(origin,env);
+    const blockedDefault = Object.values(defaults).some(origin => requiresCheck(origin) && registered.get(origin) !== 'OPERATIONAL');
     const defaultsReady = !publicationIssues.length && !blockedDefault;
-    const issues = selected ? distributionRoles.flatMap(role => {
+    const issues = useDefaults ? [...publicationIssues] : distributionRoles.flatMap(role => {
       const code = runtimeOriginIssue(origins[role],env);
       return code ? [{code,role}] : [];
-    }) : [...publicationIssues];
-    const pooled = new Set(Object.values(origins).filter(origin => registered.has(origin)));
-    if (selected) pooled.add(selected);
+    });
+    const pooled = new Set(Object.values(origins).filter(origin => requested || requiresCheck(origin)));
     if ([...pooled].some(origin => registered.get(origin) !== 'OPERATIONAL')) issues.push(unavailable);
     const publication = {ready:!issues.length,defaultsReady,issues,rotationAvailable:schema.rotation,changesRequired:false};
     const changesOrigins = (current: Distribution) => distributionRoles.some(role=>new URL(current.bases[role]).origin!==origins[role]);
@@ -175,9 +203,29 @@ async function readOrPublish(db: Pool, data: {project:string;page:string;action:
       // Idempotent explicit publication: a dashboard read never creates aliases.
       if (data.action==='rotate' || !distribution || changesOrigins(distribution)) {
         const version=(distribution?.version ?? 0)+1;
-        if(schema.rotation) await client.query('INSERT INTO runtime_distributions(installation_id,version,publication_reason) VALUES($1,$2,$3)',[page.installation_id,version,data.action]);
+        const compact = schema.compact && env.RUNTIME_COMPACT_ALIASES === 'true';
+        if (compact && schema.named) {
+          await client.query('INSERT INTO runtime_distributions(installation_id,version,publication_reason,contract_version) VALUES($1,$2,$3,$4)',[page.installation_id,version,data.action,schema.assetFile?assetFileContract:3]);
+        } else if (schema.rotation) await client.query('INSERT INTO runtime_distributions(installation_id,version,publication_reason) VALUES($1,$2,$3)',[page.installation_id,version,data.action]);
         else await client.query('INSERT INTO runtime_distributions(installation_id,version) VALUES($1,$2)',[page.installation_id,version]);
-        for (const role of distributionRoles) await client.query('INSERT INTO runtime_aliases(alias,installation_id,version,role,origin) VALUES($1,$2,$3,$4,$5)',[randomUUID(),page.installation_id,version,role,origins[role]]);
+        for (const role of distributionRoles) {
+          const values = [randomUUID(),page.installation_id,version,role,origins[role]];
+          if (compact) {
+            // The reserved probe address never belongs to an installation.
+            let inserted = false;
+            for (let attempt = 0; attempt < 3 && !inserted; attempt++) {
+              const token = schema.assetFile ? randomBytes(10).toString('hex') : randomBytes(16).toString('base64url');
+              if (token === assetProbeToken) continue;
+              const result = await client.query(`INSERT INTO runtime_aliases(alias,installation_id,version,role,origin,public_token)
+                VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT (public_token) WHERE public_token IS NOT NULL DO NOTHING`,
+              [...values,token]);
+              inserted = result.rowCount === 1;
+            }
+            if (!inserted) throw new Error('distribution token allocation failed');
+          } else {
+            await client.query('INSERT INTO runtime_aliases(alias,installation_id,version,role,origin) VALUES($1,$2,$3,$4,$5)',values);
+          }
+        }
         distribution=await readDistribution(client,page.installation_id,version);
       }
     }
@@ -203,7 +251,7 @@ async function readOrPublish(db: Pool, data: {project:string;page:string;action:
     await client.query('COMMIT');
     const measured=controlled && controlled.status!=='NOT_VERIFIED' ? controlled.layers : undefined;
     return {contractVersion:1,state:distribution?'PUBLISHED':'NOT_PUBLISHED',distribution,publication,telemetryOrigins:eligible,
-      telemetryEndpoints:items.map(({origin,state})=>({origin,state})),selectedTelemetryOrigin:selected ?? null,
+      telemetryEndpoints:items.map(({origin,state})=>({origin,state})),selectedTelemetryOrigin:data.roleOrigins?.TELEMETRY ?? selected ?? null,
       verification:{ready:!issue,issue},history:history.rows,aliasActivity,snippets:distribution?distributionSnippets(distribution):null,
       diagnostic:{status:controlled?.status??'NOT_VERIFIED',confidence:measured?'CONTROLLED_CURRENT_LOAD_ONLY':'UNAUTHENTICATED_CLAIM',
         controlledVerification:controlled??{status:'NOT_VERIFIED',reason:issue??'NO_CURRENT_VERIFICATION'},

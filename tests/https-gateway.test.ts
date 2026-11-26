@@ -1,3 +1,4 @@
+import {distributionHealthPath} from '../apps/telemetry-origins.js';
 import {distributionAdmin} from '../apps/runtime-distribution.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -66,7 +67,7 @@ for(const npm of [false,true]) test(`${npm?'NPM mTLS':'HTTPS'} Nginx + PostgreSQ
   }
 
   const scopedPage=(await db.query('SELECT id FROM protected_pages WHERE installation_id=$1',[scopedInstallation])).rows[0].id;
-  const distributed=await distributionAdmin(db,{action:'publish',project:'https',page:scopedPage},{RUNTIME_PUBLIC_ORIGIN:'https://gateway.test'});assert.ok(distributed.distribution);assert.ok(distributed.snippets);
+  const distributed=await distributionAdmin(db,{action:'publish',project:'https',page:scopedPage},{...process.env,RUNTIME_PUBLIC_ORIGIN:'https://gateway.test'});assert.ok(distributed.distribution);assert.ok(distributed.snippets);
   await writeFile(gatewayEnv,Object.entries({PGOPTIONS:options,DATABASE_URL:process.env.TEST_DATABASE_URL,PROJECT_ID:'https',SMTP_PORT:'1',PORT:'3000',GATEWAY_MODE:'PILOT_OBSERVE',GATEWAY_TRANSPORT:'HTTPS_PROXY',PUBLIC_GATEWAY_HOST:'gateway.test',PILOT_ORIGINS:'["https://owner.test"]',CHECKOUT_WEBHOOK_SECRET:checkoutSecret}).map(([key,value])=>`${key}=${value}`).join('\n'),{mode:0o600});
   execFileSync('openssl',['req','-x509','-newkey','rsa:2048','-nodes','-keyout',join(dir,'privkey.pem'),'-out',join(dir,'fullchain.pem'),'-days','1','-subj','/CN=gateway.test','-addext','subjectAltName=DNS:gateway.test'],{stdio:'ignore'});
   if(!npm){
@@ -127,6 +128,9 @@ for(const npm of [false,true]) test(`${npm?'NPM mTLS':'HTTPS'} Nginx + PostgreSQ
     assert.equal((await api.get('https://gateway.test/healthz',{headers:{'X-Forwarded-For':'garbage','X-Forwarded-Proto':'http','Forwarded':'for=evil','X-Forwarded-Host':'evil'}})).status(),200);
     assert.equal((await api.get('https://gateway.test/runtime.js',{headers:{Host:'evil.test'}})).status(),421);
     assert.equal((await api.get('https://gateway.test/admin')).status(),404);
+    const distributionHealth = await api.get('https://gateway.test'+distributionHealthPath);
+    assert.equal(distributionHealth.status(),npm?200:503);
+    if (npm) assert.equal((await distributionHealth.json()).mode,'OPERATIONAL');
     const checkoutBody=JSON.stringify({event_id:'https_event',sale_id:'https_sale',amount_minor:100,currency:'BRL',occurred_at:'2026-11-06T00:00:00.000Z'});
     const checkoutTimestamp=String(Math.floor(Date.now()/1000));
     const checkoutHeaders={'content-type':'application/json','x-checkout-timestamp':checkoutTimestamp,'x-checkout-signature':createHmac('sha256',Buffer.from(checkoutSecret,'hex')).update(checkoutTimestamp+'.'+checkoutBody).digest('hex')};
@@ -164,11 +168,24 @@ for(const npm of [false,true]) test(`${npm?'NPM mTLS':'HTTPS'} Nginx + PostgreSQ
     assert.equal((await db.query("SELECT count(*)::int n FROM observed_action_facts WHERE project_id='https' AND action='SESSION_OBSERVED'")).rows[0].n,1);
     await page.getByText('Native scoped',{exact:true}).click();assert.equal(new URL(page.url()).pathname,'/checkout');
     await new Promise(resolve=>setTimeout(resolve,3000));
-    if(npm)await resetProxyFixture();
-    await page.route('https://owner.test/**',route=>route.fulfill({contentType:'text/html',body:'<style>'+distributed.snippets!.css+'</style><div class="anticlone-canary">Owned</div>'+distributed.snippets!.html}));
-    const aliasLayers=Promise.all(['observe','observe/fallback','html.gif','css.gif'].map(path=>page.waitForResponse(response=>response.url()===distributed.distribution!.bases[path.endsWith('.gif')?'STATIC_ASSETS':'TELEMETRY']+(distributed.distribution!.paths?.[path]??path))));
-    await page.goto('https://owner.test/');
-    for(const response of await aliasLayers)assert.equal(response.status(),response.url().endsWith('.gif')?200:204,response.url());
+    await resetProxyFixture();
+    const aliasPage=await context.newPage();
+    const scriptResponses:string[]=[];
+    aliasPage.on('response',response=>{
+      const url=new URL(response.url());
+      if (url.hostname==='gateway.test' && url.pathname.endsWith('.js')) scriptResponses.push(url.pathname+' '+response.status());
+    });
+    try {
+      await aliasPage.route('https://owner.test/**',route=>route.fulfill({contentType:'text/html',body:'<style>'+distributed.snippets!.css+'</style><div class="anticlone-canary">Owned</div>'+distributed.snippets!.html}));
+      const aliasLayers=['observe','observe/fallback','html.gif','css.gif'].map(async path=>{
+        const role=path.endsWith('.gif')?'STATIC_ASSETS':'TELEMETRY';
+        const endpoint=distributed.distribution!.bases[role]+(distributed.distribution!.paths?.[path]??path);
+        try { return await aliasPage.waitForResponse(response=>response.url()===endpoint); }
+        catch(error) { throw Error('Missing response for '+path+'. Scripts '+scriptResponses.join(', '),{cause:error}); }
+      });
+      const [responses]=await Promise.all([Promise.all(aliasLayers),aliasPage.goto('https://owner.test/')]);
+      for(const response of responses)assert.equal(response.status(),response.url().endsWith('.gif')?200:204,response.url());
+    } finally { await aliasPage.close(); }
     await new Promise(resolve=>setTimeout(resolve,3000));
     const wrongRole=await api.get(distributed.distribution.bases.TELEMETRY+'runtime.js');
     // NPM may reject at TLS or the strict boundary; neither may serve a script.

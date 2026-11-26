@@ -7,7 +7,7 @@ import nodemailer, { type SendMailOptions } from 'nodemailer';
 import type { Pool } from 'pg';
 import { budgetMayBeAvailable, lockBudget, recordBudget } from './notification-budget.js';
 import { reconcileF26 } from './notification-intents.js';
-import { providerAuthorized, sendProviderAlert, type SmtpProvider } from './smtp-provider.js';
+import { providerAdmission, sendProviderAlert, type SmtpProvider } from './smtp-provider.js';
 const reconciliationAfter = new WeakMap<Pool, Map<string, number>>();
 export function makeMailer(port: number) {
   return nodemailer.createTransport({ host: '127.0.0.1', port, ignoreTLS: true, connectionTimeout: 3000, greetingTimeout: 3000, socketTimeout: 3000 });
@@ -35,7 +35,8 @@ export async function deliverOne(pool: Pool, project: string, port: number | Smt
     const result = await client.query("SELECT pg_try_advisory_xact_lock(hashtext($1), 1) AS locked", [project]);
     if (!result.rows[0].locked) return;
     const history = (await client.query("SELECT to_regclass('clone_delivery_attempts') IS NOT NULL AS available")).rows[0].available;
-    if (typeof port !== 'number' && (!history || !await providerAuthorized(client,port))) { await client.query('ROLLBACK'); return; }
+    const deliveryAfter = typeof port === 'number' ? null : history && await providerAdmission(client,port);
+    if (deliveryAfter === false) { await client.query('ROLLBACK'); return; }
     let deadlines = reconciliationAfter.get(pool);
     if (!deadlines) { deadlines = new Map(); reconciliationAfter.set(pool, deadlines); }
     if (Date.now() >= (deadlines.get(project) ?? 0)) {
@@ -53,7 +54,7 @@ export async function deliverOne(pool: Pool, project: string, port: number | Smt
     try {
       if (await lockBudget(client, pool)) {
         const pending = await client.query(`SELECT a.id, i.id AS incident_id, i.host, a.attempts FROM alert_outbox a JOIN incidents i ON i.id=a.incident_id
-          WHERE i.project_id=$1 AND ($2::timestamptz IS NULL OR i.first_seen>$2 OR ${released}) AND a.sent_at IS NULL AND a.expired_at IS NULL AND i.first_seen > clock_timestamp()-interval '24 hours' AND a.attempts < 3 AND a.next_attempt <= now() ORDER BY a.id LIMIT 1 FOR UPDATE OF a SKIP LOCKED`, [project,cutoff]);
+          WHERE i.project_id=$1 AND ($2::timestamptz IS NULL OR i.first_seen>$2 OR ${released}) AND a.sent_at IS NULL AND a.expired_at IS NULL AND i.first_seen > clock_timestamp()-interval '24 hours' AND ($3::timestamptz IS NULL OR i.first_seen>$3) AND a.attempts < 3 AND a.next_attempt <= now() ORDER BY a.id LIMIT 1 FOR UPDATE OF a SKIP LOCKED`, [project,cutoff,deliveryAfter]);
         item = pending.rows[0];
         if (item) {
           const reserved = await client.query(`UPDATE alert_outbox a SET attempts=a.attempts+1, next_attempt=clock_timestamp()+interval '1 minute'

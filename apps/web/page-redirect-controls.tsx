@@ -1,0 +1,46 @@
+import {CopyRedirectRules, type CopyRedirectSettings, type ContextKey} from './copy-redirect-rules';
+import type {Page} from './admin-api';
+import type {useOperation} from './operations';
+import type {EntryPolicy, Operational} from './protection-contracts';
+import type {AdminApi} from './admin-api';
+
+export type RedirectStatus = {
+  gateway: 'OPERATIONAL' | 'OBSERVATION_ONLY' | 'UNREACHABLE' | 'UNCONFIGURED' | 'INCOMPATIBLE';
+  issue: string | null;
+  rules: CopyRedirectSettings | null;
+  ctaRuleCopies: ContextKey[];
+  rulesGateway: RedirectStatus['gateway'];
+  entryIssue: string | null;
+  entry: EntryPolicy | null;
+  approvalId: string | null;
+  authorization: Operational['state'];
+  active: boolean;
+  urlGeneration: string;
+  configGeneration: string;
+};
+
+export function PageRedirectControls({api,page,state,incidentHost,operation,refresh}: {
+  api: AdminApi; page: Page; state: RedirectStatus; incidentHost?: string;
+  operation: ReturnType<typeof useOperation>; refresh: () => void;
+}) {
+  const authorization=state.authorization;
+  const replaced=state.rules?.rules.some(rule=>rule.copy_origin===authorization?.copy_origin && rule.copy_pathname===authorization?.copy_pathname);
+  return <>
+    {state.rules?.contexts ? <CopyRedirectRules key={page.id+':'+(incidentHost??'')} api={api} page={page} settings={state.rules}
+      ruleGateway={state.rulesGateway} issue={state.issue} operation={operation} refresh={refresh}
+      incidentHost={incidentHost} urlGeneration={state.urlGeneration} configGeneration={state.configGeneration}/> :
+      <p className="notice">As regras por cópia observada exigem a atualização do banco.</p>}
+    {state.entry && authorization && !replaced && state.gateway!=='UNCONFIGURED' && <details className="panel operation-section">
+      <summary>Regra anterior da LP</summary>
+      <p>Cópia {authorization.copy_origin}{authorization.copy_pathname}</p>
+      <p>Destino {state.entry.approved_destination}</p>
+      <button type="button" disabled={operation.busy} onClick={()=>
+        operation.review('Desativar regra anterior', <p>{authorization.copy_origin}{authorization.copy_pathname}</p>, async ()=>{
+          await api.request('page-redirect',{action:'deactivate',project:page.project_id,page:page.id,approvalId:state.approvalId,
+            revision:authorization.revision,configGeneration:state.configGeneration,urlGeneration:state.urlGeneration});
+          refresh();
+          return 'Regra anterior desativada.';
+        })}>Desativar regra anterior</button>
+    </details>}
+  </>;
+}

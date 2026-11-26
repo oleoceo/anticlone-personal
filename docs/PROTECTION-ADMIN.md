@@ -1,10 +1,21 @@
 # Configuração da proteção no painel existente
 
+## Redirecionamento de página
+
+Em **Configurações do projeto**, salve **Destino padrão de redirecionamento** para as regras que herdam a URL do projeto. Na LP ou no incidente, abra **Redirecionar página**. Escolha a origem e o caminho da cópia observada, o destino e os percentuais por classe. Se o incidente corresponder a um único caminho, o painel o preenche. Revise e confirme para salvar e habilitar em uma transação administrativa. O mesmo formulário permite editar e revisar, e **Desativar regra** interrompe as novas decisões dessa cópia.
+
+O destino HTTPS pode estar em outro domínio e fica gravado no PostgreSQL. O gateway seleciona um destino já confirmado, sem consultá-lo no backend. A validação recusa credenciais, fragmentos e o retorno à origem da cópia. Alterar o destino padrão publica novas versões das regras ativas que o herdam. As políticas anteriores da LP permanecem disponíveis numa área separada para manutenção.
+
+A migration 071 registra origem e caminho observado por até 30 dias. A observação do navegador é uma alegação e só a confirmação administrativa pode ativar a regra. O gateway anuncia o contrato `X-AntiClone-Redirect-Contract: 3`. O diagnóstico diferencia configuração, elegibilidade, gateway, decisão enviada, resposta tardia, pedido sem marcador de runtime atual e a navegação relatada. A chegada ao destino externo exige prova independente. O limite do Bootstrap é **150 ms** e o fail-open libera a página original. Consulte a [matriz de aceitação](ACEITACAO-PR88.md).
+
+## Conversões e CTA
+
+
 Na sessão administrativa com senha/TOTP, a seção **Proteção por projeto — laboratório** carrega o projeto, destinos e versões persistidos. Cadastre os destinos por oferta; publique PAGE_REDIRECT e REPLACE_CONVERSION com percentuais independentes para PAID_ATTRIBUTED, ORGANIC, REFERRAL e DIRECT_UNKNOWN, em passos de 10%. A publicação de página ativa exatamente o formulário enviado numa transação, sem consumir um rascunho compartilhado entre abas. Versões anteriores de página podem ser reativadas.
 
 No inventário existente, consulte projeto/superfície, selecione uma observação identificada por marcador estável e escolha o destino da oferta. **Mapear CTA ao destino aprovado** cria o mapeamento funcional; **Confirmar seleção pendente** continua sendo apenas intenção, sem ativação. Pontos ambíguos permanecem sem substituição; a reaprovação confirma a observação atual e preserva auditoria e isolamento do drift.
 
-Destinos da origem oficial permanecem disponíveis. Para destinos comerciais externos, configure **nos processos privados do admin e gateway** a variável `PROTECTION_APPROVED_EXTERNAL_URLS`: um objeto JSON cuja chave é a origem exata do projeto e cujo valor é uma lista de URLs HTTPS exatas. Exemplo sintético, sem autorização para serviço real:
+Destinos da origem oficial permanecem disponíveis. Para destinos externos de CTA, configure **nos processos privados do admin e gateway** a variável `PROTECTION_APPROVED_EXTERNAL_URLS`: um objeto JSON cuja chave é a origem exata do projeto e cujo valor é uma lista de URLs HTTPS exatas. Exemplo sintético, sem autorização para serviço real:
 
 ```json
 {"http://127.0.0.1:8080":["https://checkout.fixture.test/premium?offer=synthetic"]}

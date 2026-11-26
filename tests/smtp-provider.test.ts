@@ -2,21 +2,23 @@ import { cloneAlertContext } from '../apps/clone-alert-context.js';
 import { cloneAlertEmail } from '../apps/clone-alert-email.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, mkdtemp, rm } from 'node:fs/promises';
+import { readFile, readdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
-import type { AddressInfo } from 'node:net';
-import { scryptSync } from 'node:crypto';
+import { createServer as createTcpServer, type AddressInfo } from 'node:net';
+import { randomUUID, scryptSync } from 'node:crypto';
 import { Pool } from 'pg';
 import { SMTPServer } from 'smtp-server';
 import { chromium } from 'playwright';
 import { TOTP, Secret } from 'otpauth';
 import { smtpProvider, sendProviderAlert } from '../apps/smtp-provider.js';
 import { deliverOne } from '../apps/alerts.js';
+import { observe } from '../apps/detection.js';
+import { setNotificationPreference } from '../apps/notification-settings.js';
 import { investigation } from '../apps/investigation.js';
 import { createAdminServer } from '../apps/admin-auth.js';
 
@@ -293,5 +295,48 @@ test('provider TLS, durable attempts, browser clone dedup, retry/restart and aut
     await new Promise<void>(resolve=>fixture.close(()=>resolve()));
     await new Promise<void>(resolve=>smtp.close(()=>resolve()));
     await db.end();await root.query(`DROP SCHEMA ${schema} CASCADE`);await root.end();await rm(dir,{recursive:true,force:true});
+  }
+});
+
+test('fresh-only provider admission leaves past clone incidents untouched across preference toggles', async () => {
+  assert.ok(process.env.TEST_DATABASE_URL);
+  const root=new Pool({connectionString:process.env.TEST_DATABASE_URL});
+  const schema='fresh_alerts_'+randomUUID().replaceAll('-','');
+  await root.query(`CREATE SCHEMA ${schema}`);
+  const db=new Pool({connectionString:process.env.TEST_DATABASE_URL,options:'-c search_path='+schema});
+  const sink=createTcpServer(socket=>socket.destroy()).listen(0,'127.0.0.1');
+  await once(sink,'listening');
+  const env={...privateEnv,SMTP_HOST:'127.0.0.1',SMTP_PORT:String((sink.address() as AddressInfo).port)};
+  const previous=Object.fromEntries(Object.keys(env).map(key=>[key,process.env[key]]));
+  Object.assign(process.env,env);
+  try {
+    for (const file of (await readdir('infra')).filter(f=>/^\d{3}_.+\.sql$/.test(f)).sort()) {
+      await db.query((await readFile('infra/'+file,'utf8')).replace(/^\uFEFF/,''));
+    }
+    const project='fresh', original='https://owner.test';
+    await db.query('INSERT INTO projects(id,name,origin) VALUES($1,$1,$2)',[project,original]);
+    const smtp=smtpProvider(env)!;
+    await db.query('UPDATE notification_settings SET provider=$1,host=$2,port=$3,tls_mode=$4,sender=$5,recipient=$6',
+      [smtp.provider,smtp.host,smtp.port,smtp.tls_mode,smtp.sender,smtp.recipient]);
+    await observe(db,project,original,'https://old-copy.test');
+    await setNotificationPreference(db,{enabled:true,version:0,newEventsOnly:true});
+    await setNotificationPreference(db,{enabled:false});
+    await setNotificationPreference(db,{enabled:true,version:2});
+    await observe(db,project,original,'https://new-copy.test');
+    await deliverOne(db,project,smtp);
+    const outbox=await db.query(`SELECT i.host,a.attempts,h.outcome FROM alert_outbox a JOIN incidents i ON i.id=a.incident_id
+      LEFT JOIN clone_delivery_attempts h ON h.outbox_id=a.id ORDER BY a.id`);
+    assert.deepEqual(outbox.rows,[
+      {host:'old-copy.test',attempts:0,outcome:null},
+      {host:'new-copy.test',attempts:1,outcome:'FAILED'},
+    ]);
+  } finally {
+    for (const [key,value] of Object.entries(previous)) {
+      if (value===undefined) delete process.env[key]; else process.env[key]=value;
+    }
+    await new Promise<void>(resolve=>sink.close(()=>resolve()));
+    await db.end();
+    await root.query(`DROP SCHEMA ${schema} CASCADE`);
+    await root.end();
   }
 });

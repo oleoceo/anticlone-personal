@@ -77,8 +77,14 @@ test('GS06 integration: persisted policy, controlled LOW and original', {timeout
     assert.equal(requests[0].session,requests[1].session); assert.deepEqual(requests[0].signals,requests[1].signals);
     assert.ok(!JSON.stringify(requests).includes('privatevalue'));
     await saveDraft(db,project,{enabled:true,approved_destination:original+'/approved',stealth:true,allocation:{PAID_ATTRIBUTED:100,ORGANIC:100,REFERRAL:100,DIRECT_UNKNOWN:100}}); await activatePolicy(db,project);
-    await page.goto(clone+'/clone'); await page.waitForURL(original+'/approved'); await page.waitForTimeout(400); assert.equal(page.url(),original+'/approved');
+    // Check the destination and attribution with an eligible response. The real
+    // deadline is measured in F18 and the delayed GS06 case below.
+    const browserTime=Date.now();
+    await page.clock.install({time:browserTime-60_000});
+    await page.clock.pauseAt(browserTime);
+    await page.goto(clone+'/clone'); await page.waitForURL(original+'/approved');
     await page.goto(clone+'/clone?utm_campaign=spring&token=secret'); await page.waitForURL(original+'/approved?utm_campaign=spring');
+    await page.clock.resume();
     // Both cases consume a real decision at 100 ms of controlled runtime time.
     // The control proves eligibility; only the early interaction differs.
     for (const interact of [false,true]) {
@@ -210,10 +216,10 @@ test('GS06 integration: persisted policy, controlled LOW and original', {timeout
     await browserPage.route('**/core.js',route=>route.abort());
     const fallbackOnly=browserPage.waitForResponse(r=>r.url().endsWith('/observe/fallback'));
     const blockedCanary=browserPage.waitForResponse(r=>r.url().endsWith('/canary/html.gif'));
-    let blockedDecisions=0; browserPage.on('request',request=>{ if (request.url().endsWith('/entry-decision')) blockedDecisions++; });
+    const withoutCore=browserPage.waitForResponse(r=>r.url().endsWith('/entry-decision'));
     await browserPage.reload();
     assert.equal((await fallbackOnly).status(),204); assert.equal((await blockedCanary).status(),200);
-    assert.equal(blockedDecisions,0);
+    assert.equal((await (await withoutCore).json()).action,'OBSERVE_ONLY');
     await browserPage.locator('a').click(); await browserPage.waitForURL(clone+'/next');
     await adversarial.close();
     for (const phase of ['entry-decision','cta-refresh']) {

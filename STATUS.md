@@ -1,5 +1,79 @@
 # STATUS — AntiClone Personal
 
+## Segurança e estabilização do Dev
+- PR #97 mantém aceite FlowMembers, aliases, fail-open e 150 ms. 078–080 e perfis explícitos de banco para serviços e manutenção.
+- S2, S6 e S7 operacionais dependem da evidência de leoceo e aprovação de corte e rotação. S4 corrigirá recibo na próxima publicação.
+- S3 preservado; quatro erros de aquisição continuam ponto de diagnóstico operacional.
+- S5 informa capacidade, preserva triagem e reabre admissão pela retenção. Teto absoluto permanece e requer aceite do risco residual.
+- D2 mostra totais históricos por CTA e impede expurgo legado sem consolidação. [Roteiro de implantação e rollback](docs/ESTABILIZACAO-SEGURANCA-DEV.md).
+
+## F17/F20 — disponibilidade das regras por cópia no Dev
+- A revisão 2 da FlowMembers publica telemetria em `static-layer.com`. O Admin em `6d00d0c` exigia o host de controle `protect.leoceo.online` nas duas confirmações e retornava `TELEMETRY_MISMATCH`.
+- As confirmações usam a telemetria publicada e validam o contrato operacional. Endpoints alternativos exigem pool autorizada e revalidação transacional. O painel mostra o impedimento junto ao botão.
+- O E2E histórico usava o mesmo host em ambos os lados. O DNS do Node falha localmente para o host sintético anterior. A fixture usa agora um endereço HTTPS resolvível pelos dois processos.
+- A checagem do FlowMembers real é de leitura. As confirmações, o checkout sintético, a persistência e o prazo de 150 ms são cobertos pela jornada isolada em Chromium.
+
+## F07 — seleção de endpoints por função na Instalação
+- Base PR #93 `0e3e1967`, sucessora documental da release Dev `50e290c2`.
+- A Instalação publica um domínio para os três papéis ou um mapa por papel; a pool operacional é revalidada na transação.
+- O campo legado segue aceito. Omissão preserva as origens vigentes; novas revisões mantêm os aliases históricos acessíveis.
+- A prova em `tests/runtime-distribution.test.ts` usa PostgreSQL e Chromium com HTTPS/mTLS sintético para um, dois e três domínios, elegibilidade, isolamento administrativo, contratos históricos e tempos de carga e decisão.
+- Revisão independente `/root/revisao_f07` favorável ao delta após os ajustes de rótulos, padrões e cobertura. Evidências de execução e checks vinculados ao PR de implementação.
+
+## F07 — aceite da pool e ingressos Dev
+- Hosts 15 e 16 aceitos por leoceo com backup e regressão por host. Probes públicos reconferidos.
+- Allowlist preservada, dois domínios habilitados e verificados como `OPERATIONAL`. Admin Dev no SHA `10703eb`.
+- Cinco arranjos em Chromium com Cloudflare real passaram para recursos, coleta, sessão e CTA. Cinco revisões de laboratório anteriores e 15 históricas v2 conferidas.
+- P2 corrigido em `10703eb`. O painel distingue manter a revisão de publicar com as origens padrão. Regressão focal 3/3 e revisão independente `/root/p2` sem achados.
+- `PAGE_REDIRECT` via Cloudflare em 12 amostras. Duas decisões dentro de 150 ms aplicadas e dez tardias descartadas. Fail-open e CTA aprovados no laboratório.
+- Evidências, escopo, tempos e rollback em [ENDPOINT-PROVISIONING-RUNBOOK.md](docs/ENDPOINT-PROVISIONING-RUNBOOK.md).
+
+## F33 — query strings nas rotas de distribuição (PR #93)
+- Gateway e probes reservados comparam o caminho até o primeiro `?`, preservando os caracteres originais do caminho.
+- A regressão em `tests/runtime-distribution.test.ts` verifica recursos, métodos HTTP, rejeições e probes com e sem query, além dos contratos anteriores.
+- **PR93_ALIASES_OPERATIONAL** no Dev. SHA homologado `50e290c2a9ebc62c13c57a5ee97e4a1b803df89f`, [CI oficial 45652589598](https://github.com/oleoceo/anticlone-personal/actions/runs/45652589598) com 159 testes aprovados, zero falhas e zero skips. O PR #93 segue aberto, sem merge. O commit posterior de documentação registra esse aceite.
+- Suíte local completa: 142 aprovados, 6 falhas e 7 skips. Cinco falhas ambientais comprovadas: `cta-history` e `cta-observed-browser` por `libcups.so.2` indisponível (ambos passaram no reteste com as bibliotecas locais), `front3-upgrade` e `recovery` por `pg_dump` indisponível e `operational-authorization` por `ENOTFOUND gateway.test`.
+- A falha de `page-redirect-journey` permanece com causa indeterminada. O clique em **CONFIRMO REDIRECIONAMENTO** expirou com o botão desabilitado. Faltam trace do painel, respostas administrativas e estado do formulário no momento da falha.
+
+## F30 — apresentação da Visão Geral
+- Quatro indicadores, origens em linhas, cliques por CTA e detalhes operacionais recolhíveis. A configuração mostra os fatores e o resultado da estimativa versionada.
+- [Capturas comparativas em Chromium desktop e mobile](docs/evidencias/visao-geral/README.md) com a mesma fixture nos dois builds.
+- Lint, typecheck, build e quatro jornadas do painel passaram com Chromium e PostgreSQL 16 em desktop e mobile.
+- Revisão independente da interface favorável. [PR #92 e CI](https://github.com/oleoceo/anticlone-personal/pull/92), baseado no PR #91.
+
+## F29/F30 — métricas observadas de CTA
+- Dev de referência: 108 recibos CTA emitidos e zero fatos de clique. Falha histórica localizada entre emissão e persistência.
+- Visão Geral com contagens, sessões distintas com clique, aliases por CTA e filtros independentes de diagnóstico.
+- Chromium e PostgreSQL 16: três cliques em dois CTAs, uma sessão com clique, replay idempotente e estimativa de R$ 15,00. Nova premissa persistiu e produziu R$ 60,00.
+- Migração aditiva 074 para sessões por cópia. Estimativas por projeto seguem premissas versionadas. [Contrato e rollback](docs/OBSERVED-CTA-METRICS.md).
+
+## F21 — CTA após retorno pelo histórico
+- O Bootstrap solicita decisão nova ao restaurar do BFCache, sem o cooldown de cinco segundos de uma visita bem-sucedida. Mantém backoff em falhas e destino nativo até validar a política e o digest.
+- Prova em Chromium desktop e Pixel 7 emulado com BFCache ligado/desligado, três retornos, edição, suspensão, divergência de digest e falha de rede. Ver `tests/cta-history.test.ts`.
+- No laboratório, o SHA base levou 4,21–4,82 s após restaurar do BFCache. O arquivo congelado reproduziu clique nativo e levou 4,01–4,64 s. A correção levou 149–190 ms na execução de referência.
+- Revisão independente `/root/review` sem achados no delta do runtime. CI e SHA no [PR #90](https://github.com/oleoceo/anticlone-personal/pull/90).
+- Cópias com Bootstrap remoto recebem a correção ao carregar o script atualizado. A cópia com `/js/a.js` local precisa receber um novo Bootstrap.
+
+## PR #88 — consolidação operacional
+- Redirecionamento por URL observada, destino HTTPS normalizado, percentuais por classe e confirmação direta auditada. Uma regra por cópia prevalece sobre a política antiga no mesmo contexto.
+- CTA por link identificado na cópia, com edição e suspensão. A migração 072 acrescenta inventário limitado e regras versionadas.
+- Jornada isolada Chromium desktop/mobile: início de navegação em 88–128 ms, atraso fail-open, edição sem reinício e restauração dos dois links nativos.
+- Worker isolado: um SMTP aceito em uma tentativa para incidente novo, zero tentativas no anterior e nenhuma duplicata após recargas.
+- **BLOCKED** na suíte local completa: topologia Docker rootless/portas do host. Publicação e CI oficial pendentes de login GitHub. Homologação pública pendente. [Provas e procedimento](docs/ACEITACAO-PR88.md).
+
+## PR #88 — decisão de aceite do proprietário (25/11/2026)
+- O proprietário aceitou PAGE_REDIRECT com a eficácia atual. Na amostra Dev via Cloudflare do #95, 2 de 12 decisões elegíveis foram aplicadas e 10 foram descartadas por atraso, com navegação nativa preservada.
+- Prazo de 150 ms, fail-open e runtime vigente preservados. A otimização fica para trabalho futuro e sai dos gates da integração #88–#95.
+- O aceite Dev restante cobre descoberta e substituição de CTAs, escopo e persistência das regras, LP oficial e destino nativo, métricas e notificações. Reutilizar as provas dos PRs em páginas próprias autorizadas.
+- [Decisão registrada no PR #88](https://github.com/oleoceo/anticlone-personal/pull/88#issuecomment-7175801563).
+
+## Redirecionamento e alertas na homologação Dev
+- Público OPERATIONAL via mTLS e privado PILOT_OBSERVE. A LP oficial permaneceu em sua URL no Chromium.
+- Política v2 autoriza só a cópia HTTPS em `/`, com direto/desconhecido em 100%. A cópia recebe HTTP 200/PAGE_REDIRECT em 275–337 ms e mantém fail-open.
+- Worker Dev ativo e restrito ao projeto da LP. Brevo aceitou o teste nº 6. Preferência v6 só para eventos novos, sem tentativas nos itens anteriores.
+- Admin Dev com ativação versionada e sondas. Homologação externa bloqueada pelo acesso de deploy para publicar `/js/a.js` no Vercel e repetir a navegação real.
+- [Evidências e configuração](docs/HOMOLOGACAO-REDIRECT-SMTP-DEV.md).
+
 ## Sincronização do Dev com o GitHub
 - O [PR #84](https://github.com/oleoceo/anticlone-personal/pull/84) integra a conciliação `71f9993` e o histórico do SHA implantado `04ea124846be851a2e8396754f765a1fe318d1e2`.
 - A primeira CI passou em 148 de 149 testes. O ajuste de recuperação cobre as migrações 059–068 e conserva a prova de rollback com a fixture 069.
@@ -224,3 +298,18 @@
 - O proprietário confirmou o recebimento do incidente 10 na caixa de entrada durante a homologação Dev. A mensagem anterior trazia apenas uma observação não verificada e o host.
 - O provedor SMTP gera HTML e texto em português, com contexto do incidente e rota relativa do Admin Dev. LP depende de recibo recente que a associe ao projeto e host.
 - Validação reproduzível em `tests/smtp-provider.test.ts`: conteúdo, escaping, triagem, isolamento, TLS, histórico e retry. Aplicação ao Dev e integração dependem de aprovação.
+
+### Descoberta e substituição de CTA por cópia
+- Branch feature/cta-discovery sobre 88dc70a. Cartões por CTA, alocação por classe e migração aditiva 073.
+- Compatibilidade, implantação e rollback em [Descoberta e substituição de CTA](docs/COPY-CTA-DISCOVERY.md).
+- Ensaios locais com Chromium e PostgreSQL. A LP pública foi exercitada com respostas isoladas no navegador e destinos de teste.
+- O bootstrap congelado da cópia recebeu políticas compatíveis com seu código. Deploy e merge dependem de etapa posterior.
+
+## F07 — domínios de distribuição e aliases compactos
+- Base Dev PR #92, `d55fbb7`. Cadastro reaproveitado com diagnóstico na rota compacta, bloqueio de publicação e autorização privada.
+- Migrações 075–077 e flag privada de emissão. Revisões novas usam sufixo aleatório de 80 bits no nome, com compatibilidade histórica.
+- Chromium/PostgreSQL focal 3/3 em duas origens HTTPS sintéticas. Nginx, regressões e revisão do SHA final ficam registrados no PR.
+- Aceite Dev controlado no SHA homologado da F33. Dois Gateways saudáveis na release imutável e **15 revisões v2 preservadas** (7 privadas e 8 públicas), verificadas com e sem query (`history.json`).
+- Contrato 4 validado via Cloudflare na revisão sintética 1 da instalação `4bd1fd84-fac4-47d6-b5e3-f4a28c6592c6`. Probe, scripts, GIFs, telemetria, sessão e CTA passaram. O clique foi persistido e a LP original foi preservada (`synthetic.json`).
+- `RUNTIME_COMPACT_ALIASES=false` durante a atualização e o aceite. Após a aprovação, `RUNTIME_COMPACT_ALIASES=true` confirmado no novo PID `1101004` do Admin Dev (`admin-activation.json`).
+- Publicação e rollback em [NPM-VPS-RUNBOOK.md §11](docs/NPM-VPS-RUNBOOK.md#11-adicionar-um-domínio-de-distribuição). O aceite cobre somente o cenário sintético no Dev. A homologação do segundo endpoint permanece pendente.

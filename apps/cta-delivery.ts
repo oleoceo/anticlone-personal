@@ -4,7 +4,7 @@ import {reviewedRelease} from './notification-lifecycle.js';
 import type { Pool } from 'pg';
 import { budgetMayBeAvailable, lockBudget, recordBudget } from './notification-budget.js';
 import { reconcileF27 } from './notification-intents.js';
-import {providerAuthorized,sendProviderNotice,type SmtpProvider} from './smtp-provider.js';
+import {providerAdmission,sendProviderNotice,type SmtpProvider} from './smtp-provider.js';
 
 export type LocalSender = (alertId: string) => Promise<void>;
 
@@ -25,7 +25,8 @@ export async function deliverCtaAlert(db: Pool, send: LocalSender,options:{provi
       if (cutoff===false) { await client.query('ROLLBACK'); continue; }
       const releasedExpiry=await reviewedRelease(client,'CTA','$2'),releasedSelect=await reviewedRelease(client,'CTA','$3');
       history=(await client.query("SELECT to_regclass('cta_delivery_attempts') IS NOT NULL AS installed")).rows[0].installed;
-      if(options.provider&&(!history||!await providerAuthorized(client,options.provider))){await client.query('ROLLBACK');continue;}
+      const deliveryAfter = options.provider ? history && await providerAdmission(client,options.provider) : null;
+      if (deliveryAfter === false) { await client.query('ROLLBACK'); continue; }
       let deadlines=reconciliationAfter.get(db);
       if (!deadlines) {deadlines=new Map();reconciliationAfter.set(db,deadlines);}
       if (Date.now()>=(deadlines.get(row.project_id) ?? 0)) {
@@ -48,11 +49,12 @@ export async function deliverCtaAlert(db: Pool, send: LocalSender,options:{provi
         const result=await client.query(`WITH next AS (
           SELECT d.alert_id FROM cta_alert_deliveries d JOIN cta_drift_alerts a ON a.id=d.alert_id
           WHERE a.project_id=$2 AND ($3::timestamptz IS NULL OR a.created_at>$3 OR ${releasedSelect})
+          AND ($5::timestamptz IS NULL OR a.created_at>$5)
           AND a.created_at>clock_timestamp()-interval '24 hours' AND (d.delivery_mode=$4 OR ($4='SMTP_PROVIDER' AND d.delivery_mode='SMTP_LOCAL' AND d.attempts=0)) AND d.attempts<3
           AND d.state='PENDING' AND d.next_attempt<=now()
           ORDER BY d.alert_id FOR UPDATE OF d SKIP LOCKED LIMIT 1
         ) UPDATE cta_alert_deliveries d SET state='PROCESSING',attempts=d.attempts+1,lease_token=$1,delivery_mode=$4,
-          lease_until=now()+interval '1 minute' FROM next WHERE d.alert_id=next.alert_id RETURNING d.alert_id,d.attempts`,[token,row.project_id,cutoff,mode]);
+          lease_until=now()+interval '1 minute' FROM next WHERE d.alert_id=next.alert_id RETURNING d.alert_id,d.attempts`,[token,row.project_id,cutoff,mode,deliveryAfter]);
         id=result.rows[0]?.alert_id;
         attempt=result.rows[0]?.attempts??0;
         if (id) {await recordBudget(client);if(history)await client.query('INSERT INTO cta_delivery_attempts(alert_id,attempt,transport) VALUES($1,$2,$3)',[id,attempt,mode]);}

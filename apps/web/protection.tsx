@@ -1,3 +1,6 @@
+import {CopyCtaControls} from './copy-cta-controls';
+import {httpsDestination} from './copy-redirect-rules';
+import {PageRedirectControls, type RedirectStatus} from './page-redirect-controls';
 import {useState} from 'react';
 import {AdminApi, type Page, type Project} from './admin-api';
 import {CtaWorkspace} from './cta-workspace';
@@ -21,22 +24,43 @@ export function ProtectionScreen({api, project, page, incident, action, setGuard
   api: AdminApi; project: Project; page: Page; incident?: Incident; action: ProtectionAction; setGuard: SetGuard;
 }) {
   const pageAction = action === 'redirecionar';
+  const [legacyOpen,setLegacyOpen]=useState(false);
   const data = useProtection(api, project.id, page.id);
   const authorization = useQuery(page.id, signal => api.request<Operational>('operational', {
     project: project.id, page: page.id, action: 'inspect',
   }, signal));
+  const redirect = useQuery(page.id, signal => api.request<RedirectStatus>('page-redirect', {
+    project:project.id, page:page.id, action:'inspect',
+  }, signal));
   const operation = useOperation(setGuard);
   const controls = {...operation, busy: operation.busy || data.pr.pending || data.lp.pending || authorization.pending ||
     data.pr.error !== undefined || data.lp.error !== undefined || authorization.error !== undefined};
-  function refresh() { data.refresh(); authorization.revalidate(); }
+  function refresh() { data.refresh(); authorization.revalidate(); redirect.revalidate(); }
 
   return <>
     <Heading title={pageAction ? 'Redirecionar página' : 'Substituir checkout/CTA'} description={[project.name, page.name, incident?.host].filter(Boolean).join(' · ')}
       actions={<button type="button" disabled={operation.busy} onClick={refresh}>Atualizar situação</button>}/>
+    {operation.notice()}
+    {pageAction && redirect.error === undefined && !redirect.data && <Loading/>}
+    {pageAction && redirect.error !== undefined && <Failure error={redirect.error} retry={redirect.revalidate}/>}
+    {pageAction && redirect.error === undefined && redirect.data?.gateway==='UNCONFIGURED' &&
+      <p className="notice">A ativação em um gateway público requer ADMIN_OPERATIONAL_GATEWAY_ORIGIN no admin privado.</p>}
+    {pageAction && !legacyOpen && redirect.error === undefined && redirect.data && (redirect.data.rules || redirect.data.gateway!=='UNCONFIGURED') && <PageRedirectControls api={api} page={page} state={redirect.data} incidentHost={incident?.host}
+      operation={{...operation,busy:operation.busy || redirect.pending}}
+      refresh={refresh}/>}
+    {!pageAction && redirect.error!==undefined && <Failure error={redirect.error} retry={redirect.revalidate}/>}
+    {!pageAction && redirect.data?.rules?.contexts && <CopyCtaControls key={page.id+':'+(incident?.host??'')}
+      api={api} page={page} state={redirect.data} settings={redirect.data.rules} incidentHost={incident?.host}
+      operation={{...operation,busy:operation.busy || redirect.pending}}/>}
+    {(!pageAction || (redirect.error === undefined && redirect.data?.gateway==='UNCONFIGURED' && !redirect.data.rules?.rules.length)) && (pageAction ?
+      <LegacyProtection open={legacyOpen} onToggle={setLegacyOpen}>{legacyProtection()}</LegacyProtection> :
+      redirect.data?.gateway==='OPERATIONAL' ? <details className="panel"><summary>Histórico e revisão de CTAs anteriores</summary>{legacyProtection()}</details> : legacyProtection())}
+  </>;
+
+  function legacyProtection() { return <>
     <ol className="steps protection-steps" aria-label="Etapas de proteção">
       <li><span>1</span>Publicar política</li><li><span>2</span>Aprovar na LP</li><li><span>3</span>Autorizar contexto</li>
     </ol>
-    {operation.notice()}
     {data.pr.error !== undefined && <Failure error={data.pr.error} retry={data.pr.revalidate}/>}
     {data.lp.error !== undefined && <Failure error={data.lp.error} retry={data.lp.revalidate}/>}
     {data.pr.data && data.lp.data ? <>
@@ -54,7 +78,11 @@ export function ProtectionScreen({api, project, page, incident, action, setGuard
         authorization.data ? <Authorization api={api} project={project.id} page={page} incident={incident}
           state={authorization.data} pageState={data.lp.data} operation={controls} refresh={refresh}/> : <Loading/>}
     </> : data.pr.error === undefined && data.lp.error === undefined && <Loading/>}
-  </>;
+    </>; }
+}
+
+function LegacyProtection({children,open,onToggle}: {children: import('react').ReactNode; open:boolean; onToggle:(open:boolean)=>void}) {
+  return <details className="panel operation-section" open={open} onToggle={event=>onToggle(event.currentTarget.open)}><summary>Configuração anterior da LP</summary>{children}</details>;
 }
 
 type Operation = ReturnType<typeof useOperation>;
@@ -148,7 +176,6 @@ function PolicyEditor({api, project, page, protection, pageState, pageAction, op
   const current = pageAction ? protection.page : null;
   const scoped = scopedProtection(protection, pageState);
   const [changing, setChanging] = useState(false);
-  const urls = page.urls.map(url => url.origin + url.pathname);
   const initialPath = page.urls.length === 1 ? page.urls[0].pathname : '';
   const name = pageAction ? 'PAGE_REDIRECT' : 'REPLACE_CONVERSION';
   return <section className="panel operation-section">
@@ -178,7 +205,10 @@ function PolicyEditor({api, project, page, protection, pageState, pageAction, op
       const common = {enabled: data.get('enabled') === 'on', stealth: data.get('stealth') === 'on', stealth_version: 2, allocation};
       const surface = value(data, 'surface');
       const pathname = value(data, 'pathname');
-      const payload = pageAction ? {...common, approved_destination: value(data, 'destination')} : {...common, surface, pathname};
+      let destination = '';
+      try { if (pageAction) destination = httpsDestination(value(data, 'destination')); }
+      catch (error) { operation.setError(error); return; }
+      const payload = pageAction ? {...common, approved_destination: destination} : {...common, surface, pathname};
       if (!pageAction) {
         const problem = ctaScopeError(protection, pageState, surface, pathname);
         if (problem) { operation.setError(new InputError(problem)); return; }
@@ -213,9 +243,7 @@ function PolicyEditor({api, project, page, protection, pageState, pageAction, op
       }, data);
     }}>
       {pageAction ? <label>Destino da página
-        <input name="destination" type="url" required maxLength={2048} defaultValue={current?.approved_destination}
-          list="page-destinations"/>
-        <datalist id="page-destinations">{[...new Set([...urls, ...protection.externalDestinations])].map(url => <option key={url} value={url}/>)}</datalist>
+        <input name="destination" type="text" inputMode="url" required maxLength={2048} defaultValue={current?.approved_destination}/>
       </label> : <div className="filters">
         <label>Superfície de CTA<input name="surface" required pattern="[A-Za-z0-9_\-]+" maxLength={64} list="cta-surfaces"/>
           <datalist id="cta-surfaces">{scoped.ctaSurfaces.map(policy => <option key={policy.surface} value={policy.surface}/>)}</datalist>
@@ -360,7 +388,7 @@ function Authorization({api, project, page, incident, state, pageState, operatio
           throw new InputError('A configuração da LP mudou. Atualize a situação e revise a autorização novamente.');
         }
         const result = await api.request<Operational>('operational', {project, page: page.id, action: 'authorize',
-          revision: existing?.revision ?? 0, expectedApprovalId: reviewed.approvalId, copyOrigin, copyPathname, acknowledgeUntrustedContext: fields.get('assent') === 'on'});
+          revision: existing?.revision ?? 0, expectedApprovalId: reviewed.approvalId, copyOrigin, copyPathname, acknowledgeUntrustedContext: true});
         refresh();
         return 'Autorização registrada. Revisão ' + result.state?.revision + '.';
       }, fields);
@@ -371,7 +399,6 @@ function Authorization({api, project, page, incident, state, pageState, operatio
         <label>Caminho exato da cópia<input name="pathname" required maxLength={201} pattern="/(?:[A-Za-z0-9_\-]|/){0,200}"
           defaultValue={existing?.copy_pathname}/></label>
       </div>
-      <label className="check"><input name="assent" type="checkbox" required/>Conferi o contexto e reconheço que o domínio observado é uma alegação.</label>
       <button type="submit" className="primary" disabled={operation.busy}>Revisar autorização</button>
     </form>}
     {existing?.enabled && <button type="button" disabled={operation.busy} onClick={() =>

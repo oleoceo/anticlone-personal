@@ -1,0 +1,49 @@
+# Aceitação do PR #88
+
+## Matriz por função
+
+| Função | Implementado | Prova em ambiente isolado | Prova pública e pendências |
+| --- | --- | --- | --- |
+| F17 · Selecionar a cópia observada | Seletor consulta as origens e caminhos da instalação; a tela do incidente preenche a opção quando há um único caminho observado. A lista não deduz o caminho de um incidente histórico que só registra o host. | `page-redirect-journey` usa o mesmo DOM de referência em duas origens HTTPS, registra o incidente e verifica a seleção automática de `/lp`. `page-redirect-admin` recusa origem oficial, caminho sem observação, escopo cruzado e revisão obsoleta. | Homologar a associação na cópia pública. |
+| F17 · Destinos, confirmação e auditoria | Destino padrão em configurações do projeto; destino específico e percentuais na regra por cópia. O botão **CONFIRMO REDIRECIONAMENTO** envia URL, destino, percentuais e revisões esperadas na sessão autenticada com proteção CSRF. A gravação versionada inclui ativação e auditoria. | `page-redirect-journey` usa React, MFA/CSRF, PostgreSQL e gateway OPERATIONAL. Dois destinos HTTPS distintos e navegação após edição com o mesmo processo. A desativação devolve `OBSERVE_ONLY`. | Homologar a gravação e a chegada a destinos escolhidos no painel Dev. |
+| F18 · Prazo e falha | O Bootstrap checa o mesmo prazo de 150 ms na entrada e imediatamente antes de `location.replace`. A abertura da página e a seleção de CTA continuam independentes. | `page-redirect-journey` mede o prazo desde o Bootstrap e a navegação até o destino em Chromium real, desktop e mobile. Exercita atraso, indisponibilidade, página oficial e o bootstrap congelado que a cópia servia. `f18-timing` cobre também o gate visual. | Medir no gateway público e nas duas LPs de teste durante o deploy aprovado. A navegação para o destino pode terminar após 150 ms mesmo quando iniciada dentro do prazo. |
+| Diagnóstico de execução | Configuração, elegibilidade e estado do gateway são separados dos eventos. Um pedido sem o marcador indica compatibilidade com código anterior. O gateway guarda o motivo da decisão; o navegador relata prazo, erro ou o início da navegação e saída da cópia. | `page-redirect-journey` verifica diagnóstico de resposta tardia, erro, bootstrap antigo, ação e desativação. A URL final foi verificada pelo Chromium. | O relato do navegador é não verificado. A chegada a destinos externos exige observação independente e continua pendente nos domínios públicos. |
+| F26 · SMTP automático para novo clone | Worker separado resolve as credenciais cifradas do painel e consome eventos novos. Auditoria e corte temporal preservam a fila anterior. | A jornada usa SMTP TLS de teste, incidente novo no Chromium, o worker em outro processo e registro aceito com uma tentativa. Duas recargas continuam com um incidente e um envio. O item anterior fica em zero tentativas. Sonda SMTP e aceitação do servidor têm escopos distintos de entrega em caixa. | Sem nova prova pública nesta revisão. O aceite manual anterior da Brevo consta no relatório Dev e não comprova o envio automático de um novo incidente. |
+| F21 · CTAs | Regras de links por cópia e marcador somam-se aos mapeamentos existentes. O runtime verifica o endereço nativo antes do clique e preserva o link em caso de alteração. | `admin-frontend` prova dois CTAs, edição do destino pelo painel, reaplicação e link nativo após suspensão. `multiple-cta-surfaces` cobre oito pontos, múltiplas superfícies e DOM dinâmico. `cta-refresh` cobre desativação, expiração e rejeição de versões atrasadas. | Exercitar no site controlado e checkout real durante a homologação aprovada. |
+| Fronteiras e rollback | Os relatos usam as rotas existentes com orçamento próprio e ficam restritos a contextos observados. A seleção de cópia é uma alegação de navegador e depende da confirmação na sessão autenticada. As migrações 071 e 072 são aditivas. O gateway anuncia contrato 4 quando a 072 está instalada. | O workflow de CI inclui mTLS/NPM, HTTPS, MFA/CSRF e prova de backup/restore e rollback de executáveis em bancos descartáveis. | Verificar saúde, isolamento do admin e rollback na janela aprovada. |
+
+## Como repetir a prova isolada
+
+Em ambiente descartável, use PostgreSQL 16, Chromium e `gateway.test` resolvendo para `127.0.0.1`. A jornada cria seu schema e processos de teste. O servidor SMTP e as páginas HTTPS usam certificados locais do próprio teste.
+
+```bash
+npm run build
+node --test --test-concurrency=1 dist/tests/{page-redirect-admin,page-redirect-journey,admin-frontend,multiple-cta-surfaces,cta-refresh,f18-timing}.test.js
+```
+
+A fixture mantém a estrutura HTML e a ordem relativa dos recursos preservados da cópia pública. Textos e atributos foram sanitizados. Os scripts auxiliares foram substituídos por arquivos vazios locais, portanto a carga de execução dos scripts públicos continua pendente de homologação. O bootstrap servido em `/js/a.js` tinha SHA-256 `2721a558c7071287b49e8b4f2e77bef4d398ee4b3c2b16055104e79c9de22bb7`. Após normalizar somente o objeto de distribuição, o arquivo coincidiu byte a byte com `runtime/bootstrap.js` de `87b6d30`. No teste, esse código aponta para a instalação isolada.
+
+No Chromium com a fixture sanitizada, o bootstrap iniciou a navegação em 85–134 ms. O navegador chegou aos dois destinos em 273–496 ms desde o início da visita. Uma tentativa com HTTP em 187 ms manteve a cópia aberta. O SMTP de teste aceitou um envio do worker em uma tentativa, e o incidente anterior ficou com zero tentativas.
+
+A revisão independente inicial (`/root/pr88_review`, delta sobre `acb7664`) identificou uma corrida entre o registro da decisão e o relato do navegador, motivos legados genéricos e o rótulo da duração. O teste de integração do admin cobre a chegada do relato antes da decisão e a preservação de `PAGE_LEFT`. Na segunda revisão, a mesma sessão conferiu as correções e a origem da fixture. A correlação é de melhor esforço com visitas concorrentes, pois o painel guarda os últimos registros por contexto.
+
+A suíte local anterior ao ajuste final executou 152 testes, com 143 aprovados, dois com falha e sete reservados à CI em Docker. A tela de alertas passou no reteste em desktop e mobile. A revisão independente do último delta (`/root/receipt_review`) conferiu a correção do teste de recibo opcional, que verifica a mesma decisão e persistência sem mudar os prazos do gateway. O teste direto de pins mTLS passou. A CI no GitHub para o candidato continua bloqueada pela falta de autenticação de escrita na branch do PR 88.
+
+O teste requer `TEST_DATABASE_URL` do PostgreSQL isolado. `REDIRECT_BOOTSTRAP` mede do início do Bootstrap até a chamada de navegação. `REDIRECT_BROWSER` registra também a chegada ao destino. `REDIRECT_SMTP` mostra o aceite do transporte e as tentativas por incidente.
+
+## Reteste da consolidação dos PRs 85 a 88
+
+A jornada isolada passou com a URL sintética da cópia servida localmente. O painel salvou e recuperou entradas com e sem protocolo, com caminho e parâmetros. Chromium desktop e mobile iniciou navegação em 88–128 ms desde o Bootstrap e abriu o destino em 277–379 ms desde o início da visita. A edição entrou em vigor no mesmo processo do gateway. A LP oficial, a regra desativada, o erro de transporte e a resposta tardia preservaram a navegação nativa.
+
+O teste acionou dois links com pop-up, incluindo um inserido dinamicamente, e verificou ativação, edição e URL nativa após desativação. Os destinos de checkout e WhatsApp foram serviços sintéticos. O worker separado registrou uma tentativa aceita no SMTP TLS de teste para o incidente novo. As recargas conservaram um envio e o incidente anterior permaneceu em zero tentativas.
+
+O relato Dev anterior mediu 275–337 ms apenas na requisição, acima do orçamento inteiro do Bootstrap. Para a próxima janela autorizada, publicar o Bootstrap atual e medir separadamente DNS, conexão/TLS, tempo até o primeiro byte, leitura e processamento até a navegação. Se o caminho de rede continuar excedendo o prazo, avaliar reutilização de conexão ou entrega da decisão no mesmo ingresso dos scripts, mantendo o orçamento e o fail-open. As medições isoladas não estimam a proporção de visitas redirecionadas em público.
+
+A primeira suíte completa local executou 152 testes, com 144 aprovados, oito falhas e nenhum teste pulado. Duas falhas vinham do seletor antigo de confirmação no painel legado. O reteste desktop e mobile passou ao verificar e aceitar o diálogo efetivo, com as mesmas expectativas de decisão, navegação e persistência. Os testes de pins mTLS passaram diretamente. Cinco cenários que usam a rede host do Docker falharam na prontidão HTTP/SSH ou no TLS local da fixture. O host tem outro serviço na porta 443 e o daemon rootful recusa acesso neste usuário. O teste do recibo opcional falhou no PostgreSQL via TCP publicado pelo Docker rootless e passou no PostgreSQL 16 descartável via socket Unix, preservando a exigência de persistência e o orçamento interno de 15 ms.
+
+## Janela de homologação após autorização do proprietário
+
+1. Aprovar o SHA revisado e os domínios, destinos e caixa de teste. Identificar a publicação que serve o JavaScript da cópia e reservar o release anterior para rollback.
+2. Fazer backup validado do Dev e aplicar as migrations aditivas pendentes. Atualizar admin, gateway, worker e bootstrap apenas na janela aprovada, preservando o upstream mTLS, os segredos e as preferências de envio.
+3. Conferir saúde e isolamento, abrir a LP oficial e a cópia no desktop e mobile, configurar dois destinos HTTPS, comprovar navegação, troca sem reinício e desativação. Registrar separadamente um incidente novo para SMTP e os CTAs de teste.
+4. Se a prova falhar, suspender as novas regras de homologação e restaurar o release e o bootstrap anteriores. A migração aditiva permanece instalada. Confirmar saúde, navegação nativa e situação das filas após o rollback.

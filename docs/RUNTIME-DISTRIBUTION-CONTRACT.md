@@ -4,7 +4,7 @@ Base inspecionada: main após PR #63, 34853e1. Este contrato precede alteraçõe
 
 | Camada atual | Entrada e identidade | Saída / dependências | Falha |
 |---|---|---|---|
-| Bootstrap (`runtime/bootstrap.js`) | URL do script, pathname, sessão pública, sinais declarados | Carrega Core; aplica PAGE_REDIRECT e snapshots CTA; consulta entry-decision/cta-refresh; recibos F29. Fallback é instalado separadamente | Redirect 150ms fail-open; CTA sem fetch no clique, resposta até 5s, TTL 120s; navegação nativa |
+| Bootstrap (`runtime/bootstrap.js`) | URL do script, pathname, sessão pública, sinais declarados | Inicia a decisão em paralelo com o Core; aplica PAGE_REDIRECT e snapshots CTA; consulta entry-decision/cta-refresh; recibos F29. Fallback é instalado separadamente | Redirect 150ms fail-open; CTA sem fetch no clique, resposta até 5s, TTL 120s; navegação nativa |
 | Core (`runtime/core.js`) | URL, origem/pathname, atribuição limitada | POST observe; somente coleta, não é o motor completo | Melhor esforço, sem bloquear página |
 | Fallback (`runtime/fallback.js`) | Sua própria URL e contexto | POST observe/fallback, observação independente quando instalado diretamente | Sem promessa de mitigação; falha silenciosa |
 | HTML/CSS Canary | GET imagem com Referer alegado | observeCanary; agregados passivos, sem decisão | Referer ausente é desconhecido; nenhuma mitigação |
@@ -30,13 +30,17 @@ Migration 051 sucede 050 e as migrations existentes, somente no laboratório aut
 
 Configuração privada inicial do admin: `RUNTIME_PUBLIC_ORIGIN=https://runtime.owner.test`, sem barra final. É exemplo próprio, não endereço publicado. SCRIPT, TELEMETRY e STATIC_ASSETS herdam essa origem única. Quando houver hostname administrativo configurado, informar também `ADMIN_PUBLIC_ORIGIN`; publicação recusa o mesmo hostname operacional. URLs não vêm de campos do browser nem de headers. Aliases são públicos.
 
-No painel, informe projeto e ID da LP em **Distribuição e instalação por LP**. **Consultar distribuição** não cria nem troca aliases. **Publicar endereços de instalação** grava três aliases atomicamente e é idempotente enquanto a configuração não mudar. Copie HTML para a LP e CSS para sua folha de estilos; aplique `anticlone-canary` a um elemento visível existente. A regra CSS pode ser sobrescrita pelo site: confirme a requisição no navegador. Ajuste CSP da página sob seu controle para script-src/connect-src/img-src das origens configuradas; sem permissão da plataforma a camada pode não carregar.
+No painel, informe projeto e ID da LP em **Distribuição e instalação por LP**. **Consultar distribuição** não cria nem troca aliases. **Publicar endereços de instalação** grava três aliases atomicamente e é idempotente quando a distribuição solicitada é igual à publicada. Copie HTML para a LP e CSS para sua folha de estilos; aplique `anticlone-canary` a um elemento visível existente. A regra CSS pode ser sobrescrita pelo site: confirme a requisição no navegador. Ajuste CSP da página sob seu controle para script-src/connect-src/img-src das origens configuradas; sem permissão da plataforma a camada pode não carregar.
 
 Diagnóstico lista Core/Fallback/HTML/CSS recebidos nos últimos sete dias; Bootstrap não tem sinal próprio e permanece UNKNOWN. Confira runtime.js e core.js na aba Rede para essa camada. Sinal é alegação forjável, portanto NOT_VERIFIED não vira verificação controlada. Canários sem Referer podem produzir agregado desconhecido sem sinal autorizado da LP. Não confundir ausência com adulteração.
 
-Evolução explícita: `RUNTIME_SCRIPT_ORIGIN`, `RUNTIME_TELEMETRY_ORIGIN`, `RUNTIME_STATIC_ASSETS_ORIGIN` no ambiente privado sobrescrevem cada papel. Publicar novamente cria outra revisão; consultar não muda revisão. Revisões e aliases são imutáveis. Manter hostnames/proxies antigos enquanto houver instalação anterior; desligá-los exige migração explícita. O HTTPS fornecido atende um hostname inicial: múltiplos hosts não estão publicados ou homologados e exigirão fronteiras TLS/proxy autorizadas. Consumidores v1 já usam três bases e não precisam mudar.
+Os padrões privados por papel se aplicam na primeira publicação sem seleção. A partir da publicação, omitir a seleção conserva as origens vigentes, inclusive ao rotacionar. Revisões e aliases são imutáveis. Manter hostnames/proxies antigos enquanto houver instalação anterior; desligá-los exige migração explícita. O HTTPS fornecido atende um hostname inicial: múltiplos hosts não estão publicados ou homologados e exigirão fronteiras TLS/proxy autorizadas. Consumidores v1 já usam três bases e não precisam mudar.
 
 ## Inspeção no painel React
+
+Em **Instalação → Distribuição de endpoints**, **Endpoint único** aplica um domínio aos três papéis. **Endpoints por função** permite escolher Scripts, Telemetria e Recursos estáticos independentemente, inclusive com domínios repetidos. As escolhas vêm da pool operacional. O servidor revalida cada origem distinta dentro da transação.
+
+A API administrativa aceita `roleOrigins` com os três papéis em `publish` ou `rotate`. O campo anterior `telemetryOrigin` continua aceitando um domínio para os três papéis ou `null` para aplicar os padrões privados. Envie apenas um desses campos. Publicar outro mapa cria uma revisão. Republicar o mesmo mapa conserva a revisão. Rotacionar cria outra revisão com o mapa escolhido ou vigente.
 
 `inspect` retorna os pré-requisitos de publicação, mudança de origens e rotação e o primeiro bloqueador da verificação. Falhas esperadas dos comandos usam códigos seguros em HTTP 400. A inspeção mantém o histórico e os snippets existentes mesmo quando a configuração privada impede novas publicações. Aptidão para gerar endereços é uma verificação de configuração e schema. A entrega dos recursos depende do gateway e da rota usada pela LP.
 
@@ -80,7 +84,7 @@ Validacao corretiva final local do codigo 4691f4cc620c79b22b9621bbc0548ada5c3626
 Bloqueio externo da CI em 2026-11-10: run 42829199298, SHA 53a42bee7693f47c2df31768550271f229b6079e, job validate-repo encerrou em 2 s sem steps/logs. Anotacao GitHub: The job was not started because recent account payments have failed or your spending limit needs to be increased. Reproduzir com gh run view 42829199298 --json jobs e gh api repos/oleoceo/anticlone-personal/check-runs/129874451747/annotations. Nao e falha de teste do codigo e nao existe CI verde para esta correcao. Intervencao de faturamento/limite depende do proprietario; nao alterar custos nem contornar o gate. Provas locais nao substituem a CI exigida. O PR permanece draft; consultar checks do SHA final apos normalizacao da conta.
 Decisao posterior do proprietario para o fechamento do PR #64: executar integralmente CI local gratuita no WSL/Linux como gate escolhido nesta revisao, mantendo Actions BLOCKED e PR Draft. O HEAD48a9541 passou105/0/0 em Node22 com workflow completo. Teste operacional ampliado une v2, painel MFA/CSRF, rotacao/autorizacao/suspensao, PAGE/CTA reais sem reescrita e falhas; apps/runtime/infra nao mudaram. Runner, resultado integral do novo HEAD e evidencias acessiveis descritos em LOCAL-CI.md. F08 permanece BLOCKED; nenhum status remoto verde e alegado.
 
-## Pool de origens de telemetria (067–068)
+## Pool de origens de telemetria (067–068, procedimento anterior à 075)
 
 Em Configurações → Integrações → Endpoints de telemetria, cadastre a origem
 HTTPS completa de cada domínio próprio. O cadastro usa `telemetry_origins` e
@@ -112,3 +116,111 @@ com `proxy_ssl_name` e `Host` upstream fixos no hostname canônico
 `PUBLIC_GATEWAY_HOST` da instância. O certificado interno, os pins, a instância
 e o PostgreSQL Dev são compartilhados pelo fluxo. A conclusão do gate e o
 teste no hostname real continuam necessários para cada ingresso.
+
+## Aliases compactos e cadastro de domínios (075–077)
+
+Para a mesma função de Bootstrap, os formatos públicos são:
+
+| Revisão | Exemplo |
+|---|---|
+| v1 histórica | `https://assets.example.com/d/v1/8ce06c96-03bb-46ed-a9a9-916006c36bdd/runtime.js` |
+| v2 histórica | `https://assets.example.com/r/v2/8ce06c96-03bb-46ed-a9a9-916006c36bdd/a.js` |
+| Compacta anterior | `https://assets.example.com/assets/I2Fz7aURhvkqwkSqBywnXQ/a.js` |
+| Compacta nomeada | `https://assets.example.com/assets/I2Fz7aURhvkqwkSqBywnXQ/app.js` |
+| Compacta atual | `https://signals-pool.owner.test/assets/js/app.4e25b80ce6409714d13e.js` |
+
+A 075 é aditiva. Cada papel recebe 128 bits aleatórios do gerador criptográfico
+do Node, codificados em 22 caracteres base64url. O índice único cobre todos os
+tokens públicos e uma colisão é tentada novamente dentro da transação de
+publicação. O UUID segue como chave interna de recibos e atividade. As três
+rotas de cada revisão continuam vinculadas à LP, aos papéis e às origens
+persistidas. O token é um identificador público. A 076 fixa o novo mapa nos registros do contrato 3. Revisões v1, v2 e compactas
+anteriores conservam os nomes originais. A 077 fixa o contrato 4 e move o
+token para o nome de cada recurso. Escolhemos 80 bits em vez de 64 para
+reduzir a chance de colisão por um fator de 65.536. São dez bytes do gerador
+criptográfico, codificados em vinte caracteres hexadecimais. O sufixo tem
+aparência de hash de asset e é um identificador aleatório da revisão por
+papel. O índice único e a emissão transacional com até três tentativas
+preservam a unicidade. O zero é reservado ao probe. As validações de papel,
+instalação e autorização continuam no Gateway.
+
+Após habilitar `RUNTIME_COMPACT_ALIASES=true` no ambiente privado do admin,
+novas revisões usam os nomes do formato compacto, após aplicar a 077. A primeira publicação e alterações
+de origem geram a revisão automaticamente. Para trocar os caminhos de uma LP
+com a mesma origem, use **Publicar nova revisão** no histórico da instalação.
+Consultar e republicar sem mudança de origem preservam a revisão atual.
+O conteúdo executável e a sequência de carregamento preservam o contrato.
+O formato de arquivo repete os tokens nos nomes do mapa injetado. O ensaio
+Chromium compara os pedidos e o evento de carga da mesma LP sintética com
+os dois mapas compactos e mede o tamanho do Bootstrap servido.
+
+A migração limpa os resultados antigos de verificação. O painel passa a testar
+DNS, certificado HTTPS e prontidão operacional pela mesma regra de ingresso
+do Bootstrap compacto, com o caminho reservado
+`/assets/js/app.00000000000000000000.js`. O probe confirma que a rota chega a
+um Gateway operacional com a 077. A conferência privada do upstream efetivo
+e o smoke dos três papéis confirmam a instância e a distribuição da LP. A
+verificação é pontual. Revalide após alterações de ingresso, DNS ou TLS.
+
+A seleção de um domínio adicional exige cadastro, autorização privada,
+habilitação e verificação operacional; a API confere esses requisitos na
+transação. Cadastre adicionais pelo pool, inclusive quando planejar usá-los
+como padrão em configuração privada. Os padrões existentes continuam sob
+responsabilidade do operador, que comprova seu ingresso antes de habilitar o
+formato compacto. Desativar um endpoint impede novas publicações nele e
+preserva as revisões anteriores. Veja o [procedimento NPM](NPM-VPS-RUNBOOK.md#11-adicionar-um-domínio-de-distribuição).
+
+
+### Recursos da revisão compacta atual
+
+| Papel | Nomes e função |
+|---|---|
+| Scripts | `app.js` inicializa a instalação, `common.js` carrega o núcleo e `events.js` registra a observação de fallback. A extensão `.js` reflete o formato servido. |
+| Sinais e decisão | `collect` recebe observações, `report` recebe o fallback, `config` entrega a decisão inicial, `refresh` atualiza CTA, `session` e `activity` recebem a sessão e a ação observadas. |
+| Recursos estáticos | `pixel.gif` é o sinal HTML, `style.gif` é o sinal CSS e `inventory.js` serve o inventário de laboratório existente. |
+
+O Gateway seleciona aliases dos contratos v1 a v4 e os probes reservados de
+distribuição pelo caminho lexical até o primeiro `?`, sem decodificar ou
+normalizar o caminho. A query string fica fora da comparação. A seleção
+continua validando formato, token, papel e método HTTP conforme o recurso.
+No smoke, compare o mesmo recurso ou probe com e sem query.
+
+O contrato 4 foi homologado no Dev em um cenário sintético via Cloudflare.
+O [STATUS](../STATUS.md#f33--query-strings-nas-rotas-de-distribuição-pr-93)
+registra o SHA executado, a CI e os recibos do aceite.
+
+Scripts usam `/assets/js/<nome>.<token>.js`, imagens usam
+`/assets/img/<nome>.<token>.gif` e os endpoints usam
+`/assets/api/<nome>.<token>`. Cada papel usa um token independente.
+
+Exemplo gerado pelo painel para a LP do laboratório Chromium. Use os trechos
+gerados para a sua LP para obter os endereços da revisão correspondente.
+
+**HEAD**
+
+```html
+<link rel="preconnect" href="https://signals-pool.owner.test" crossorigin>
+<script async src="https://signals-pool.owner.test/assets/js/app.4e25b80ce6409714d13e.js"></script>
+<script async src="https://signals-pool.owner.test/assets/js/events.4e25b80ce6409714d13e.js"></script>
+```
+
+**BODY**
+
+```html
+<img src="https://signals-pool.owner.test/assets/img/pixel.96d3f6f9bf0a459fab4a.gif" width="1" height="1" alt="" referrerpolicy="strict-origin-when-cross-origin">
+```
+
+**CSS**. Aplique `anticlone-canary` a um elemento existente.
+
+```css
+.anticlone-canary {
+  background-image: url("https://signals-pool.owner.test/assets/img/style.96d3f6f9bf0a459fab4a.gif");
+}
+```
+
+- **HTML**. Insira os trechos no `head`, no `body` e na folha de estilos da página.
+- **WordPress**. Insira o HEAD pelo mecanismo do tema ou plugin da LP, o BODY num bloco HTML personalizado e a regra no CSS adicional.
+- **React/Vite**. Insira HEAD e BODY no `index.html`, importe o CSS existente e aplique a classe com `className`. O Bootstrap continua como script clássico, carregado fora do bundle e da montagem React.
+
+O Core é carregado pelo Bootstrap, por exemplo em
+`https://signals-pool.owner.test/assets/js/common.4e25b80ce6409714d13e.js`.
