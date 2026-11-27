@@ -107,8 +107,10 @@ test('health configuration lifecycle suppresses obsolete pending mail without lo
     const key=crypto.randomUUID(), opened=new Date(Date.now()-1000), recovered=new Date();
     await reconcileOperationalEpisode(db,'one','reconciled',key,opened,recovered);
     await reconcileOperationalEpisode(db,'one','reconciled',key,opened,recovered);
-    await recordOperationalState(db,'one','restart','DATABASE_ERROR',true);
-    await recoverOperationalSource(db,'one','restart',new Date());
+    // Use the same millisecond precision for source observations on both sides of restart.
+    const restartObservedAt=new Date(Date.now()-1000);
+    await recordOperationalState(db,'one','restart','DATABASE_ERROR',true,restartObservedAt);
+    await recoverOperationalSource(db,'one','restart',new Date(restartObservedAt.getTime()+1));
     await deliverHealth(db,'one',port); assert.equal(messages,1,'recovered failures cannot send obsolete mail');
     assert.equal((await db.query("SELECT sum(d.attempts)::int n FROM health_delivery d JOIN health_episodes e ON e.id=d.episode_id WHERE e.project_id='one' AND e.kind='OPERATIONAL'")).rows[0].n,0);
     assert.equal((await db.query("SELECT count(*)::int n FROM health_episodes WHERE project_id='one' AND kind='OPERATIONAL' AND recovered_at IS NOT NULL")).rows[0].n,3);
