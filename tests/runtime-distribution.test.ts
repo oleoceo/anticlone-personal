@@ -130,7 +130,12 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
   const db=new Pool({connectionString:process.env.TEST_DATABASE_URL,options:`-c search_path=${schema}`});
   const pageId=randomUUID(),installation=randomUUID(),otherPage=randomUUID(),otherInstallation=randomUUID();
   let html='',css='';
-  const site=createServer((req,res)=>res.writeHead(200,{'content-type':req.url==='/canary.css'?'text/css':'text/html'}).end(req.url==='/canary.css'?css:`<link rel="stylesheet" href="/canary.css"><div class="anticlone-canary">Owned LP</div><a href="/checkout">Checkout</a>${html}`)).listen(0,'127.0.0.1');
+  const localFiles = new Map<string, {contentType: string; body: string}>();
+  const site=createServer((req,res)=>{
+    const file=localFiles.get(req.url??'');
+    if(file){res.writeHead(200,{'content-type':file.contentType}).end(file.body);return;}
+    res.writeHead(200,{'content-type':req.url==='/canary.css'?'text/css':'text/html'}).end(req.url==='/canary.css'?css:`<link rel="stylesheet" href="/canary.css"><div class="anticlone-canary">Owned LP</div><a href="/checkout">Checkout</a>${html}`);
+  }).listen(0,'127.0.0.1');
   await once(site,'listening');
   const origin='http://127.0.0.1:'+(site.address() as AddressInfo).port;
   const clone='http://localhost:'+(site.address() as AddressInfo).port;
@@ -581,7 +586,10 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
     const mailCopy='https://mail-copy.owner.test/';
     const copyHost=new URL(mailCopy).hostname;
     const previousHtml=html;
-    html=(await snippet.textContent())!;
+    html=installedHtml;
+    for(const block of pooled.manualInstallation!.filter(item=>item.operation==='create')){
+      localFiles.set('/'+block.path,{contentType:block.path.endsWith('.css')?'text/css':'application/javascript',body:block.code});
+    }
     const messages:string[]=[];
     const smtp=new SMTPServer({authOptional:true,disabledCommands:['STARTTLS','AUTH'],
       onData(stream,_session,done){
@@ -592,7 +600,13 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
     smtp.listen(0,'127.0.0.1');
     await once(smtp.server,'listening');
     try {
-      await mailPage.route(mailCopy,route=>route.fulfill({contentType:'text/html',body:'<a href="/checkout">Checkout</a>'+html}));
+      await mailPage.route(mailCopy+'**',route=>{
+        const asset=new URL(route.request().url()).pathname;
+        const file=localFiles.get(asset);
+        if(file)return route.fulfill(file);
+        if(asset!=='/')return route.fulfill({status:404});
+        return route.fulfill({contentType:'text/html',body:'<a href="/checkout">Checkout</a>'+html});
+      });
       await mailPage.route(pooledOrigin+'/**',async route=>{
         const req=route.request();
         const method=req.method();
@@ -628,6 +642,7 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
         originalNewIncidents:0,copyVisits:2,copyIncidents:1,acceptedEmails:1,delivery:delivery[0]},null,2)+'\n');
     }finally{
       html=previousHtml;
+      localFiles.clear();
       await mailPage.close();
       await new Promise<void>(resolve=>smtp.close(()=>resolve()));
     }
