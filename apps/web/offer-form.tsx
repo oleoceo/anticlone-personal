@@ -26,14 +26,21 @@ async function identity(...fields: string[]) {
 }
 
 function normalizedUrl(raw: string, originOnly: boolean) {
-  const url = new URL(raw);
+  if (!raw || /[\u0000-\u0020\\?#]/.test(raw) || raw.startsWith('/')) {
+    throw new TypeError('URL da oferta');
+  }
+  const hostWithPort = /^(?:localhost|[^/:]+\.[^/:]+):\d+(?:\/|$)/i.test(raw);
+  const hasScheme = /^[a-z][a-z\d+.-]*:/i.test(raw) && !hostWithPort;
+  const url = new URL(hasScheme ? raw : 'https://' + raw);
   const loopback = ['127.0.0.1', 'localhost'].includes(url.hostname);
   if ((url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) ||
       url.username || url.password || url.search || url.hash || url.hostname.endsWith('.') ||
-      /[\u0000-\u0020\\]/.test(raw) || url.pathname.includes('%') || (originOnly && url.pathname !== '/')) {
+      url.pathname.includes('%') || (originOnly && url.pathname !== '/')) {
     throw new TypeError('URL da oferta');
   }
-  return originOnly ? url.origin : url.origin + url.pathname;
+  const normalized = originOnly ? url.origin : url.origin + url.pathname;
+  if (normalized.length > 2048) throw new TypeError('URL da oferta');
+  return normalized;
 }
 
 function rejected(error: unknown) {
@@ -208,7 +215,8 @@ export function OfferForm({api, project, fields, setFields, setGuard, finish}: {
       return;
     }
     try {
-      normalizedUrl(step === 0 ? fields.origin : fields.url, step === 0);
+      const field = step === 0 ? 'origin' : 'url';
+      update(field, normalizedUrl(fields[field], step === 0));
     } catch {
       setMessage(step === 0 ? 'Informe apenas a origem HTTPS, sem caminho, parâmetros ou fragmento.' :
         'Informe a URL oficial da página, sem parâmetros ou fragmento.');
@@ -221,7 +229,7 @@ export function OfferForm({api, project, fields, setFields, setGuard, finish}: {
   const projectFields = <>
     <label>Nome da oferta<input autoComplete="off" required maxLength={100} value={fields.name}
       onChange={event => update('name', event.target.value)}/></label>
-    <label>Origem oficial<input type="url" inputMode="url" required maxLength={2048} value={fields.origin}
+    <label>Origem oficial<input type="text" inputMode="url" required maxLength={2048} value={fields.origin}
       placeholder="https://…" onChange={event => update('origin', event.target.value)}/></label>
   </>;
 
@@ -281,7 +289,7 @@ export function OfferForm({api, project, fields, setFields, setGuard, finish}: {
         {step === 1 && <>
           <label>Nome da página<input autoComplete="off" required maxLength={100} value={fields.pageName}
             onChange={event => update('pageName', event.target.value)}/></label>
-          <label>URL oficial da página<input type="url" inputMode="url" required maxLength={2048} value={fields.url}
+          <label>URL oficial da página<input type="text" inputMode="url" required maxLength={2048} value={fields.url}
             placeholder="https://…" onChange={event => update('url', event.target.value)}/></label>
         </>}
         {step === 2 && <>
