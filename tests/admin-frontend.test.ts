@@ -126,14 +126,23 @@ for (const width of [1440, 390]) {
     assert.ok(csp?.includes("script-src 'self'; style-src 'self'; connect-src 'self'"));
     assert.equal(await login(page, lab.code()), 204);
     await page.getByRole('heading', {name: 'Meus Projetos'}).waitFor();
-    await offer(page, 'Oferta Aurora', 'https://offer.frontend.test');
+    await offer(page, 'Oferta Aurora', 'offer.frontend.test');
 
     if (width < 760) {
       await page.getByLabel('Nome da página').focus();
       await page.setViewportSize({width, height: 380});
       assert.equal(await page.locator('.bottom-nav').isHidden(), true);
     }
-    await firstPage(page, 'Página inicial', 'https://offer.frontend.test/em-uso');
+    await page.getByLabel('Nome da página').fill('Página inicial');
+    await page.getByLabel('URL oficial da página').fill('http://offer.frontend.test/em-uso');
+    await action(page, 'Continuar').click();
+    await page.getByRole('status').filter({hasText: 'Informe a URL oficial da página'}).waitFor();
+    const longUrl = 'offer.frontend.test/' + 'a'.repeat(2028);
+    await page.getByLabel('URL oficial da página').fill(longUrl);
+    await action(page, 'Continuar').click();
+    await page.getByRole('status').filter({hasText: 'Informe a URL oficial da página'}).waitFor();
+    await firstPage(page, 'Página inicial', 'offer.frontend.test/em-uso');
+    assert.equal(await page.getByText('https://offer.frontend.test', {exact: true}).count(), 1);
     if (width < 760) {
       const submit = action(page, 'Cadastrar oferta e página');
       await submit.scrollIntoViewIfNeeded();

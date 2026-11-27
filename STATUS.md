@@ -313,3 +313,9 @@
 - Contrato 4 validado via Cloudflare na revisão sintética 1 da instalação `4bd1fd84-fac4-47d6-b5e3-f4a28c6592c6`. Probe, scripts, GIFs, telemetria, sessão e CTA passaram. O clique foi persistido e a LP original foi preservada (`synthetic.json`).
 - `RUNTIME_COMPACT_ALIASES=false` durante a atualização e o aceite. Após a aprovação, `RUNTIME_COMPACT_ALIASES=true` confirmado no novo PID `1101004` do Admin Dev (`admin-activation.json`).
 - Publicação e rollback em [NPM-VPS-RUNBOOK.md §11](docs/NPM-VPS-RUNBOOK.md#11-adicionar-um-domínio-de-distribuição). O aceite cobre somente o cenário sintético no Dev. A homologação do segundo endpoint permanece pendente.
+
+### Equivalência Personal / Dev após #98
+- O bundle servido em 3001 e 3002 coincide quando se substitui apenas o SHA de build. Os dois domínios Personal aceitam o probe compacto.
+- Cadastro de oferta e primeira página passam a aceitar domínio sem esquema com HTTPS implícito.
+- A intervenção do titular em `scripts/verificar-personal.py` confere a 077 na conexão do Admin e persiste a flag no env privado.
+- A confirmação de publicação com os dados do Personal e a comparação dos serviços privados dependem da execução pelo titular.
