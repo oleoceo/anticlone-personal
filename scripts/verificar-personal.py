@@ -138,9 +138,12 @@ def run(u, update):
                                step='Processo Dev').stdout)
         cwd = Path(f'/proc/{pid}/cwd').resolve()
         dev_env = u['dev_admin_env']()
-        dev_revision = u['command'](('git', '-c', f'safe.directory={cwd}', 'rev-parse', 'HEAD'), cwd=cwd, step='SHA Dev').stdout.decode().strip()
-        dev = json.loads(u['command']((f'/proc/{pid}/exe', '-e', MANIFEST_JS),
-                                     cwd=cwd, step='Artefatos Dev').stdout)
+        dev_revision = u['command'](('runuser', '-u', 'anticlone-dev', '--', 'git', 'rev-parse', 'HEAD'), cwd=cwd, step='SHA Dev').stdout.decode().strip()
+        dev = {
+            str(path.relative_to(cwd)): u['sha_file'](path)
+            for directory in ('dist/apps', 'runtime') for path in (cwd / directory).rglob('*')
+            if path.is_file() and 'admin-frontend' not in path.relative_to(cwd).parts
+        }
         personal = inspect_live(u, plan, dev)
         name = plan['services'][0]
         print('Bundle sem metadado de revisão:', 'igual' if
