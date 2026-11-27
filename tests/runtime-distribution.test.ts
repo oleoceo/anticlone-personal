@@ -379,9 +379,26 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
     assert.deepEqual(await readDistribution(db,installation,named.version),named);
     await assert.rejects(distributionAdmin(db,{...request,action:'rotate',telemetryOrigin:pooledOrigin},pooledEnv),
       {code:'TELEMETRY_ORIGIN_UNAVAILABLE'});
+    const operationalDefaults = {...pooledEnv, RUNTIME_PUBLIC_ORIGIN:pooledOrigin};
+    const newPage = randomUUID(), newInstallation = randomUUID();
+    await db.query("INSERT INTO protected_pages(id,project_id,installation_id,name) VALUES($1,'one',$2,'Operational defaults')",
+      [newPage,newInstallation]);
+    const defaultPublication = {project:'one',page:newPage,action:'publish'};
+    await assert.rejects(distributionAdmin(db,defaultPublication,operationalDefaults),
+      {code:'TELEMETRY_ORIGIN_UNAVAILABLE'});
+    assert.equal(await readDistribution(db,newInstallation),null);
     for (const origin of [pooledOrigin,secondary,staticOrigin]) {
       await telemetryOriginAdmin(db,{action:'verify',origin},pooledEnv,origin=>checkTelemetryEndpoint(origin,upstream.request));
     }
+    const publishedByDefault = await distributionAdmin(db,defaultPublication,operationalDefaults);
+    assert.ok(publishedByDefault.distribution?.paths);
+    assert.deepEqual(new Set(Object.values(publishedByDefault.distribution.bases).map(value=>new URL(value).origin)),
+      new Set([pooledOrigin]));
+    const defaultScript = await upstream.request({
+      url:publishedByDefault.distribution.bases.SCRIPT + publishedByDefault.distribution.paths['runtime.js'],
+      method:'GET',body:'',
+    });
+    assert.equal(defaultScript.status,200);
     const implicit=await distributionAdmin(db,{project:'one',page:sibling,action:'rotate'},pooledEnv);
     for (const role of ['SCRIPT','TELEMETRY','STATIC_ASSETS'] as const) {
       assert.equal(new URL(implicit.distribution!.bases[role]).origin,new URL(split.distribution!.bases[role]).origin);
@@ -722,9 +739,10 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
     await panel.goto(settings);
     const endpoint=panel.getByRole('listitem').filter({has:panel.getByText(pooledOrigin,{exact:true})});
     await endpoint.getByText('Operacional',{exact:true}).waitFor();
-    await endpoint.getByText('LPs afetadas (2)',{exact:true}).click();
+    await endpoint.getByText('LPs afetadas (3)',{exact:true}).click();
     await endpoint.getByText('One · LP · revisão '+threeOrigins.version+' atual',{exact:true}).waitFor();
     await endpoint.getByText('One · Sibling · revisão '+aligned.version+' anterior',{exact:true}).waitFor();
+    await endpoint.getByText('One · Operational defaults · revisão 1 atual',{exact:true}).waitFor();
     if (demo) await panel.screenshot({path:join(demo,'endpoints.png'),fullPage:true});
     await endpoint.getByRole('button',{name:'Desativar',exact:true}).click();
     await panel.getByRole('button',{name:'Confirmar',exact:true}).click();

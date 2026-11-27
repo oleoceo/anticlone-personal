@@ -319,3 +319,10 @@
 - Cadastro de oferta e primeira página passam a aceitar domínio sem esquema com HTTPS implícito.
 - A intervenção do titular em `scripts/verificar-personal.py` confere a 077 na conexão do Admin e persiste a flag no env privado.
 - A confirmação de publicação com os dados do Personal e a comparação dos serviços privados dependem da execução pelo titular.
+
+## F07 — homologação DEV após limpeza
+- Corrigido o padrão de distribuição operacional do Admin DEV para a origem HTTPS já verificada no pool.
+- Publicação compacta e rotação passaram no PostgreSQL DEV em transação revertida. Projetos, páginas e aliases seguem vazios.
+- Chromium/SMTP em fixtures DEV: 20 cenários focais e 3 de distribuição passaram. TLS e autenticação SMTP passaram no DEV ativo.
+- Revisão independente `/root/revisao_dev` favorável à base `370d65a` e ao delta `4a0d2d5`.
+- A falha original de cadastro não foi reproduzida. Escopo e limites em [Homologação pós-limpeza DEV](docs/HOMOLOGACAO-POS-LIMPEZA-DEV.md).
