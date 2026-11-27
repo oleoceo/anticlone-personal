@@ -115,6 +115,7 @@ test('CTA/health provider TLS + independent worker + audited backlog in Chromium
     const logged=page.waitForResponse(r=>r.url().endsWith('/admin/ui/login'));await page.getByRole('button',{name:'Entrar',exact:true}).click();assert.equal((await logged).status(),204);
     assert.equal(await page.evaluate(async()=> (await fetch('/admin/ui/notifications',{method:'POST',headers:{'content-type':'application/json'},body:'{"action":"inspect","project":"one"}'})).status),403);
     mark('MFA CSRF');
+    await page.getByLabel('Login SMTP').waitFor();
     await interruptIdleConnection(adminApp,'admin database connection failed');
     assert.equal(await page.evaluate(async()=> (await fetch('/admin/ui/settings')).status),200);
     assert.equal(admin.exitCode,null,'Admin keeps its authenticated session after disconnect');
