@@ -175,19 +175,18 @@ for (const width of [1440, 390]) {
     await page.getByRole('dialog').waitFor();
     await action(page, 'Confirmar').click();
     await page.getByText('Revisão 1', {exact: true}).waitFor();
-    const scripts = await page.getByRole('region', {name: 'Trecho HEAD'}).locator('code').innerText();
-    const source = scripts.match(/<script async src="([^"]+)"/)?.[1];
-    assert.ok(source && source.startsWith('https://runtime.frontend.test'+distributionPrefix));
-    assert.ok((namedDistribution ? /\/js\/app\.[0-9a-f]{20}\.js$/ : /\/a\.js$/).test(source));
-    assert.match(scripts, namedDistribution ? /\/js\/events\.[0-9a-f]{20}\.js/ : /\/c\.js/);
-    assert.doesNotMatch(scripts, /\/(?:e|b\.js|api\/collect\.[0-9a-f]{20}|js\/common\.[0-9a-f]{20}\.js)"/);
-    assert.match(await page.getByRole('region', {name: 'Trecho BODY'}).locator('code').innerText(), namedDistribution ? /\/img\/pixel\.[0-9a-f]{20}\.gif/ : /\/m\.gif/);
-    assert.match(await page.getByRole('region', {name: 'Trecho CSS'}).locator('code').innerText(), namedDistribution ? /\/img\/style\.[0-9a-f]{20}\.gif/ : /\/n\.gif/);
+    const code = (name: string) => page.getByRole('region', {name, exact: true}).locator('pre code');
+    const scripts = await code('HEAD').innerText();
+    assert.match(scripts, /src="js\/app\.[a-f0-9]{20}\.js"/);
+    assert.match(scripts, /src="js\/events\.[a-f0-9]{20}\.js"/);
+    assert.ok((await code('JavaScript · Bootstrap').innerText()).includes('https://runtime.frontend.test' + distributionPrefix));
+    assert.match(await code('BODY').innerText(), namedDistribution ? /\/img\/pixel\.[0-9a-f]{20}\.gif/ : /\/m\.gif/);
+    assert.match(await code('CSS · Canário').innerText(), namedDistribution ? /\/img\/style\.[0-9a-f]{20}\.gif/ : /\/n\.gif/);
     await page.getByLabel('Tecnologia do site').selectOption('React/Vite');
-    await page.getByText('<main className="conteudo anticlone-canary">…</main>', {exact: true}).waitFor();
+    await page.getByText(/pasta public/).waitFor();
     await page.getByLabel('Tecnologia do site').selectOption('WordPress');
-    await page.getByText(/bloco HTML personalizado/).waitFor();
-    assert.equal(await page.getByRole('region', {name: 'Trecho HEAD'}).locator('code').innerText(), scripts);
+    await page.getByText(/Insira os blocos HEAD e BODY/).waitFor();
+    assert.equal(await code('HEAD').innerText(), scripts);
     await page.getByLabel('Tecnologia do site').selectOption('HTML');
     assert.equal(await page.getByRole('link', {name:'Abrir página oficial em nova aba'}).getAttribute('href'),
       'https://offer.frontend.test/inicio');
@@ -335,13 +334,14 @@ test('recovers the committed project and LP by their saved identities after trun
   const writes = interruptCreations(lab.server, false);
 
   await action(page, 'Cadastrar oferta e página').click();
-  await page.getByRole('heading', {name: 'Conferir cadastro'}).waitFor();
+  await page.getByText('Retomar cadastro anterior', {exact: true}).waitFor();
   await page.getByRole('alert').waitFor();
   assert.equal(writes.length, 1);
   const recovered = (await lab.db.query('SELECT id FROM projects WHERE id <> $1', [earlier.id])).rows[0].id as string;
   assert.equal(recovered, writes[0].key);
   page.once('dialog', dialog => void dialog.accept());
   assert.equal((await page.reload())?.status(), 200);
+  await page.getByText('Retomar cadastro anterior', {exact: true}).click();
   await action(page, 'Consultar cadastro').click();
   await page.getByText('Oferta localizada.', {exact: false}).waitFor();
   assert.equal(await page.locator('.identifier').innerText(), recovered);
@@ -355,6 +355,7 @@ test('recovers the committed project and LP by their saved identities after trun
   await firstPage(page, 'Página retomada', 'https://resume.frontend.test/inscricao');
   await action(page, 'Cadastrar página').click();
   await page.getByRole('alert').waitFor();
+  await page.getByText('Retomar cadastro anterior', {exact: true}).click();
   await action(page, 'Consultar cadastro').click();
   await action(page, 'Abrir instalação de Página retomada').click();
   await page.getByRole('heading', {name: 'Instalar a proteção'}).waitFor();
@@ -381,25 +382,79 @@ test('a project request lost before commit can be deliberately retried with the 
   await page.getByRole('alert').waitFor();
   page.once('dialog', dialog => void dialog.accept());
   assert.equal((await page.reload())?.status(), 200);
+  await page.getByRole('heading', {name: 'Identificar oferta'}).waitFor();
+  await page.getByText('Retomar cadastro anterior', {exact: true}).click();
   await action(page, 'Consultar cadastro').click();
   await page.getByText('O cadastro ainda não aparece', {exact: false}).waitFor();
   assert.equal(await action(page, 'Usar oferta localizada').count(), 0);
 
-  await page.getByLabel('Nome da oferta').fill('Dados diferentes');
-  await page.getByLabel('Origem oficial').fill('https://pending.frontend.test');
-  await action(page, 'Reenviar cadastro da oferta').click();
-  await page.getByText('Informe o mesmo nome e a mesma origem do primeiro envio.').waitFor();
+  await page.getByText('Outra tentativa', {exact: true}).waitFor();
+  await page.getByText('https://pending.frontend.test', {exact: true}).waitFor();
+  assert.equal(await page.getByLabel('Nome da oferta').inputValue(), '');
   assert.equal(keys.length, 1);
 
   await page.getByLabel('Nome da oferta').fill('Outra tentativa');
-  await action(page, 'Reenviar cadastro da oferta').click();
-  await page.getByRole('heading', {name: 'Informar página'}).waitFor();
+  await page.getByLabel('Origem oficial').fill('https://pending.frontend.test');
+  await action(page, 'Continuar').click();
+  await firstPage(page, 'Página pendente', 'https://pending.frontend.test/oferta');
+  await action(page, 'Cadastrar oferta e página').click();
+  await page.getByRole('heading', {name: 'Instalar a proteção'}).waitFor();
   assert.equal(typeof keys[0], 'string');
   assert.deepEqual(keys, [keys[0], keys[0]]);
   assert.deepEqual((await lab.db.query('SELECT id FROM projects WHERE id <> $1', [homonym])).rows, [{id: keys[0]}]);
   assert.deepEqual((await lab.db.query('SELECT project_id FROM project_registration_audit WHERE project_id <> $1', [homonym])).rows,
     [{project_id: keys[0]}]);
-  assert.equal((await lab.db.query('SELECT count(*)::int AS count FROM protected_pages')).rows[0].count, 0);
+  assert.equal((await lab.db.query('SELECT count(*)::int AS count FROM protected_pages')).rows[0].count, 1);
+});
+
+test('a legacy checkpoint with forgotten project data opens a usable offer form', {timeout: 60_000}, async t => {
+  const lab = await fixture(t);
+  const page = await lab.browser.newPage();
+  await page.goto(lab.origin + ui + '/projetos');
+  assert.equal(await login(page, lab.code()), 204);
+  const oldIntent = randomUUID();
+  await page.evaluate(intent => sessionStorage.setItem('anticlone:register:new',
+    JSON.stringify({phase: 'project-write', intent, digest: 'a'.repeat(64)})), oldIntent);
+  await page.getByRole('link', {name: 'Proteger oferta', exact: true}).first().click();
+  await page.getByRole('heading', {name: 'Identificar oferta'}).waitFor();
+  assert.equal(await action(page, 'Consultar cadastro').isVisible(), false);
+  await page.getByLabel('Nome da oferta').fill('Oferta corrigida');
+  await page.getByLabel('Origem oficial').fill('nova.frontend.test');
+  await action(page, 'Continuar').click();
+  await firstPage(page, 'Página corrigida', 'https://nova.frontend.test/oferta');
+  await action(page, 'Cadastrar oferta e página').click();
+  await page.getByText('Confirme que deseja iniciar outra oferta', {exact: false}).waitFor();
+  assert.equal((await lab.db.query('SELECT count(*)::int n FROM projects')).rows[0].n, 0);
+  await page.getByLabel('Se os dados forem diferentes', {exact: false}).check();
+  await action(page, 'Cadastrar oferta e página').click();
+  await page.getByRole('heading', {name: 'Instalar a proteção'}).waitFor();
+  const rows = (await lab.db.query('SELECT id, name, origin FROM projects')).rows;
+  assert.equal(rows.length, 1);
+  assert.notEqual(rows[0].id, oldIntent);
+  assert.equal(rows[0].origin, 'https://nova.frontend.test');
+  assert.equal(await page.evaluate(() => sessionStorage.getItem('anticlone:register:new')), null);
+});
+
+test('a rejected first request leaves the offer form ready to submit again', {timeout: 60_000}, async t => {
+  const lab = await fixture(t);
+  const page = await lab.browser.newPage();
+  await page.goto(lab.origin + ui + '/projetos');
+  assert.equal(await login(page, lab.code()), 204);
+  await offer(page, 'Oferta com sessão renovada', 'https://session.frontend.test');
+  await firstPage(page, 'Página da oferta', 'https://session.frontend.test/oferta');
+  await page.route('**/admin/ui/project-create', route => route.continue({
+    headers: {...route.request().headers(), 'x-csrf-token': ''},
+  }), {times: 1});
+  const rejection = page.waitForResponse(response => response.url().endsWith('/project-create'));
+  await action(page, 'Cadastrar oferta e página').click();
+  assert.equal((await rejection).status(), 403);
+  await page.getByRole('alert').filter({hasText: 'não foi autorizada'}).waitFor();
+  assert.equal(await page.getByText('Retomar cadastro anterior', {exact: true}).count(), 0);
+  assert.equal(await page.evaluate(() => sessionStorage.getItem('anticlone:register:new')), null);
+  assert.equal((await lab.db.query('SELECT count(*)::int n FROM projects')).rows[0].n, 0);
+  await action(page, 'Cadastrar oferta e página').click();
+  await page.getByRole('heading', {name: 'Instalar a proteção'}).waitFor();
+  assert.equal((await lab.db.query('SELECT count(*)::int n FROM projects')).rows[0].n, 1);
 });
 
 test('project registration key handles concurrent replay, changed payload, legacy calls and audit rollback', {timeout: 60_000}, async t => {
@@ -1144,7 +1199,8 @@ test('React provisions an original LP and copy, then real gateway applies scoped
       else process.env.ADMIN_GATEWAY_HEALTH_PORT = oldProbe;
     });
 
-    let html = '', css = '';
+    let head = '', bodyCode = '';
+    const files = new Map<string, {code: string; type: string}>();
     const tls = createTlsServer({key: await readFile(join(directory, 'key')), cert: await readFile(join(directory, 'cert'))}, (req, res) => {
       const host = req.headers.host?.split(':')[0];
       if (host === 'gateway.integration.test') {
@@ -1158,12 +1214,16 @@ test('React provisions an original LP and copy, then real gateway applies scoped
         res.writeHead(404).end();
         return;
       }
-      const body = req.url === '/lp' ? `<style>${css}</style>
-        <main class="anticlone-canary" data-anticlone-surface="landing">
+      const file = files.get(req.url ?? '');
+      if (file) { res.writeHead(200, {'content-type': file.type}).end(file.code); return; }
+      const body = req.url === '/lp' ? `<!doctype html><head>${head}</head><body>
+        <main data-anticlone-surface="landing">
           <h1>${host === 'original.integration.test' ? 'LP original' : 'Cópia controlada'}</h1>
           <a data-anticlone-point="checkout01" href="/checkout-nativo">Comprar</a>
           <a data-anticlone-point="contato01" href="/contato-nativo">Contato</a>
-        </main>${html}` : '<h1>Destino controlado</h1>';
+        </main>
+        <a id="offer-standard" href="/checkout-basic.html">Checkout padrão</a>
+        <button id="checkout-dynamic" type="button">Comprar na oferta dinâmica</button>${bodyCode}</body>` : '<h1>Destino controlado</h1>';
       res.writeHead(200, {'content-type': 'text/html; charset=utf-8'}).end(body);
     }).listen(0, '127.0.0.1');
     await once(tls, 'listening');
@@ -1174,10 +1234,13 @@ test('React provisions an original LP and copy, then real gateway applies scoped
     const gatewayOrigin = 'https://gateway.integration.test:' + sitePort;
     const candidates = [{marker: 'checkout01', native: '/checkout-nativo', target: '/checkout-aprovado'},
       {marker: 'contato01', native: '/contato-nativo', target: '/contato-aprovado'}];
-    const captureSite = createServer((_req, res) => res.writeHead(200, {'content-type': 'text/html'}).end(
-      '<main data-anticlone-surface="landing">' + candidates.map(point =>
-        '<a data-anticlone-point="' + point.marker + '" href="' + copy + point.native + '">' + point.marker + '</a>').join('') + '</main>' + html,
-    )).listen(0, '127.0.0.1');
+    const captureSite = createServer((req, res) => {
+      const file = files.get(req.url ?? '');
+      if (file) { res.writeHead(200, {'content-type': file.type}).end(file.code); return; }
+      res.writeHead(200, {'content-type': 'text/html'}).end(
+      '<!doctype html><head>' + head + '</head><body><main data-anticlone-surface="landing">' + candidates.map(point =>
+        '<a data-anticlone-point="' + point.marker + '" href="' + copy + point.native + '">' + point.marker + '</a>').join('') + '</main>' + bodyCode + '</body>');
+    }).listen(0, '127.0.0.1');
     await once(captureSite, 'listening');
     t.after(() => new Promise<void>(resolve => { captureSite.close(() => resolve()); captureSite.closeAllConnections(); }));
     const captureOrigin = 'http://127.0.0.1:' + (captureSite.address() as AddressInfo).port;
@@ -1241,13 +1304,41 @@ test('React provisions an original LP and copy, then real gateway applies scoped
     const ids = (await lab.db.query('SELECT project_id AS project, id AS page FROM protected_pages')).rows[0];
     assert.ok(ids?.project && ids.page);
     await confirm('Publicar endereços de instalação', 'Revisão 1');
-    html = (await Promise.all(['HEAD','BODY'].map(piece=>panel.getByRole('region',{name:'Trecho '+piece}).locator('code').innerText()))).join('\n');
-    css = await panel.getByRole('region', {name: 'Trecho CSS'}).locator('code').innerText();
+    head = await panel.getByRole('region', {name: 'HEAD', exact: true}).locator('pre code').innerText();
+    bodyCode = await panel.getByRole('region', {name: 'BODY', exact: true}).locator('pre code').innerText();
+    assert.match(head, /<script async="" src="js\/app\.[a-f0-9]{20}\.js">/);
+    for (const [name, type] of [['JavaScript · Bootstrap', 'application/javascript'],
+      ['JavaScript · Fallback', 'application/javascript'], ['CSS · Canário', 'text/css']]) {
+      const block = panel.getByRole('region', {name, exact: true});
+      const path = await block.locator('p code').innerText();
+      files.set('/' + path, {code: await block.locator('pre code').innerText(), type});
+    }
     await capture(panel, '04-instalacao-publicada');
 
     const visit = await context.newPage();
+    const paths = [
+      /\/(?:a|app\.[a-f0-9]{20})\.js$/,
+      /\/(?:b|common\.[a-f0-9]{20})\.js$/,
+      /\/(?:c|events\.[a-f0-9]{20})\.js$/,
+      /\/(?:m|pixel\.[a-f0-9]{20})\.gif$/,
+      /\/(?:n|style\.[a-f0-9]{20})\.gif$/,
+    ];
+    const responses = paths.map(path => visit.waitForResponse(response =>
+      response.ok() && response.url().startsWith(gatewayOrigin + '/') && path.test(new URL(response.url()).pathname)));
     await visit.goto(original + '/lp');
+    await Promise.all(responses);
     await visit.getByRole('heading', {name: 'LP original'}).waitFor();
+    await until(async () => (await lab.db.query("SELECT points FROM official_cta_inventory WHERE page_id=$1",[ids.page]))
+      .rows.some(row => row.points.some((point: {marker: string}) => point.marker.startsWith('auto-'))), 'inventário oficial sem marcações');
+    const inventoryPanel = await context.newPage();
+    await inventoryPanel.goto(installation);
+    await inventoryPanel.getByRole('link', {name: 'Conversões e CTAs', exact: true}).click();
+    const officialInventory = inventoryPanel.getByRole('region', {name: 'CTAs identificados na LP oficial'});
+    await officialInventory.getByText(original + '/checkout-basic.html', {exact: true}).waitFor();
+    await officialInventory.getByText('Destino dinâmico ou indisponível', {exact: true}).waitFor();
+    await inventoryPanel.close();
+    await visit.getByRole('link', {name: 'Checkout padrão'}).click();
+    await visit.waitForURL(original + '/checkout-basic.html');
     await until(async () => (await lab.db.query('SELECT count(*)::int n FROM page_installation_signals')).rows[0].n >= 2,
       'Core e Fallback da LP original');
     assert.equal((await lab.db.query('SELECT count(*)::int n FROM incidents')).rows[0].n, 0);

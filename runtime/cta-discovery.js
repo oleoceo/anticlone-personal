@@ -41,7 +41,6 @@
         const appLink = anchor && /^whatsapp:/i.test(href ?? '');
         const hint = (node.textContent ?? '').trim().slice(0,100) + ' ' + node.id.slice(0,128) + ' ' + (node.getAttribute('class') ?? '').slice(0,256) + ' ' + (node.getAttribute('aria-label') ?? '').slice(0,100);
         if (!explicit && !whatsapp && !appLink && !declared && !commercial.test((url?.hostname ?? '')+' '+(url?.pathname ?? '')+' '+hint)) return null;
-        if (!explicit && (anchor && !url && !appLink || button && !script && !declared)) return null;
         const context = node.parentElement?.closest('[id]')?.id ?? '';
         const identity = [node.tagName,node.id.slice(0,128),context.slice(0,128),url?.href ?? '',button ? script.slice(0,2048) : ''];
         const kind = button ? 'button' : whatsapp || appLink ? 'whatsapp' : 'link';

@@ -16,6 +16,8 @@ const fixture=`
 <button id="buy" type="button" onclick="window.location.href='https://original.test/checkout-js.html'">Comprar</button>
 <button id="offer-popup" type="button" onclick="window.open('https://original.test/checkout-popup.html','_blank')">Abrir oferta</button>
 <button id="checkout-unknown" type="button" onclick="runOffer()">Oferta sem destino verificável</button>
+<a href="#">Comprar em modal</a>
+<button id="dynamic" type="button">Comprar oferta dinâmica</button>
 <a id="whatsapp" target="_blank" href="https://wa.me/5511999999999?text=synthetic-secret">WhatsApp</a>
 <a id="home" href="/home">Início</a><button id="menu" type="button" onclick="window.location='/home'">Menu</button>
 <form><button id="submit" type="submit">Enviar</button></form>
@@ -30,7 +32,8 @@ test('CTA discovery and actual desktop/mobile navigation, with an immediate nati
     for (const mobile of [false,true]) {
       const context=await browser.newContext(mobile ? devices['Pixel 7'] : {});
       const page=await context.newPage();
-      let inventory:ReturnType<typeof validateCopyCtaInventory>=[];
+      const points = new Map<string,ReturnType<typeof validateCopyCtaInventory>[number]>();
+      const inventory = () => [...points.values()];
       let mappings:{marker:string;surface?:string;kind:string;destination:string;nativeDigest:string}[]=[];
       let releaseEntry:(()=>void)|undefined;
       let delay=false;
@@ -47,33 +50,34 @@ test('CTA discovery and actual desktop/mobile navigation, with an immediate nati
         }
         if (url===gateway+'observe') {
           const body=route.request().postDataJSON();
-          if (body.ctas) inventory=validateCopyCtaInventory(body.ctas);
+          if (body.ctas) for (const point of validateCopyCtaInventory(body.ctas)) points.set(point.surface+':'+point.marker,point);
         }
         return route.fulfill({headers,contentType:'text/html',body:'<title>Navigation committed</title>'});
       });
       const visit=()=>page.goto(copy+'/',{waitUntil:'domcontentloaded'});
       const click=(id:string)=>mobile ? page.locator('#'+id).tap() : page.locator('#'+id).click();
       await visit();
-      const nextInventory=()=>page.waitForResponse(response=>response.url()===gateway+'observe' &&
-        response.request().postData()?.includes('"ctas"')===true);
+      const nextInventory=(scope?:string)=>page.waitForResponse(response=>response.url()===gateway+'observe' &&
+        response.request().postData()?.includes(scope ? '"surface":"'+scope+'"' : '"ctas"')===true);
       await nextInventory();
-      assert.equal(inventory.length,6);
-      assert.equal(inventory.filter(point=>point.compatible).length,4);
-      assert.equal(inventory.filter(point=>point.native_url===original+'/checkout-basic.html').length,2);
-      assert.equal(new Set(inventory.map(point=>point.marker)).size,inventory.length);
-      assert.ok(!JSON.stringify(inventory).includes('synthetic-secret'));
-      const popupInventory=nextInventory();
+      assert.equal(inventory().length,8);
+      assert.equal(inventory().filter(point=>point.native_url===null && point.compatible===false).length,3);
+      assert.equal(inventory().filter(point=>point.compatible).length,4);
+      assert.equal(inventory().filter(point=>point.native_url===original+'/checkout-basic.html').length,2);
+      assert.equal(new Set(inventory().map(point=>point.marker)).size,inventory().length);
+      assert.ok(!JSON.stringify(inventory()).includes('synthetic-secret'));
+      const popupInventory=nextInventory('exit');
       const showOffers=()=>page.evaluate(()=>{
         document.body.insertAdjacentHTML('beforeend','<dialog open data-anticlone-surface="discount"><a id="discount" href="/offer-discount.html">Desconto</a></dialog>');
         document.body.insertAdjacentHTML('beforeend','<aside data-anticlone-surface="exit"><a id="exit" href="/offer-exit.html">Oferta de saída</a></aside>');
       });
       await showOffers();
       await popupInventory;
-      assert.deepEqual(inventory.filter(point=>point.surface).map(point=>point.surface),['discount','exit']);
-      const offers=inventory.filter(point=>point.surface);
+      assert.deepEqual(inventory().filter(point=>point.surface).map(point=>point.surface),['discount','exit']);
+      const offers=inventory().filter(point=>point.surface);
       const hashes=new Map([[native,'a'],['https://original.test/checkout-js.html','js'],['https://wa.me/5511999999999?text=synthetic-secret','whatsapp']].map(
         ([url,kind])=>[createHash('sha256').update(url).digest('hex'),kind]));
-      mappings=inventory.filter(point=>point.compatible && hashes.has(point.native_digest)).map((point,index)=>({
+      mappings=inventory().filter(point=>point.compatible && hashes.has(point.native_digest)).map((point,index)=>({
         marker:point.marker,kind:point.kind==='button' ? 'button' : 'a',nativeDigest:point.native_digest,destination:target+'?point='+index,
       }));
       for (const [id,index] of [['basic',0],['complete',1],['buy',2]] as const) {
@@ -100,7 +104,7 @@ test('CTA discovery and actual desktop/mobile navigation, with an immediate nati
         const offered=page.waitForResponse(gateway+'entry-decision');
         await visit();
         await (await offered).finished();
-        const dynamic=nextInventory();
+        const dynamic=nextInventory(surface);
         await showOffers();
         await dynamic;
         await click(surface);

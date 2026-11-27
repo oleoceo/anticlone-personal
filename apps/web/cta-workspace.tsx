@@ -17,6 +17,35 @@ type Observation = {
 };
 type Inventory = {captureId: string | null; observations: Observation[]; destinations: Destination[]; missing: unknown[]; stale: number};
 
+type OfficialInventory = {available: boolean; captures: {
+  origin: string; pathname: string; observed_at: string;
+  points: {marker: string; surface: string; native_url: string | null; kind?: string; compatible?: boolean; ordinal?: number}[];
+}[]};
+
+function OfficialCtas({api, project, page}: {api: AdminApi; project: string; page: Page}) {
+  const query = useQuery(page.id, signal => api.request<OfficialInventory>('page-redirect', {
+    action: 'inspect-official-ctas', project, page: page.id,
+  }, signal));
+  return <section aria-label="CTAs identificados na LP oficial">
+    <h3>CTAs identificados na LP oficial</h3>
+    <p>Abra a página oficial com a proteção instalada e atualize esta lista. O navegador envia candidatos para revisão. Para configurar destinos, selecione a cópia observada em Políticas de proteção.</p>
+    <button type="button" disabled={query.pending} onClick={query.revalidate}>Atualizar CTAs da LP oficial</button>
+    {query.error !== undefined && <Failure error={query.error} retry={query.revalidate}/>}
+    {query.pending && !query.data && <Loading/>}
+    {query.data && (!query.data.available ? <p>Inventário da LP oficial indisponível neste ambiente.</p> :
+      !query.data.captures.length ? <p>Nenhum candidato recente recebido da página oficial.</p> :
+        query.data.captures.map(capture => <div key={capture.origin + capture.pathname}>
+          <p>{capture.origin + capture.pathname} · {formatDate(capture.observed_at)}</p>
+          <ul className="plain evidence-list">{capture.points.map(point => <li key={point.surface + ':' + point.marker}>
+            <strong>{point.kind === 'button' ? 'Botão' : point.kind === 'whatsapp' ? 'WhatsApp' : 'Link'}{point.ordinal ? ' · candidato ' + point.ordinal : ''} · {point.marker}</strong>
+            <small>{point.native_url ?? 'Destino dinâmico ou indisponível'}</small>
+            {point.compatible === false && <small>Revisão apenas. O runtime não pode substituir este candidato com segurança.</small>}
+          </li>)}</ul>
+        </div>))}
+    <p>O inventário pode omitir parâmetros e caminhos sensíveis. Formulários e ações que o navegador não consegue identificar ficam fora da substituição.</p>
+  </section>;
+}
+
 export function CtaWorkspace({api, project, page, protection, refresh, setGuard}: {
   api: AdminApi; project: string; page: Page; protection: Protection; refresh: () => void; setGuard: SetGuard;
 }) {
@@ -28,7 +57,8 @@ export function CtaWorkspace({api, project, page, protection, refresh, setGuard}
   const surface = surfaces.find(policy => policy.surface === selected) ?? surfaces[0];
   return <section className="panel" id="inventario-cta" aria-labelledby="cta-inventory-heading" tabIndex={-1}>
     <h2 id="cta-inventory-heading">Pontos de conversão</h2>
-    <p>Confira a captura da superfície, revise as mudanças e vincule os pontos a destinos aprovados.</p>
+    <OfficialCtas api={api} project={project} page={page}/>
+    <p>Consulte também os registros das superfícies configuradas anteriormente.</p>
     {surfaces.length > 1 && <label>Superfície de CTA<select value={surface?.surface ?? ''} onChange={event => {
       params.set('superficie', event.target.value);
       void navigate({pathname: location.pathname, search: searchOf(params)}, {replace: true, state: location.state});

@@ -130,7 +130,12 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
   const db=new Pool({connectionString:process.env.TEST_DATABASE_URL,options:`-c search_path=${schema}`});
   const pageId=randomUUID(),installation=randomUUID(),otherPage=randomUUID(),otherInstallation=randomUUID();
   let html='',css='';
-  const site=createServer((req,res)=>res.writeHead(200,{'content-type':req.url==='/canary.css'?'text/css':'text/html'}).end(req.url==='/canary.css'?css:`<link rel="stylesheet" href="/canary.css"><div class="anticlone-canary">Owned LP</div><a href="/checkout">Checkout</a>${html}`)).listen(0,'127.0.0.1');
+  const localFiles = new Map<string, {contentType: string; body: string}>();
+  const site=createServer((req,res)=>{
+    const file=localFiles.get(req.url??'');
+    if(file){res.writeHead(200,{'content-type':file.contentType}).end(file.body);return;}
+    res.writeHead(200,{'content-type':req.url==='/canary.css'?'text/css':'text/html'}).end(req.url==='/canary.css'?css:`<link rel="stylesheet" href="/canary.css"><div class="anticlone-canary">Owned LP</div><a href="/checkout">Checkout</a>${html}`);
+  }).listen(0,'127.0.0.1');
   await once(site,'listening');
   const origin='http://127.0.0.1:'+(site.address() as AddressInfo).port;
   const clone='http://localhost:'+(site.address() as AddressInfo).port;
@@ -196,10 +201,10 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
     await panel.getByLabel('Projeto da instalação',{exact:true}).fill('one');
     await panel.getByLabel('LP da instalação',{exact:true}).fill(pageId);
     await panel.getByRole('button',{name:'Consultar distribuição',exact:true}).click();
-    await panel.waitForFunction(()=>!!(document.querySelector('#distribution-html') as HTMLTextAreaElement).value);
-    html=await panel.getByLabel('HTML de instalação',{exact:true}).inputValue();
-    css=await panel.getByLabel('CSS de instalação',{exact:true}).inputValue();
-    assert.equal(html,published[0].snippets?.html);assert.equal(css,published[0].snippets?.css);
+    await panel.waitForFunction(() => document.querySelector('#distribution-result')?.textContent?.includes('"version": 1'));
+    assert.equal(await panel.getByRole('link', {name: 'painel atual'}).getAttribute('href'), '/admin/ui/novo/');
+    html=published[0].snippets!.html;
+    css=published[0].snippets!.css;
     const page=await browser.newPage();
     const responses=Promise.all(['observe','observe/fallback','html.gif','css.gif'].map(path=>page.waitForResponse(response=>response.url().endsWith('/'+path)&&response.ok())));
     await page.goto(origin);await responses;
@@ -415,7 +420,7 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
     await panel.getByLabel('Domínio do endpoint',{exact:true}).selectOption(pooledOrigin);
     await panel.getByRole('button',{name:'Publicar endereços de instalação',exact:true}).click();
     await panel.getByRole('button',{name:'Confirmar',exact:true}).click();
-    await panel.getByRole('region',{name:'Trecho HEAD'}).locator('code').filter({hasText:pooledOrigin+'/assets/'}).waitFor();
+    await panel.getByRole('region',{name:'JavaScript · Bootstrap'}).locator('pre code').filter({hasText:pooledOrigin+'/assets/'}).waitFor();
     const aligned=(await readDistribution(db,siblingInstallation))!;
     assert.equal(aligned.version,implicit.distribution!.version+1);
     assert.deepEqual(new Set(Object.values(aligned.bases).map(url=>new URL(url).origin)),new Set([pooledOrigin]));
@@ -452,26 +457,31 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
       CREATE TRIGGER alias_test_collision BEFORE INSERT ON runtime_aliases
       FOR EACH ROW EXECUTE FUNCTION alias_test_collision();`);
     await panel.goto(installationPath);
+    const previousRevision = (await readDistribution(db, installation))!.version;
     const select=panel.getByLabel('Domínio do endpoint',{exact:true});
     await select.selectOption(pooledOrigin);
     await panel.getByText('Diagnóstico avançado e histórico de revisões', {exact:true}).click();
     await panel.getByRole('button',{name:'Publicar nova revisão',exact:true}).click();
     await panel.getByRole('button',{name:'Confirmar',exact:true}).click();
-    const snippet=panel.getByRole('region',{name:'Trecho HEAD'}).locator('code');
-    await snippet.filter({hasText:'/js/app.'}).waitFor();
+    const snippet=panel.getByRole('region',{name:'HEAD',exact:true}).locator('pre code');
+    await panel.getByText('Revisão ' + (previousRevision + 1), {exact: true}).waitFor();
     const pooled = await distributionAdmin(db,request,pooledEnv);
     assert.ok(pooled.distribution?.paths);
     assert.match(pooled.distribution.paths['runtime.js'],/^js\/app\.[0-9a-f]{20}\.js$/);
     assert.equal((await db.query('SELECT last_value::int AS attempts FROM alias_test_attempts')).rows[0].attempts,4);
     await db.query('DROP TRIGGER alias_test_collision ON runtime_aliases');
     assert.deepEqual(new Set(Object.values(pooled.distribution.bases).map(url=>new URL(url).origin)),new Set([pooledOrigin]));
-    const installedHtml=[await snippet.textContent(),await panel.getByRole('region',{name:'Trecho BODY'}).locator('code').textContent()].join('\n');
-    assert.equal(installedHtml,pooled.snippets?.html);
+    const installedHtml=[await snippet.textContent(),await panel.getByRole('region',{name:'BODY',exact:true}).locator('pre code').textContent()].join('\n');
+    assert.equal(installedHtml,pooled.manualInstallation?.slice(0,2).map(block=>block.code).join('\n'));
     const demo=process.env.TELEMETRY_DEMO_DIR;
     if (demo) {
       await mkdir(demo,{recursive:true});
       await writeFile(join(demo,'snippet-index.html.txt'),installedHtml);
-      await writeFile(join(demo,'snippet.css'),pooled.snippets!.css);
+      for (const block of pooled.manualInstallation!.filter(item=>item.operation==='create')) {
+        const path = join(demo,block.path);
+        await mkdir(join(path,'..'),{recursive:true});
+        await writeFile(path,block.code);
+      }
       await panel.screenshot({path:join(demo,'instalacao.png'),fullPage:true});
     }
     const pooledBundle = await upstream.request({url:pooled.distribution.bases.SCRIPT+pooled.distribution.paths!['runtime.js'],method:'GET',body:''});
@@ -481,7 +491,7 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
     const withoutDistribution = (body: Buffer) => body.toString().replace(/const distribution = .*;/,'const distribution = null;');
     assert.equal(abbreviatedBundle.status,200);
     assert.equal(withoutDistribution(pooledBundle.body),withoutDistribution(abbreviatedBundle.body));
-    assert.equal(installedHtml.match(/<script async /g)?.length,2);
+    assert.equal(installedHtml.match(/<script async="" src="js\//g)?.length,2);
     const namedBundle = await upstream.request({url:named.bases.SCRIPT+'app.js',method:'GET',body:''});
     assert.equal(namedBundle.status,200);
     assert.equal(withoutDistribution(pooledBundle.body),withoutDistribution(namedBundle.body));
@@ -576,7 +586,10 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
     const mailCopy='https://mail-copy.owner.test/';
     const copyHost=new URL(mailCopy).hostname;
     const previousHtml=html;
-    html=(await snippet.textContent())!;
+    html=installedHtml;
+    for(const block of pooled.manualInstallation!.filter(item=>item.operation==='create')){
+      localFiles.set('/'+block.path,{contentType:block.path.endsWith('.css')?'text/css':'application/javascript',body:block.code});
+    }
     const messages:string[]=[];
     const smtp=new SMTPServer({authOptional:true,disabledCommands:['STARTTLS','AUTH'],
       onData(stream,_session,done){
@@ -587,7 +600,13 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
     smtp.listen(0,'127.0.0.1');
     await once(smtp.server,'listening');
     try {
-      await mailPage.route(mailCopy,route=>route.fulfill({contentType:'text/html',body:'<a href="/checkout">Checkout</a>'+html}));
+      await mailPage.route(mailCopy+'**',route=>{
+        const asset=new URL(route.request().url()).pathname;
+        const file=localFiles.get(asset);
+        if(file)return route.fulfill(file);
+        if(asset!=='/')return route.fulfill({status:404});
+        return route.fulfill({contentType:'text/html',body:'<a href="/checkout">Checkout</a>'+html});
+      });
       await mailPage.route(pooledOrigin+'/**',async route=>{
         const req=route.request();
         const method=req.method();
@@ -623,6 +642,7 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
         originalNewIncidents:0,copyVisits:2,copyIncidents:1,acceptedEmails:1,delivery:delivery[0]},null,2)+'\n');
     }finally{
       html=previousHtml;
+      localFiles.clear();
       await mailPage.close();
       await new Promise<void>(resolve=>smtp.close(()=>resolve()));
     }
@@ -667,7 +687,7 @@ test('distribution: persistent v1/v2 and compact revisions, admin HTML/CSS, HTTP
     await scriptSelect.selectOption(pooledOrigin);
     await panel.getByRole('button',{name:'Publicar endereços de instalação',exact:true}).click();
     await panel.getByRole('button',{name:'Confirmar',exact:true}).click();
-    await panel.getByRole('region',{name:'Trecho BODY'}).locator('code').filter({hasText:staticOrigin}).waitFor();
+    await panel.getByRole('region',{name:'BODY',exact:true}).locator('pre code').filter({hasText:staticOrigin}).waitFor();
     const threeOrigins=(await readDistribution(db,installation))!;
     assert.equal(threeOrigins.version,rotatedSplit.version+1);
     assert.equal(new URL(threeOrigins.bases.SCRIPT).origin,pooledOrigin);

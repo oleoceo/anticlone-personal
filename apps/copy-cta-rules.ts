@@ -14,7 +14,7 @@ const uniform = (percent:number):Allocation => ({
 });
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 type Point = {marker:string; surface:string; native_url:string|null; native_digest:string;
-  kind?:'link'|'button'|'whatsapp'; evidence?:'marker'|'inline'|'attribute'|'destination'; compatible?:boolean};
+  kind?:'link'|'button'|'whatsapp'; evidence?:'marker'|'inline'|'attribute'|'destination'; compatible?:boolean; ordinal?:number};
 const publicPath = /^\/(?:checkout|check-out|comprar|compra|buy|purchase|order|oferta|offer|promo|payment|pagamento)(?:-(?:basico|completo|teste|basic|complete|standard|premium|discount|exit|popup|js|trial)){0,4}(?:\.html)?\/?$/i;
 type Rule = Point & {version:number; current:boolean; enabled:boolean; destination:string; percent:number; allocation:Allocation|null; display_name:string|null;discovery_required:boolean; activation_kind:'a'|'button'};
 type Scope = {project:string;page:string;origin:string;pathname:string};
@@ -29,11 +29,13 @@ export function validateCopyCtaInventory(input:unknown): Point[] {
   return input.map(point=>{
     if (!point || typeof point!=='object') throw new TypeError('invalid CTA');
     const keys=Object.keys(point).sort().join(',');
-    const modern=keys==='compatible,evidence,kind,marker,native_digest,native_url,surface';
+    const ordered=keys==='compatible,evidence,kind,marker,native_digest,native_url,ordinal,surface';
+    const modern=ordered || keys==='compatible,evidence,kind,marker,native_digest,native_url,surface';
     if ((!modern && keys!=='marker,native_digest,native_url,surface') ||
         typeof point.marker!=='string' || !markerPattern.test(point.marker) ||
         typeof point.surface!=='string' || !surfacePattern.test(point.surface) ||
         typeof point.native_digest!=='string' || !/^[a-f0-9]{64}$/.test(point.native_digest) ||
+        (ordered && (!Number.isInteger(point.ordinal) || point.ordinal<1 || point.ordinal>1000)) ||
         (modern && (!['link','button','whatsapp'].includes(point.kind) ||
           !['marker','inline','attribute','destination'].includes(point.evidence) || typeof point.compatible!=='boolean'))) {
       throw new TypeError('invalid CTA');
@@ -53,7 +55,8 @@ export function validateCopyCtaInventory(input:unknown): Point[] {
       native_url=url.href;
     }
     return {marker:point.marker,surface:point.surface,native_url,native_digest:point.native_digest,
-      ...(modern ? {kind:point.kind,evidence:point.evidence,compatible:point.compatible} : {})};
+      ...(modern ? {kind:point.kind,evidence:point.evidence,compatible:point.compatible} : {}),
+      ...(ordered ? {ordinal:point.ordinal} : {})};
   });
 }
 

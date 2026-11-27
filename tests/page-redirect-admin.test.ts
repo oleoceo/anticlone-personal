@@ -168,7 +168,7 @@ test('scoped redirect activation, revision and deactivation preserve the other L
     assert.deepEqual(probes.at(-1),[telemetry,5,true]);
     await db.query(`INSERT INTO page_copy_contexts(project_id,page_id,copy_origin,copy_pathname)
       VALUES($1,$2,'https://new-copy.test','/')`,[project,second]);
-    const point={marker:'checkout01',surface:'landing',native_url:'https://new-copy.test/',native_digest:'a'.repeat(64)};
+    const point={marker:'auto-0123456789abcdef',surface:'',native_url:'https://new-copy.test/checkout.html',native_digest:'a'.repeat(64),kind:'link' as const,evidence:'destination' as const,compatible:true};
     const inventoryClient=await db.connect();
     try {
       await rememberCopyCtas(inventoryClient,{project,page:second,origin:'https://new-copy.test',pathname:'/'},[point]);
@@ -192,6 +192,16 @@ test('scoped redirect activation, revision and deactivation preserve the other L
     assert.ok('ctaRules' in savedCta && savedCta.ctaRules);
     assert.equal(savedCta.ctaRules[0]?.enabled,true);
     assert.equal(savedCta.ctaRules[0]?.destination,overrideDestination);
+    const originalRevision = savedCta.ctaRules[0].version;
+    await run({...ctaConfirmation,revision:originalRevision,destination:defaultDestination});
+    const edited = await run({page:second,action:'inspect-cta',copyUrl:ctaConfirmation.copyUrl});
+    assert.ok('ctaRules' in edited && edited.ctaRules);
+    assert.equal(edited.ctaRules[0]?.destination,defaultDestination);
+    await run({action:'disable-cta',page:second,copyUrl:ctaConfirmation.copyUrl,
+      revision:edited.ctaRules[0].version,marker:point.marker,surface:point.surface});
+    const disabled = await run({page:second,action:'inspect-cta',copyUrl:ctaConfirmation.copyUrl});
+    assert.ok('ctaRules' in disabled && disabled.ctaRules);
+    assert.equal(disabled.ctaRules[0]?.enabled,false);
     assert.equal((await copyRedirectAdmission(db,secondInstallation,'https://new-copy.test','/'))?.admitted,true);
     Object.assign(env,{RUNTIME_TELEMETRY_POOL_ORIGINS:''});
     assert.equal((await inspect(second)).issue,'TELEMETRY_NOT_AUTHORIZED');

@@ -5,7 +5,8 @@ import {Failure, Heading, useQuery} from './ui';
 
 type Fields = {name: string; origin: string; pageName: string; url: string};
 export const emptyFields: Fields = {name: '', origin: '', pageName: '', url: ''};
-type PendingProject = {phase: 'project-write'; intent: string; digest: string};
+type ProjectDraft = Pick<Fields, 'name' | 'origin'>;
+type PendingProject = {phase: 'project-write'; intent: string; digest: string; draft?: ProjectDraft};
 type Checkpoint =
   | PendingProject
   | {phase: 'project-ready'; project: string}
@@ -57,15 +58,17 @@ export function OfferForm({api, project, fields, setFields, setGuard, finish}: {
   const navigation = useContextNavigation();
   const key = checkpointPrefix + (project?.id ? 'lp:' + project.id : 'new');
   const [checkpoint, setCheckpoint] = useState(() => readCheckpoint(key));
-  const [step, setStep] = useState(project || checkpoint?.phase === 'project-ready' ? 1 : 0);
+  const [step, setStep] = useState(project || (checkpoint && 'project' in checkpoint) ? 1 : 0);
   const [busy, setBusy] = useState(false);
   const inFlight = useRef(false);
   const [canEdit, setCanEdit] = useState(false);
   const [retryProject, setRetryProject] = useState(false);
+  const [canStartOver, setCanStartOver] = useState(false);
   const [recoveredProject, setRecoveredProject] = useState<Project>();
   const [error, setError] = useState<unknown>();
   const [message, setMessage] = useState('');
   const [acknowledged, setAcknowledged] = useState(false);
+  const [discardPrevious, setDiscardPrevious] = useState(false);
   const [existingPage, setExistingPage] = useState<{project: string; id: string; name: string}>();
   const savedProject = project?.id ?? (checkpoint && 'project' in checkpoint ? checkpoint.project : undefined);
   const target = useQuery(!project && savedProject ? savedProject : '', async signal =>
@@ -88,6 +91,7 @@ export function OfferForm({api, project, fields, setFields, setGuard, finish}: {
     setFields(updated);
     setGuard(Object.values(updated).some(Boolean) ? 'dirty' : 'clean');
     setAcknowledged(false);
+    setDiscardPrevious(false);
     setExistingPage(undefined);
     setMessage('');
     setError(undefined);
@@ -99,6 +103,7 @@ export function OfferForm({api, project, fields, setFields, setGuard, finish}: {
     setExistingPage(undefined);
     setRecoveredProject(undefined);
     setRetryProject(false);
+    setCanStartOver(false);
     setCanEdit(false);
     setBusy(true);
     setGuard('saving');
@@ -121,24 +126,28 @@ export function OfferForm({api, project, fields, setFields, setGuard, finish}: {
   }
 
   async function createProject(pending?: PendingProject) {
-    const name = fields.name.trim();
-    const origin = normalizedUrl(fields.origin, true);
+    const draft = pending?.draft ?? {name: fields.name.trim(), origin: normalizedUrl(fields.origin, true)};
+    const {name, origin} = draft;
     const digest = await identity(name, origin);
     if (pending && digest !== pending.digest) {
       setRetryProject(true);
-      setMessage('Informe o mesmo nome e a mesma origem do primeiro envio.');
+      setCanStartOver(true);
+      setMessage('Esses dados são diferentes dos dados enviados. Use os dados originais ou inicie outro cadastro.');
       return;
     }
 
-    const operation: PendingProject = pending ?? {phase: 'project-write', intent: crypto.randomUUID(), digest};
+    const operation: PendingProject = pending
+      ? {...pending, draft}
+      : {phase: 'project-write', intent: crypto.randomUUID(), digest, draft};
     saveCheckpoint(operation);
     let created: Project;
     try {
       created = await api.createProject(name, origin, operation.intent);
     } catch (problem) {
-      if (!pending && problem instanceof AdminError && [400, 413].includes(problem.status)) saveCheckpoint(null);
+      if (!pending && problem instanceof AdminError && [400, 401, 403, 404, 409, 413].includes(problem.status)) saveCheckpoint(checkpoint);
       throw problem;
     }
+    if (created?.id !== operation.intent) throw new Error('Resposta de cadastro sem confirmação da oferta');
     saveCheckpoint({phase: 'project-ready', project: created.id});
     return created.id;
   }
@@ -146,7 +155,14 @@ export function OfferForm({api, project, fields, setFields, setGuard, finish}: {
   async function submit() {
     const pageName = fields.pageName.trim();
     const url = normalizedUrl(fields.url, false);
-    const projectId = savedProject ?? await createProject();
+    const previous = checkpoint?.phase === 'project-write' && checkpoint.intent ? checkpoint : undefined;
+    const sameRegistration = previous &&
+      await identity(fields.name.trim(), normalizedUrl(fields.origin, true)) === previous.digest;
+    if (checkpoint?.phase === 'project-write' && !sameRegistration && !discardPrevious) {
+      setMessage('Confirme que deseja iniciar outra oferta ou retome o cadastro anterior.');
+      return;
+    }
+    const projectId = savedProject ?? await createProject(sameRegistration ? previous : undefined);
     if (!projectId) return;
 
     saveCheckpoint({phase: 'page-write', project: projectId, digest: await identity(pageName, url)});
@@ -170,6 +186,7 @@ export function OfferForm({api, project, fields, setFields, setGuard, finish}: {
   async function reconcile(pending: Exclude<Checkpoint, {phase: 'project-ready'}>) {
     if (pending.phase === 'project-write') {
       if (!pending.intent) {
+        setCanStartOver(true);
         setMessage('Esta tentativa é anterior à identificação do cadastro. Confira Meus Projetos.');
         return;
       }
@@ -177,8 +194,10 @@ export function OfferForm({api, project, fields, setFields, setGuard, finish}: {
       const original = history.registration.at(-1);
       if (!original) {
         setRetryProject(true);
+        setCanStartOver(true);
         setMessage('O cadastro ainda não aparece no histórico. Você pode reenviar a mesma tentativa.');
       } else if (await identity(original.name, original.origin) !== pending.digest) {
+        setCanStartOver(true);
         setMessage('A identificação desta tentativa pertence a outro cadastro. Confira Meus Projetos.');
       } else {
         const projects = await api.request<Project[]>('projects');
@@ -187,6 +206,7 @@ export function OfferForm({api, project, fields, setFields, setGuard, finish}: {
           setRecoveredProject(candidate);
           setMessage('Oferta localizada. Confira a identificação antes de vincular a página.');
         } else {
+          setCanStartOver(true);
           setMessage('O cadastro aparece no histórico, mas a oferta está indisponível.');
         }
       }
@@ -209,7 +229,7 @@ export function OfferForm({api, project, fields, setFields, setGuard, finish}: {
 
   function advance(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (busy || uncertain) return;
+    if (busy) return;
     if (step === 2) {
       if (acknowledged) void run(submit);
       return;
@@ -248,9 +268,9 @@ export function OfferForm({api, project, fields, setFields, setGuard, finish}: {
       {savedProject && !project && <p className="notice">Oferta cadastrada. Continue com a primeira página.</p>}
       {message && <p className="notice" role="status">{message}</p>}
       {error !== undefined && <Failure error={error}/>}
-      {uncertain ? <>
-        <h2>Conferir cadastro</h2>
-        <p>O servidor pode ter gravado o cadastro. Consulte o resultado antes de enviar novamente.</p>
+      {uncertain && <details>
+        <summary>Retomar cadastro anterior</summary>
+        <p>Consulte o resultado do envio anterior para continuar aquele cadastro.</p>
         <button className="primary" type="button" disabled={busy}
           onClick={() => void run(() => reconcile(checkpoint))}>{busy ? 'Consultando…' : 'Consultar cadastro'}</button>
         {retryProject && checkpoint.phase === 'project-write' && <form onSubmit={event => {
@@ -262,9 +282,25 @@ export function OfferForm({api, project, fields, setFields, setGuard, finish}: {
             }
           });
         }}>
-          {projectFields}
+          {checkpoint.draft ? <dl className="review">
+            <dt>Oferta enviada</dt><dd>{checkpoint.draft.name}</dd>
+            <dt>Origem enviada</dt><dd>{checkpoint.draft.origin}</dd>
+          </dl> : <p>Para reenviar esta tentativa, preencha o nome e a origem originais no formulário abaixo.</p>}
           <div className="actions"><button type="submit" disabled={busy}>Reenviar cadastro da oferta</button></div>
         </form>}
+        {canStartOver && <details>
+          <summary>Iniciar outro cadastro</summary>
+          <p>Confira Meus Projetos antes de continuar. Se o primeiro envio ainda for concluído, a oferta anterior poderá aparecer na lista.</p>
+          <button type="button" onClick={() => {
+            saveCheckpoint(null);
+            setStep(0);
+            setAcknowledged(false);
+            setCanStartOver(false);
+            setRetryProject(false);
+            setMessage('');
+            setError(undefined);
+          }}>Começar novo cadastro</button>
+        </details>}
         {recoveredProject && <div className="notice">
           <strong>{recoveredProject.name}</strong>
           <p className="identifier">{recoveredProject.id}</p>
@@ -283,7 +319,8 @@ export function OfferForm({api, project, fields, setFields, setGuard, finish}: {
           setCanEdit(false);
           setMessage('');
         }}>Revisar dados do cadastro</button>}
-      </> : <form onSubmit={advance}>
+      </details>}
+      <form onSubmit={advance}>
         <h2>{['Identificar oferta', 'Informar página', 'Confira antes de cadastrar'][step]}</h2>
         {step === 0 && projectFields}
         {step === 1 && <>
@@ -301,6 +338,10 @@ export function OfferForm({api, project, fields, setFields, setGuard, finish}: {
           </dl>
           <p className="notice">{savedProject ? 'A página será vinculada à oferta.' : 'O servidor cadastra primeiro a oferta e depois a página.'}
             {' '}Você publica os endereços de instalação em uma etapa separada.</p>
+          {checkpoint?.phase === 'project-write' && <label className="check">
+            <input type="checkbox" checked={discardPrevious} onChange={event => setDiscardPrevious(event.target.checked)}/>
+            Se os dados forem diferentes, iniciar outra oferta e deixar de acompanhar o envio anterior nesta aba.
+          </label>}
           <label className="check"><input type="checkbox" checked={acknowledged}
             onChange={event => setAcknowledged(event.target.checked)}/>Conferi os dados da oferta e da página.</label>
         </>}
@@ -312,7 +353,7 @@ export function OfferForm({api, project, fields, setFields, setGuard, finish}: {
             {busy ? 'Cadastrando…' : step < 2 ? 'Continuar' : savedProject ? 'Cadastrar página' : 'Cadastrar oferta e página'}
           </button>
         </div>
-      </form>}
+      </form>
       {existingPage && <p><button type="button" onClick={() => completed(existingPage.project, existingPage.id)}>
         Abrir instalação de {existingPage.name}
       </button></p>}

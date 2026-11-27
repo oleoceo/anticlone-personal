@@ -1,5 +1,29 @@
 # STATUS — AntiClone Personal
 
+## Inventário de CTA na LP oficial — PR #102
+
+- O Core envia candidatos convencionais em HTTPS. O Admin exibe os sinais da URL oficial, incluindo elementos com destino indisponível.
+- A substituição continua vinculada à observação e à aprovação explícita por cópia. O inventário oficial é informativo.
+- Migração 081 aditiva e grants limitados à nova tabela. A credencial de bootstrap do banco DEV foi recusada e a aplicação requer o titular da migração.
+- A homologação pública da FlowMembers requer acesso ao navegador da sessão Admin DEV autenticada. O backup público permanece preservado.
+
+## F03/F08 — contrato de instalação manual DEV
+
+- O painel lista HEAD, BODY e três arquivos locais com caminho, conteúdo completo e cópia individual.
+- Os aliases publicados continuam servindo Bootstrap, Core, Fallback e os dois canários. O CSS afeta apenas a imagem de observação.
+- A jornada React com Chromium e gateway HTTPS de teste usou os blocos do painel e recebeu os cinco recursos.
+- Revisão independente em `/root/review` sobre a base `9aaef71`. O teste de rotação aguarda explicitamente a nova revisão.
+- FlowMembers tem cópia integral dos arquivos públicos e linha de base em Chromium. Reinstalação e aceite externo estão pendentes.
+- Inventário remoto e associação de CTA sem marcações permanecem pendentes. Consulte [o contrato e a auditoria](docs/INSTALACAO-MANUAL-DEV.md).
+
+## Recuperação do cadastro de ofertas — F40
+
+- Tentativa com resposta incerta recupera os dados enviados na mesma aba e reusa a chave do cadastro.
+- O formulário abre normalmente com uma tentativa anterior na aba. A consulta fica em uma seção opcional e os dados diferentes iniciam outro cadastro após a confirmação.
+- Uma primeira solicitação recusada pela API libera o formulário para correção ou reenvio.
+- Cobertura Chromium/PostgreSQL em `admin-frontend.test.ts`, incluindo resposta interrompida, tentativa antiga, HTTP 403 e preservação da unicidade.
+- Revisão independente `/root/review` sem achados no delta funcional `491ee46c`. Homologação com páginas e SMTP controlados.
+
 ## Segurança e estabilização do Dev
 - PR #97 mantém aceite FlowMembers, aliases, fail-open e 150 ms. 078–080 e perfis explícitos de banco para serviços e manutenção.
 - S2, S6 e S7 operacionais dependem da evidência de leoceo e aprovação de corte e rotação. S4 corrigirá recibo na próxima publicação.
