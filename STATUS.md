@@ -1,5 +1,12 @@
 # STATUS — AntiClone Personal
 
+## Inventário de CTA na LP oficial — PR #102
+
+- O Core envia candidatos convencionais em HTTPS. O Admin exibe os sinais da URL oficial, incluindo elementos com destino indisponível.
+- A substituição continua vinculada à observação e à aprovação explícita por cópia. O inventário oficial é informativo.
+- Migração 081 aditiva e grants limitados à nova tabela. A credencial de bootstrap do banco DEV foi recusada e a aplicação requer o titular da migração.
+- A homologação pública da FlowMembers requer acesso ao navegador da sessão Admin DEV autenticada. O backup público permanece preservado.
+
 ## F03/F08 — contrato de instalação manual DEV
 
 - O painel lista HEAD, BODY e três arquivos locais com caminho, conteúdo completo e cópia individual.

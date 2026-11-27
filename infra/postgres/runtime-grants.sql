@@ -142,3 +142,13 @@ GRANT UPDATE (approved_terms,observed_terms) ON cta_commercial_alert_evidence TO
 GRANT UPDATE (commercial_terms) ON cta_commercial_audit TO anticlone_admin;
 GRANT INSERT ON cta_alert_deliveries TO anticlone_admin;
 GRANT UPDATE (id) ON commerce_connections TO anticlone_gateway;
+
+DO $$
+BEGIN
+  IF to_regclass('official_cta_inventory') IS NOT NULL THEN
+    GRANT SELECT, INSERT ON official_cta_inventory TO anticlone_gateway;
+    GRANT UPDATE (points, observed_at) ON official_cta_inventory TO anticlone_gateway;
+    GRANT SELECT ON official_cta_inventory TO anticlone_admin;
+  END IF;
+END
+$$;

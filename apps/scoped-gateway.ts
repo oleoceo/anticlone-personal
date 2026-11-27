@@ -1,3 +1,4 @@
+import {rememberOfficialCtas} from './official-cta-inventory.js';
 import {copyCtaDecision, hasApprovedCopyCta, ctaPointKey, rememberCopyCtas, validateCopyCtaInventory} from './copy-cta-rules.js';
 import {validCopyPath,recordCopyDecision,redirectVisit,rememberCopyContext} from './page-copy-contexts.js';
 import { copyRedirectAdmission } from './page-redirect-rules.js';
@@ -186,10 +187,11 @@ export function scopedGateway(db: Pool, scripts: Record<string, Buffer>, collect
           if (!await operationallyEligible(client,context.project,context.page,true)) { res.writeHead(204).end(); return; }
           const authorized=context.urls.some(value => value.origin===origin && value.pathname===url.pathname);
           if (points) {
-            if (!authorized && origin.startsWith('https:') && validCopyPath(url.pathname)) {
+            if (origin.startsWith('https:') && validCopyPath(url.pathname)) {
               const scope={...context,origin,pathname:url.pathname};
               await client.query("SET LOCAL statement_timeout='200ms'");
-              await rememberCopyCtas(client,scope,points,incrementalInventory);
+              if (authorized) await rememberOfficialCtas(client,scope,points);
+              else await rememberCopyCtas(client,scope,points,incrementalInventory);
               await client.query('COMMIT');
             }
             res.writeHead(204).end();

@@ -1,3 +1,4 @@
+import {inspectOfficialCtas} from './official-cta-inventory.js';
 import {copyCtaAdmin,listCtaRuleCopies} from './copy-cta-rules.js';
 import {copyContextsInstalled} from './page-copy-contexts.js';
 import { normalizeHttpsAddress } from './https-address.js';
@@ -115,6 +116,8 @@ export async function pageRedirectAdmin(db: Pool, input: unknown, env=process.en
     const catalog=await db.query("SELECT to_regclass('project_redirect_destinations') IS NOT NULL AS ready");
     return {available:catalog.rows[0].ready as boolean,projectDefault:catalog.rows[0].ready ? await projectDestination(db,project) : null};
   }
+  if (action==='inspect-official-ctas' && Object.keys(data).sort().join(',')==='action,page,project'
+      && typeof page==='string' && /^[a-f0-9-]{36}$/i.test(page)) return inspectOfficialCtas(db,project,page);
   const gatewayOrigin=env.ADMIN_OPERATIONAL_GATEWAY_ORIGIN;
   const scopedCopy=['inspect','inspect-cta','confirm-cta','confirm-copy'].includes(String(action));
   if (scopedCopy && (typeof page!=='string' || !/^[a-f0-9-]{36}$/i.test(page))) throw new TypeError('invalid page scope');

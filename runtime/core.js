@@ -44,7 +44,7 @@
             if (seen.has(key)) continue;
             seen.add(key);
             const compatible = unique && !!point.compatible && (upgraded || evidence==='marker' && point.kind!=='button');
-            points.push({marker,surface,href:unique ? href : undefined,native_url:unique ? native_url : null,kind,evidence,compatible});
+            points.push({marker,surface,href:unique ? href : undefined,native_url:unique ? native_url : null,kind,evidence,compatible,ordinal:points.length+1});
             counts.set(surface+':'+marker,1);
           }
         }
@@ -68,9 +68,9 @@
           if (counts.get(point.surface + ':' + point.marker) !== 1 || inventory.ctas.length >= 50) continue;
           const hash = await crypto.subtle.digest('SHA-256',new TextEncoder().encode(point.href ?? ''));
           const native_digest = Array.from(new Uint8Array(hash),byte=>byte.toString(16).padStart(2,'0')).join('');
-          const {kind,evidence,compatible,native_url}=point;
+          const {kind,evidence,compatible,native_url,ordinal}=point;
           inventory.ctas.push({marker:point.marker,surface:point.surface,native_url:modern ? native_url : point.origin+'/',native_digest,
-            ...(modern ? {kind,evidence,compatible} : {})});
+            ...(modern ? {kind,evidence,compatible,ordinal} : {})});
 
         }
         const snapshot = JSON.stringify(inventory);

@@ -7,7 +7,7 @@ import {emptyAllocation, formData, formatDate, InputError, trafficLabels, type A
 import type {RedirectStatus} from './page-redirect-controls';
 import {Failure, Loading, useQuery} from './ui';
 
-type Point = {marker:string;surface:string;native_url:string|null;native_digest:string;kind?:string;evidence?:string;compatible?:boolean};
+type Point = {marker:string;surface:string;native_url:string|null;native_digest:string;kind?:string;evidence?:string;compatible?:boolean;ordinal?:number};
 type Rule = Point & {version:number;current:boolean;enabled:boolean;destination:string;percent:number;allocation?:Allocation|null;display_name?:string|null;execution_observed_at?:string|null};
 type Inventory = {available:boolean;ctaGateway:RedirectStatus['gateway'];points:Point[];ctaRules:Rule[]};
 const pointKey = (point:Point) => point.surface+':'+point.marker;
@@ -85,7 +85,8 @@ function CtaCard(props:CardProps) {
   return <details ref={details} className="panel">
     <summary aria-label={name}>
       <strong>{name}</strong> · {kind} · {status}
-      <div>URL nativa · {point.native_url ?? 'Indisponível'}</div>
+      {point.ordinal && <div>Posição entre os candidatos · {point.ordinal}</div>}
+      <div>URL observada (reduzida) · {point.native_url ?? 'Destino dinâmico ou indisponível'}</div>
       <div>Destino substituto · {rule?.destination ?? 'Sem destino'}</div>
       <div>{allocationSummary(rule ? allocation : emptyAllocation)}</div>
       {rule?.execution_observed_at && <div>Execução observada no runtime · {formatDate(rule.execution_observed_at)}</div>}
@@ -133,7 +134,7 @@ function CtaRuleForm({api,state,scope,point,rule,observed,operation,pending,gate
       } catch(error) { operation.setError(error); }
     }}>
       <label>Nome de identificação<input value={displayName} onChange={event=>setDisplayName(event.target.value)} maxLength={80} required/></label>
-      <label>URL nativa observada<input value={point.native_url ?? 'Indisponível'} readOnly/></label>
+      <label>URL observada (reduzida)<input value={point.native_url ?? 'Destino dinâmico ou indisponível'} readOnly/></label>
       <label>Novo destino do CTA<input value={destination} onChange={event=>setDestination(event.target.value)}
         type="text" inputMode="url" maxLength={2048} required/></label>
       <fieldset>

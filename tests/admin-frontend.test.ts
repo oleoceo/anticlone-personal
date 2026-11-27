@@ -1221,7 +1221,9 @@ test('React provisions an original LP and copy, then real gateway applies scoped
           <h1>${host === 'original.integration.test' ? 'LP original' : 'Cópia controlada'}</h1>
           <a data-anticlone-point="checkout01" href="/checkout-nativo">Comprar</a>
           <a data-anticlone-point="contato01" href="/contato-nativo">Contato</a>
-        </main>${bodyCode}</body>` : '<h1>Destino controlado</h1>';
+        </main>
+        <a id="offer-standard" href="/checkout-basic.html">Checkout padrão</a>
+        <button id="checkout-dynamic" type="button">Comprar na oferta dinâmica</button>${bodyCode}</body>` : '<h1>Destino controlado</h1>';
       res.writeHead(200, {'content-type': 'text/html; charset=utf-8'}).end(body);
     }).listen(0, '127.0.0.1');
     await once(tls, 'listening');
@@ -1326,6 +1328,17 @@ test('React provisions an original LP and copy, then real gateway applies scoped
     await visit.goto(original + '/lp');
     await Promise.all(responses);
     await visit.getByRole('heading', {name: 'LP original'}).waitFor();
+    await until(async () => (await lab.db.query("SELECT points FROM official_cta_inventory WHERE page_id=$1",[ids.page]))
+      .rows.some(row => row.points.some((point: {marker: string}) => point.marker.startsWith('auto-'))), 'inventário oficial sem marcações');
+    const inventoryPanel = await context.newPage();
+    await inventoryPanel.goto(installation);
+    await inventoryPanel.getByRole('link', {name: 'Conversões e CTAs', exact: true}).click();
+    const officialInventory = inventoryPanel.getByRole('region', {name: 'CTAs identificados na LP oficial'});
+    await officialInventory.getByText(original + '/checkout-basic.html', {exact: true}).waitFor();
+    await officialInventory.getByText('Destino dinâmico ou indisponível', {exact: true}).waitFor();
+    await inventoryPanel.close();
+    await visit.getByRole('link', {name: 'Checkout padrão'}).click();
+    await visit.waitForURL(original + '/checkout-basic.html');
     await until(async () => (await lab.db.query('SELECT count(*)::int n FROM page_installation_signals')).rows[0].n >= 2,
       'Core e Fallback da LP original');
     assert.equal((await lab.db.query('SELECT count(*)::int n FROM incidents')).rows[0].n, 0);
