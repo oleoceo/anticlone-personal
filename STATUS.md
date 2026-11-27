@@ -3,10 +3,10 @@
 ## Recuperação do cadastro de ofertas — F40
 
 - Tentativa com resposta incerta recupera os dados enviados na mesma aba e reusa a chave do cadastro.
-- Após consultar o histórico, uma tentativa antiga sem dados recuperáveis permite iniciar outro cadastro com confirmação.
+- O formulário abre normalmente com uma tentativa anterior na aba. A consulta fica em uma seção opcional e os dados diferentes iniciam outro cadastro após a confirmação.
 - Uma primeira solicitação recusada pela API libera o formulário para correção ou reenvio.
 - Cobertura Chromium/PostgreSQL em `admin-frontend.test.ts`, incluindo resposta interrompida, tentativa antiga, HTTP 403 e preservação da unicidade.
-- Revisão independente `/root/review` sem achados no delta funcional `1e163054`. Homologação com páginas e SMTP controlados.
+- Revisão independente `/root/review` sem achados no delta funcional `491ee46c`. Homologação com páginas e SMTP controlados.
 
 ## Segurança e estabilização do Dev
 - PR #97 mantém aceite FlowMembers, aliases, fail-open e 150 ms. 078–080 e perfis explícitos de banco para serviços e manutenção.
