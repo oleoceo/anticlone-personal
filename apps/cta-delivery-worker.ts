@@ -20,6 +20,7 @@ const port = Number(process.env.CTA_SMTP_LAB_PORT);
 if (!providerMode&&(!Number.isInteger(port) || port < 1 || port > 65535)) throw Error('invalid local SMTP port');
 if(process.env.PROJECT_ID&&!/^[a-zA-Z0-9_-]{1,64}$/.test(process.env.PROJECT_ID))throw Error('invalid worker project');
 const db = new Pool({connectionString:process.env.DATABASE_URL,max:5,connectionTimeoutMillis:2000,statement_timeout:3000,query_timeout:4000});
+db.on('error', () => process.stderr.write('notification worker database connection failed\n'));
 if(providerMode){try{await db.query('SELECT alert_id FROM cta_delivery_attempts LIMIT 0');await db.query('SELECT episode_id FROM health_delivery_attempts LIMIT 0');}catch{await db.end();throw Error('notification schema 057 required');}}
 const stop = new AbortController();
 const monitor=providerMode&&process.env.MONITOR_LOCAL_GATEWAY==='1'?localGatewayMonitor(db,process.env,Date.now,stop.signal):undefined;

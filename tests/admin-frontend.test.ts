@@ -1123,9 +1123,9 @@ for (const width of [1440, 390]) {
 
 test('React provisions an original LP and copy, then real gateway applies scoped redirect and independent CTAs',
   {timeout: 90_000}, async t => {
-    let stopGateway: (() => Promise<void>) | undefined;
+    const shutdown: {gateway?: () => Promise<void>} = {};
     // Stop the writer before the fixture drops its database schema.
-    t.after(() => stopGateway?.());
+    t.after(() => shutdown.gateway?.());
     const lab = await fixture(t, ['--no-proxy-server', '--host-resolver-rules=MAP *.integration.test 127.0.0.1']);
     const directory = await mkdtemp(join(tmpdir(), 'anticlone-react-dev-'));
     t.after(() => rm(directory, {recursive: true, force: true}));
@@ -1189,7 +1189,7 @@ test('React provisions an original LP and copy, then real gateway applies scoped
     let gatewayOutput = '';
     gateway.stderr.on('data', chunk => { gatewayOutput += String(chunk); });
     const closed = once(gateway, 'exit');
-    stopGateway = async () => { gateway.kill(); await closed; };
+    shutdown.gateway = async () => { gateway.kill(); await closed; };
     async function until(check: () => Promise<boolean>, label: string) {
       for (let attempt = 0; attempt < 80; attempt++) {
         if (await check()) return;

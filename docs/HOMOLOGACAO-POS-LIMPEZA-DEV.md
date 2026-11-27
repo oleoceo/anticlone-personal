@@ -14,6 +14,8 @@ O Admin DEV estava configurado para usar `http://127.0.0.1:13002` como padrão d
 
 A falha genérica relatada no primeiro cadastro não reapareceu nas provas de cadastro. A transação no banco ativo não passou por uma sessão do proprietário no navegador. Nenhum dado de homologação precisou ser excluído por SQL direto. A funcionalidade de expurgo físico continua bloqueada pelo contrato existente.
 
+O primeiro reinício do PostgreSQL expôs uma falha do worker. O pool emitiu um erro de conexão ociosa sem tratamento e o systemd teve de recuperar o processo. O Admin e o worker agora tratam o evento com mensagem sanitizada, seguindo o padrão do Gateway. A regressão encerra apenas conexões de teste identificadas, verifica a sessão autenticada do Admin e exige conexão PostgreSQL recém-aberta no mesmo processo do worker.
+
 ## Regressão funcional
 
 Os cenários focais de `admin-frontend`, `admin-totp`, `page-redirect-journey`, `operational-journey` e `provider-notifications` passaram 20 de 20 em Chromium, PostgreSQL e SMTP controlados. Eles cobrem sessão, MFA persistente, perda de resposta, cadastros válidos e inválidos, publicação, instalação, original e cópia sob controle de teste, regras por cópia, CTAs independentes, fail-open, incidentes, métricas, retry de notificações e recuperação do Gateway e do worker.

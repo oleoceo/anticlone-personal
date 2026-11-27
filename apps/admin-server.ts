@@ -6,6 +6,7 @@ const record = process.env.ADMIN_PASSWORD_RECORD, secret = process.env.ADMIN_TOT
 const port = Number(process.env.ADMIN_PORT ?? 3001);
 if (!record || !secret || !database || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('invalid laboratory admin configuration');
 const db = new Pool({ connectionString: database });
+db.on('error', () => process.stderr.write('admin database connection failed\n'));
 await db.query('SELECT factor_id, last_counter FROM admin_totp_replay LIMIT 0');
 await db.query('SELECT factor_id, digest, valid_until FROM admin_totp_codes LIMIT 0');
 const server = createAdminServer(record, secret, db);

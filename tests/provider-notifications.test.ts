@@ -54,7 +54,25 @@ test('CTA/health provider TLS + independent worker + audited backlog in Chromium
   const launch=(file:string,extra:Record<string,string>={})=>{const child=spawn(process.execPath,['dist/apps/'+file],{env:{...env,...extra},stdio:['ignore','ignore','pipe']});child.stderr!.on('data',chunk=>logs+=String(chunk));return child;};
   const startGateway=async()=>{gateway=launch('server.js');await until(async()=>{try{return(await fetch('http://127.0.0.1:'+port+'/healthz')).ok;}catch{return false;}},'real gateway ready');};
   let workerRole:Awaited<ReturnType<typeof notificationWorkerRole>>|undefined;
-  const startWorker=()=>worker=launch('cta-delivery-worker.js',{DATABASE_URL:workerRole!.url,NOTIFICATION_WORKER_MODE:'PROVIDER',MONITOR_LOCAL_GATEWAY:'1',MONITOR_GATEWAY_PORT:String(port)});
+  const workerApp=schema+'_worker',adminApp=schema+'_admin';
+  function namedDatabase(database: string, application: string) {
+    const url=new URL(database);
+    url.searchParams.set('application_name',application);
+    return url.href;
+  }
+  const startWorker=()=>worker=launch('cta-delivery-worker.js',{DATABASE_URL:namedDatabase(workerRole!.url,workerApp),NOTIFICATION_WORKER_MODE:'PROVIDER',MONITOR_LOCAL_GATEWAY:'1',MONITOR_GATEWAY_PORT:String(port)});
+  async function interruptIdleConnection(application: string, message: string) {
+    const previous=logs.length;
+    const terminated=new Set<number>();
+    await until(async()=>{
+      if(logs.slice(previous).includes(message))return true;
+      const {rows}=await root.query<{pid:number;terminated:boolean}>(`SELECT pid,pg_terminate_backend(pid) AS terminated
+        FROM pg_stat_activity WHERE datname=current_database() AND application_name=$1 AND state='idle'`,[application]);
+      for(const row of rows)if(row.terminated)terminated.add(row.pid);
+      return logs.slice(previous).includes(message);
+    },message);
+    return [...terminated];
+  }
   const inventory=(first:string,second:string)=>importInventory(db,'one',{surface:'main',candidates:[{marker:'checkout01',kind:'a',parent:'div',ordinal:1,url:original+first},{marker:'checkout02',kind:'a',parent:'div',ordinal:2,url:original+second}]});
   try{
     for(const file of (await readdir('infra')).filter(f=>/^\d{3}_.*\.sql$/.test(f)).sort())await db.query((await readFile('infra/'+file,'utf8')).replace(/^\uFEFF/,''));
@@ -89,7 +107,7 @@ test('CTA/health provider TLS + independent worker + audited backlog in Chromium
     mark('held backlog');
     const salt='0123456789abcdef0123456789abcdef',secret='GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
     const adminPort=await freePort(), adminBase='http://127.0.0.1:'+adminPort;
-    admin=launch('admin-server.js',{ADMIN_PORT:String(adminPort),ADMIN_TOTP_SECRET:secret,
+    admin=launch('admin-server.js',{ADMIN_PORT:String(adminPort),ADMIN_TOTP_SECRET:secret,DATABASE_URL:namedDatabase(env.DATABASE_URL,adminApp),
       ADMIN_PASSWORD_RECORD:`scrypt$${salt}$${scryptSync('review password',Buffer.from(salt,'hex'),64).toString('hex')}`});
     await until(async()=>{try{return (await fetch(adminBase+'/admin/ui/novo/configuracoes')).ok;}catch{return false;}},'private admin');
     await page.goto(adminBase+'/admin/ui/novo/configuracoes');await page.getByLabel('Senha administrativa').fill('review password');
@@ -97,6 +115,10 @@ test('CTA/health provider TLS + independent worker + audited backlog in Chromium
     const logged=page.waitForResponse(r=>r.url().endsWith('/admin/ui/login'));await page.getByRole('button',{name:'Entrar',exact:true}).click();assert.equal((await logged).status(),204);
     assert.equal(await page.evaluate(async()=> (await fetch('/admin/ui/notifications',{method:'POST',headers:{'content-type':'application/json'},body:'{"action":"inspect","project":"one"}'})).status),403);
     mark('MFA CSRF');
+    await interruptIdleConnection(adminApp,'admin database connection failed');
+    assert.equal(await page.evaluate(async()=> (await fetch('/admin/ui/settings')).status),200);
+    assert.equal(admin.exitCode,null,'Admin keeps its authenticated session after disconnect');
+
     await page.getByLabel('Login SMTP').fill(privateEnv.SMTP_USER);
     await page.getByLabel('Chave SMTP').fill(privateEnv.SMTP_PASSWORD);
     await page.getByRole('button',{name:'Revisar configuração SMTP'}).click();
@@ -159,8 +181,15 @@ test('CTA/health provider TLS + independent worker + audited backlog in Chromium
     mark('review release cancel');
     await db.query('UPDATE notification_settings SET requested=true');startWorker();
     await until(async()=>(await db.query("SELECT count(*)::int n FROM cta_delivery_attempts WHERE outcome='FAILED'")).rows[0].n===1&&(await db.query("SELECT count(*)::int n FROM health_delivery_attempts WHERE outcome='FAILED'")).rows[0].n===1,'CTA/health failures durable');
+    const beforeDisconnect=(await root.query<{time:string}>('SELECT clock_timestamp()::text AS time')).rows[0].time;
+    const disconnected=await interruptIdleConnection(workerApp,'notification worker database connection failed');
+    await until(async()=>!!(await root.query(
+      "SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND application_name=$1 AND pid <> ALL($2::int[]) AND backend_start>$3::timestamptz",
+      [workerApp,disconnected,beforeDisconnect])).rowCount,'worker reconnects after idle socket loss');
+    assert.equal(worker?.exitCode,null,'worker reconnects in the same process');
     await stop(worker);worker=undefined;assert.equal(accepted.length,0);
     mark('provider failures persisted');
+
     await page.goto(adminBase+'/admin/ui/novo/configuracoes/notificacoes');
     await page.getByLabel('Status do e-mail').selectOption('FAILED');
     const failedLogs=page.getByRole('region',{name:'Logs de e-mail',exact:true});
