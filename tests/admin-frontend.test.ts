@@ -385,13 +385,11 @@ test('a project request lost before commit can be deliberately retried with the 
   await page.getByText('O cadastro ainda não aparece', {exact: false}).waitFor();
   assert.equal(await action(page, 'Usar oferta localizada').count(), 0);
 
-  await page.getByLabel('Nome da oferta').fill('Dados diferentes');
-  await page.getByLabel('Origem oficial').fill('https://pending.frontend.test');
-  await action(page, 'Reenviar cadastro da oferta').click();
-  await page.getByText('Informe o mesmo nome e a mesma origem do primeiro envio.').waitFor();
+  await page.getByText('Outra tentativa', {exact: true}).waitFor();
+  await page.getByText('https://pending.frontend.test', {exact: true}).waitFor();
+  assert.equal(await page.getByLabel('Nome da oferta').count(), 0);
   assert.equal(keys.length, 1);
 
-  await page.getByLabel('Nome da oferta').fill('Outra tentativa');
   await action(page, 'Reenviar cadastro da oferta').click();
   await page.getByRole('heading', {name: 'Informar página'}).waitFor();
   assert.equal(typeof keys[0], 'string');
@@ -400,6 +398,56 @@ test('a project request lost before commit can be deliberately retried with the 
   assert.deepEqual((await lab.db.query('SELECT project_id FROM project_registration_audit WHERE project_id <> $1', [homonym])).rows,
     [{project_id: keys[0]}]);
   assert.equal((await lab.db.query('SELECT count(*)::int AS count FROM protected_pages')).rows[0].count, 0);
+});
+
+test('a legacy checkpoint with forgotten project data allows a fresh registration after lookup', {timeout: 60_000}, async t => {
+  const lab = await fixture(t);
+  const page = await lab.browser.newPage();
+  await page.goto(lab.origin + ui + '/projetos');
+  assert.equal(await login(page, lab.code()), 204);
+  const oldIntent = randomUUID();
+  await page.evaluate(intent => sessionStorage.setItem('anticlone:register:new',
+    JSON.stringify({phase: 'project-write', intent, digest: 'a'.repeat(64)})), oldIntent);
+  await page.getByRole('link', {name: 'Proteger oferta', exact: true}).first().click();
+  await action(page, 'Consultar cadastro').click();
+  await page.getByLabel('Nome da oferta').fill('Oferta corrigida');
+  await page.getByLabel('Origem oficial').fill('nova.frontend.test');
+  await action(page, 'Reenviar cadastro da oferta').click();
+  await page.getByText('Esses dados são diferentes', {exact: false}).waitFor();
+  await page.getByText('Iniciar outro cadastro', {exact: true}).click();
+  await action(page, 'Começar novo cadastro').click();
+  await page.getByRole('heading', {name: 'Identificar oferta'}).waitFor();
+  await action(page, 'Continuar').click();
+  await firstPage(page, 'Página corrigida', 'https://nova.frontend.test/oferta');
+  await action(page, 'Cadastrar oferta e página').click();
+  await page.getByRole('heading', {name: 'Instalar a proteção'}).waitFor();
+  const rows = (await lab.db.query('SELECT id, name, origin FROM projects')).rows;
+  assert.equal(rows.length, 1);
+  assert.notEqual(rows[0].id, oldIntent);
+  assert.equal(rows[0].origin, 'https://nova.frontend.test');
+  assert.equal(await page.evaluate(() => sessionStorage.getItem('anticlone:register:new')), null);
+});
+
+test('a rejected first request leaves the offer form ready to submit again', {timeout: 60_000}, async t => {
+  const lab = await fixture(t);
+  const page = await lab.browser.newPage();
+  await page.goto(lab.origin + ui + '/projetos');
+  assert.equal(await login(page, lab.code()), 204);
+  await offer(page, 'Oferta com sessão renovada', 'https://session.frontend.test');
+  await firstPage(page, 'Página da oferta', 'https://session.frontend.test/oferta');
+  await page.route('**/admin/ui/project-create', route => route.continue({
+    headers: {...route.request().headers(), 'x-csrf-token': ''},
+  }), {times: 1});
+  const rejection = page.waitForResponse(response => response.url().endsWith('/project-create'));
+  await action(page, 'Cadastrar oferta e página').click();
+  assert.equal((await rejection).status(), 403);
+  await page.getByRole('alert').filter({hasText: 'não foi autorizada'}).waitFor();
+  assert.equal(await page.getByRole('heading', {name: 'Conferir cadastro'}).count(), 0);
+  assert.equal(await page.evaluate(() => sessionStorage.getItem('anticlone:register:new')), null);
+  assert.equal((await lab.db.query('SELECT count(*)::int n FROM projects')).rows[0].n, 0);
+  await action(page, 'Cadastrar oferta e página').click();
+  await page.getByRole('heading', {name: 'Instalar a proteção'}).waitFor();
+  assert.equal((await lab.db.query('SELECT count(*)::int n FROM projects')).rows[0].n, 1);
 });
 
 test('project registration key handles concurrent replay, changed payload, legacy calls and audit rollback', {timeout: 60_000}, async t => {

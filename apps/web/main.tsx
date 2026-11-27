@@ -408,7 +408,7 @@ function App() {
     {logoutError !== undefined && <div className="feedback"><Failure error={logoutError}/></div>}
     {confirmLogout && <Confirm title="Sair da sessão?" cancel={() => setConfirmLogout(false)}
       accept={() => void logout()} confirmLabel="Sair">
-      {guard === 'dirty' && <p>Os dados que você digitou neste formulário serão descartados.</p>}
+      {guard === 'dirty' && <p>Os dados ainda não enviados serão descartados. Cadastros pendentes poderão ser conferidos nesta aba.</p>}
     </Confirm>}
     {blocker.state === 'blocked' && <Confirm key={blocker.location.key}
       title={guard === 'saving' ? 'Aguarde a operação' : 'Descartar alterações?'}
