@@ -110,6 +110,8 @@ export function manualInstallation(distribution: Distribution) {
   const bootstrap = loader(resource('SCRIPT', 'runtime.js'));
   const fallback = loader(resource('SCRIPT', 'fallback.js'));
   const revision = digest(JSON.stringify([bootstrap, fallback]));
+  const connectionOrigins = new Set([new URL(bases.STATIC_ASSETS).origin, new URL(bases.TELEMETRY).origin]);
+  const preconnect = [...connectionOrigins].map(origin => `<link rel="preconnect" href="${origin}" crossorigin="">`).join('\n');
   const app = paths?.['runtime.js']?.startsWith('js/') ? paths['runtime.js'] : `js/app.${revision}.js`;
   const events = paths?.['fallback.js']?.startsWith('js/') ? paths['fallback.js'] : `js/events.${revision}.js`;
   const image = resource('STATIC_ASSETS', 'html.gif');
@@ -125,8 +127,8 @@ export function manualInstallation(distribution: Distribution) {
   const style = `css/signals.${digest(css)}.css`;
   return [
     {section: 'HEAD', path: 'index.html', operation: 'edit', placement: 'Logo após a abertura de <head>, depois da declaração de charset.',
-      purpose: 'Prepara a conexão com o serviço e referencia os três arquivos locais.',
-      code: `<link rel="preconnect" href="${new URL(bases.STATIC_ASSETS).origin}" crossorigin="">
+      purpose: 'Prepara as conexões do serviço e referencia os três arquivos locais.',
+      code: `${preconnect}
 <script async="" src="${app}"></script>
 <script async="" src="${events}"></script>
 <link rel="stylesheet" href="${style}">`},
