@@ -1,5 +1,14 @@
 # STATUS — AntiClone Personal
 
+## F03/F08 — contrato de instalação manual DEV
+
+- O painel lista HEAD, BODY e três arquivos locais com caminho, conteúdo completo e cópia individual.
+- Os aliases publicados continuam servindo Bootstrap, Core, Fallback e os dois canários. O CSS afeta apenas a imagem de observação.
+- A jornada React com Chromium e gateway HTTPS de teste usou os blocos do painel e recebeu os cinco recursos.
+- Revisão independente em `/root/review` sobre a base `9aaef71`. O teste de rotação aguarda explicitamente a nova revisão.
+- FlowMembers tem cópia integral dos arquivos públicos e linha de base em Chromium. Reinstalação e aceite externo estão pendentes.
+- Inventário remoto e associação de CTA sem marcações permanecem pendentes. Consulte [o contrato e a auditoria](docs/INSTALACAO-MANUAL-DEV.md).
+
 ## Recuperação do cadastro de ofertas — F40
 
 - Tentativa com resposta incerta recupera os dados enviados na mesma aba e reusa a chave do cadastro.

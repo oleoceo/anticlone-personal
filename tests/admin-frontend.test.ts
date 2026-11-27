@@ -175,19 +175,18 @@ for (const width of [1440, 390]) {
     await page.getByRole('dialog').waitFor();
     await action(page, 'Confirmar').click();
     await page.getByText('Revisão 1', {exact: true}).waitFor();
-    const scripts = await page.getByRole('region', {name: 'Trecho HEAD'}).locator('code').innerText();
-    const source = scripts.match(/<script async src="([^"]+)"/)?.[1];
-    assert.ok(source && source.startsWith('https://runtime.frontend.test'+distributionPrefix));
-    assert.ok((namedDistribution ? /\/js\/app\.[0-9a-f]{20}\.js$/ : /\/a\.js$/).test(source));
-    assert.match(scripts, namedDistribution ? /\/js\/events\.[0-9a-f]{20}\.js/ : /\/c\.js/);
-    assert.doesNotMatch(scripts, /\/(?:e|b\.js|api\/collect\.[0-9a-f]{20}|js\/common\.[0-9a-f]{20}\.js)"/);
-    assert.match(await page.getByRole('region', {name: 'Trecho BODY'}).locator('code').innerText(), namedDistribution ? /\/img\/pixel\.[0-9a-f]{20}\.gif/ : /\/m\.gif/);
-    assert.match(await page.getByRole('region', {name: 'Trecho CSS'}).locator('code').innerText(), namedDistribution ? /\/img\/style\.[0-9a-f]{20}\.gif/ : /\/n\.gif/);
+    const code = (name: string) => page.getByRole('region', {name, exact: true}).locator('pre code');
+    const scripts = await code('HEAD').innerText();
+    assert.match(scripts, /src="js\/app\.[a-f0-9]{20}\.js"/);
+    assert.match(scripts, /src="js\/events\.[a-f0-9]{20}\.js"/);
+    assert.ok((await code('JavaScript · Bootstrap').innerText()).includes('https://runtime.frontend.test' + distributionPrefix));
+    assert.match(await code('BODY').innerText(), namedDistribution ? /\/img\/pixel\.[0-9a-f]{20}\.gif/ : /\/m\.gif/);
+    assert.match(await code('CSS · Canário').innerText(), namedDistribution ? /\/img\/style\.[0-9a-f]{20}\.gif/ : /\/n\.gif/);
     await page.getByLabel('Tecnologia do site').selectOption('React/Vite');
-    await page.getByText('<main className="conteudo anticlone-canary">…</main>', {exact: true}).waitFor();
+    await page.getByText(/pasta public/).waitFor();
     await page.getByLabel('Tecnologia do site').selectOption('WordPress');
-    await page.getByText(/bloco HTML personalizado/).waitFor();
-    assert.equal(await page.getByRole('region', {name: 'Trecho HEAD'}).locator('code').innerText(), scripts);
+    await page.getByText(/Insira os blocos HEAD e BODY/).waitFor();
+    assert.equal(await code('HEAD').innerText(), scripts);
     await page.getByLabel('Tecnologia do site').selectOption('HTML');
     assert.equal(await page.getByRole('link', {name:'Abrir página oficial em nova aba'}).getAttribute('href'),
       'https://offer.frontend.test/inicio');
@@ -1200,7 +1199,8 @@ test('React provisions an original LP and copy, then real gateway applies scoped
       else process.env.ADMIN_GATEWAY_HEALTH_PORT = oldProbe;
     });
 
-    let html = '', css = '';
+    let head = '', bodyCode = '';
+    const files = new Map<string, {code: string; type: string}>();
     const tls = createTlsServer({key: await readFile(join(directory, 'key')), cert: await readFile(join(directory, 'cert'))}, (req, res) => {
       const host = req.headers.host?.split(':')[0];
       if (host === 'gateway.integration.test') {
@@ -1214,12 +1214,14 @@ test('React provisions an original LP and copy, then real gateway applies scoped
         res.writeHead(404).end();
         return;
       }
-      const body = req.url === '/lp' ? `<style>${css}</style>
-        <main class="anticlone-canary" data-anticlone-surface="landing">
+      const file = files.get(req.url ?? '');
+      if (file) { res.writeHead(200, {'content-type': file.type}).end(file.code); return; }
+      const body = req.url === '/lp' ? `<!doctype html><head>${head}</head><body>
+        <main data-anticlone-surface="landing">
           <h1>${host === 'original.integration.test' ? 'LP original' : 'Cópia controlada'}</h1>
           <a data-anticlone-point="checkout01" href="/checkout-nativo">Comprar</a>
           <a data-anticlone-point="contato01" href="/contato-nativo">Contato</a>
-        </main>${html}` : '<h1>Destino controlado</h1>';
+        </main>${bodyCode}</body>` : '<h1>Destino controlado</h1>';
       res.writeHead(200, {'content-type': 'text/html; charset=utf-8'}).end(body);
     }).listen(0, '127.0.0.1');
     await once(tls, 'listening');
@@ -1230,10 +1232,13 @@ test('React provisions an original LP and copy, then real gateway applies scoped
     const gatewayOrigin = 'https://gateway.integration.test:' + sitePort;
     const candidates = [{marker: 'checkout01', native: '/checkout-nativo', target: '/checkout-aprovado'},
       {marker: 'contato01', native: '/contato-nativo', target: '/contato-aprovado'}];
-    const captureSite = createServer((_req, res) => res.writeHead(200, {'content-type': 'text/html'}).end(
-      '<main data-anticlone-surface="landing">' + candidates.map(point =>
-        '<a data-anticlone-point="' + point.marker + '" href="' + copy + point.native + '">' + point.marker + '</a>').join('') + '</main>' + html,
-    )).listen(0, '127.0.0.1');
+    const captureSite = createServer((req, res) => {
+      const file = files.get(req.url ?? '');
+      if (file) { res.writeHead(200, {'content-type': file.type}).end(file.code); return; }
+      res.writeHead(200, {'content-type': 'text/html'}).end(
+      '<!doctype html><head>' + head + '</head><body><main data-anticlone-surface="landing">' + candidates.map(point =>
+        '<a data-anticlone-point="' + point.marker + '" href="' + copy + point.native + '">' + point.marker + '</a>').join('') + '</main>' + bodyCode + '</body>');
+    }).listen(0, '127.0.0.1');
     await once(captureSite, 'listening');
     t.after(() => new Promise<void>(resolve => { captureSite.close(() => resolve()); captureSite.closeAllConnections(); }));
     const captureOrigin = 'http://127.0.0.1:' + (captureSite.address() as AddressInfo).port;
@@ -1297,12 +1302,29 @@ test('React provisions an original LP and copy, then real gateway applies scoped
     const ids = (await lab.db.query('SELECT project_id AS project, id AS page FROM protected_pages')).rows[0];
     assert.ok(ids?.project && ids.page);
     await confirm('Publicar endereços de instalação', 'Revisão 1');
-    html = (await Promise.all(['HEAD','BODY'].map(piece=>panel.getByRole('region',{name:'Trecho '+piece}).locator('code').innerText()))).join('\n');
-    css = await panel.getByRole('region', {name: 'Trecho CSS'}).locator('code').innerText();
+    head = await panel.getByRole('region', {name: 'HEAD', exact: true}).locator('pre code').innerText();
+    bodyCode = await panel.getByRole('region', {name: 'BODY', exact: true}).locator('pre code').innerText();
+    assert.match(head, /<script async="" src="js\/app\.[a-f0-9]{20}\.js">/);
+    for (const [name, type] of [['JavaScript · Bootstrap', 'application/javascript'],
+      ['JavaScript · Fallback', 'application/javascript'], ['CSS · Canário', 'text/css']]) {
+      const block = panel.getByRole('region', {name, exact: true});
+      const path = await block.locator('p code').innerText();
+      files.set('/' + path, {code: await block.locator('pre code').innerText(), type});
+    }
     await capture(panel, '04-instalacao-publicada');
 
     const visit = await context.newPage();
+    const paths = [
+      /\/(?:a|app\.[a-f0-9]{20})\.js$/,
+      /\/(?:b|common\.[a-f0-9]{20})\.js$/,
+      /\/(?:c|events\.[a-f0-9]{20})\.js$/,
+      /\/(?:m|pixel\.[a-f0-9]{20})\.gif$/,
+      /\/(?:n|style\.[a-f0-9]{20})\.gif$/,
+    ];
+    const responses = paths.map(path => visit.waitForResponse(response =>
+      response.ok() && response.url().startsWith(gatewayOrigin + '/') && path.test(new URL(response.url()).pathname)));
     await visit.goto(original + '/lp');
+    await Promise.all(responses);
     await visit.getByRole('heading', {name: 'LP original'}).waitFor();
     await until(async () => (await lab.db.query('SELECT count(*)::int n FROM page_installation_signals')).rows[0].n >= 2,
       'Core e Fallback da LP original');

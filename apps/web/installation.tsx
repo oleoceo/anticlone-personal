@@ -18,7 +18,7 @@ type Distribution = InstallationStatus & {
   telemetryOrigins?: string[];
   telemetryEndpoints?: {origin:string;state:keyof typeof telemetryEndpointLabels}[];
   distribution: null | {version: number; bases: Record<Role, string>; paths?: Record<string, string>};
-  snippets?: {html: string; css: string} | null;
+  manualInstallation?: InstallationBlock[] | null;
   history?: {version: number; created_at: string; reason: string | null}[];
   aliasActivity?: {alias: string; version: number; role: string; source: string; last_received_at: string}[];
   verificationAttempt?: NonNullable<InstallationStatus['diagnostic']>['controlledVerification'];
@@ -28,21 +28,9 @@ type Collection = {
   signals: {source: string; lastObservedAt: string}[];
 };
 const placements = {
-  'HTML': {
-    head: 'Cole os dois scripts no arquivo da LP, antes de </head>.',
-    body: 'Cole a imagem antes de </body> e acrescente a classe a um elemento visível que já exista.',
-    css: 'Cole a regra na folha de estilos carregada pela LP. Se usar CSS no próprio HTML, coloque a regra entre <style> e </style> no HEAD.',
-  },
-  'React/Vite': {
-    head: 'Cole os dois scripts no <head> do index.html do Vite.',
-    body: 'Cole a imagem antes de </body> no index.html. Aplique a classe com className no componente que renderiza o elemento visível.',
-    css: 'Cole a regra em um CSS global importado pela aplicação, como o arquivo de estilos do ponto de entrada.',
-  },
-  'WordPress': {
-    head: 'Use o recurso de inserção de código do tema ou um plugin com regras por página. Insira os dois scripts no cabeçalho HTML da LP.',
-    body: 'Na LP, cole a imagem em um bloco HTML personalizado. Em um bloco visível, abra Avançado → Classe(s) CSS adicional(is) e digite anticlone-canary sem o ponto.',
-    css: 'Cole a regra no CSS adicional do tema ou na folha de estilos do tema filho.',
-  },
+  'HTML': 'Use os caminhos a partir da pasta web da index.html.',
+  'React/Vite': 'Coloque os arquivos locais na pasta public/ do projeto Vite, mantendo os caminhos indicados. Edite a index.html na raiz do projeto.',
+  'WordPress': 'Insira os blocos HEAD e BODY somente na página protegida. Os caminhos dos arquivos locais devem resolver a partir da URL pública da página.',
 };
 type Technology = keyof typeof placements;
 type Action = 'publish' | 'rotate' | 'verify' | 'enable' | 'disable';
@@ -64,19 +52,23 @@ function date(value: string) {
   return Number.isFinite(parsed) ? utcDate.format(parsed) : 'Data indisponível';
 }
 
-function Snippet({code, language}: {code: string; language: string}) {
+type InstallationBlock = {section: string; path: string; operation: string; placement: string; purpose: string; code: string};
+
+function Snippet({section, path, operation, placement, purpose, code}: InstallationBlock) {
   const [feedback, setFeedback] = useState('');
-  return <section className="snippet" aria-label={'Trecho ' + language}>
-    <div className="panel-heading"><h3>{language}</h3>
+  return <section className="snippet" aria-label={section}>
+    <div className="panel-heading"><h3>{section}</h3>
       <button type="button" onClick={async () => {
         try {
           await navigator.clipboard.writeText(code);
-          setFeedback(language + ' copiado.');
+          setFeedback('Código copiado.');
         } catch {
-          setFeedback('Selecione o trecho para copiá-lo.');
+          setFeedback('Selecione o código para copiá-lo.');
         }
-      }}>Copiar {language}</button>
+      }}>Copiar código</button>
     </div>
+    <p>{operation === 'create' ? 'Criar' : 'Editar'} <code>{path}</code>. {placement}</p>
+    <p>{purpose}</p>
     <pre tabIndex={0}><code>{code}</code></pre>
     {feedback && <p role="status">{feedback}</p>}
   </section>;
@@ -137,9 +129,6 @@ export function Installation({api, project, page, context, setGuard}: {
   const diagnostic = data?.diagnostic;
   const officialUrl = page.urls.length === 1 ? page.urls[0].origin + page.urls[0].pathname : null;
   const guide = placements[technology];
-  const snippetLines = data?.snippets?.html.split('\n');
-  const head = snippetLines?.filter(line => line.startsWith('<link ') || line.startsWith('<script ')).join('\n');
-  const body = snippetLines?.find(line => line.startsWith('<img '));
 
   async function execute(action: Action) {
     setConfirmation(undefined);
@@ -243,23 +232,26 @@ export function Installation({api, project, page, context, setGuard}: {
         <button className="primary" type="button" disabled={busy || !page.enabled}
           onClick={() => setConfirmation('publish')}>Publicar endereços de instalação</button>
       </>}
-      {published && head && body && data.snippets && <div className="installation-steps">
+      {published && data.manualInstallation && <div className="installation-steps">
         <label>Tecnologia do site <select value={technology}
           onChange={event => setTechnology(event.target.value as Technology)}>
           {(Object.keys(placements) as Technology[]).map(option => <option key={option}>{option}</option>)}
         </select></label>
-        <p>Use os trechos da revisão {published.version} na página oficial.</p>
-        <p>{guide.head} O Bootstrap carrega o Core automaticamente. O Fallback é instalado como script independente.
-          A telemetria é enviada internamente pelos scripts.</p>
-        <Snippet key={'head:' + published.version} code={head} language="HEAD"/>
-        <p>{guide.body}</p>
-        <Snippet key={'body:' + published.version} code={body} language="BODY"/>
-        {technology !== 'WordPress' && <p>Exemplo no elemento existente <code>{technology === 'React/Vite'
-          ? '<main className="conteudo anticlone-canary">…</main>'
-          : '<main class="conteudo anticlone-canary">…</main>'}</code></p>}
-        <p>{guide.css}</p>
-        <Snippet key={'css:' + published.version} code={data.snippets.css} language="CSS"/>
-                <div className="installation-next">
+        <p>Use os códigos da revisão {published.version}. {guide}</p>
+        <p>Publique os arquivos CSS e JavaScript antes de atualizar a index.html. Se a página usa &lt;base href&gt;, confira onde os caminhos relativos são resolvidos.</p>
+        <p>Ao atualizar a instalação, substitua os blocos HEAD e BODY da revisão anterior.</p>
+        <details>
+          <summary>Compatibilidade com política CSP</summary>
+          <p>Se o site define uma CSP, permita os arquivos locais de script e estilo. Autorize
+            <code>{new URL(published.bases.SCRIPT).origin}</code> em <code>script-src</code>,
+            <code>{new URL(published.bases.TELEMETRY).origin}</code> em <code>connect-src</code> e
+            <code>{new URL(published.bases.STATIC_ASSETS).origin}</code> em <code>img-src</code>.
+            O sinal CSS depende de o navegador renderizar a imagem de observação.</p>
+        </details>
+        <div className="snippets">
+          {data.manualInstallation.map(block => <Snippet key={published.version + ':' + block.section} {...block}/>)}
+        </div>
+        <div className="installation-next">
           <p>Depois de publicar no site, abra a página oficial e confira o diagnóstico.</p>
           <div className="action-links">
             {officialUrl && <a className="button" href={officialUrl} target="_blank" rel="noreferrer">Abrir página oficial em nova aba</a>}

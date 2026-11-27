@@ -1,6 +1,6 @@
 import {assetFileContract, assetFileDistributionSchema, assetFilePatterns, assetProbeToken, distributionPaths, distributionRoleByResource, namedDistributionSchema} from './distribution-paths.js';
 import {listedTelemetryOrigin, listTelemetryOrigins, telemetryOriginForPublication} from './telemetry-origins.js';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import { assertProjectAdministrativeWrite, assertPageAdministrativeWrite } from './admin-project-write.js';
 import {runControlledCheck,verificationPolicy,validVerifierImage,type VerificationSpec,type ControlledCheck} from './installation-verifier.js';
@@ -103,6 +103,54 @@ export function distributionSnippets(distribution:Distribution) {
   return {html:`<link rel="preconnect" href="${new URL(bases.TELEMETRY).origin}" crossorigin>\n<script async src="${bases.SCRIPT}${path('runtime.js')}"></script>\n<script async src="${bases.SCRIPT}${path('fallback.js')}"></script>\n<img src="${bases.STATIC_ASSETS}${path('html.gif')}" width="1" height="1" alt="" referrerpolicy="strict-origin-when-cross-origin">`,
     css:`/* Aplique a classe a um elemento existente. Sinal passivo; sem mitigação. */\n.anticlone-canary { background-image: url("${bases.STATIC_ASSETS}${path('css.gif')}"); }`};
 }
+export function manualInstallation(distribution: Distribution) {
+  const {bases, paths} = distribution;
+  const resource = (role: Role, name: string) => bases[role] + (paths?.[name] ?? name);
+  const digest = (content: string) => createHash('sha256').update(content).digest('hex').slice(0, 20);
+  const bootstrap = loader(resource('SCRIPT', 'runtime.js'));
+  const fallback = loader(resource('SCRIPT', 'fallback.js'));
+  const revision = digest(JSON.stringify([bootstrap, fallback]));
+  const app = paths?.['runtime.js']?.startsWith('js/') ? paths['runtime.js'] : `js/app.${revision}.js`;
+  const events = paths?.['fallback.js']?.startsWith('js/') ? paths['fallback.js'] : `js/events.${revision}.js`;
+  const image = resource('STATIC_ASSETS', 'html.gif');
+  const marker = 'signal-' + digest(image);
+  const css = `#${marker} {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  clip-path: inset(50%);
+  pointer-events: none;
+  background-image: url("${resource('STATIC_ASSETS', 'css.gif')}");
+}`;
+  const style = `css/signals.${digest(css)}.css`;
+  return [
+    {section: 'HEAD', path: 'index.html', operation: 'edit', placement: 'Logo após a abertura de <head>, depois da declaração de charset.',
+      purpose: 'Prepara a conexão com o serviço e referencia os três arquivos locais.',
+      code: `<link rel="preconnect" href="${new URL(bases.STATIC_ASSETS).origin}" crossorigin="">
+<script async="" src="${app}"></script>
+<script async="" src="${events}"></script>
+<link rel="stylesheet" href="${style}">`},
+    {section: 'BODY', path: 'index.html', operation: 'edit', placement: 'Imediatamente antes de </body>.',
+      purpose: 'Envia o sinal passivo HTML mesmo quando o JavaScript está indisponível.',
+      code: `<img id="${marker}" src="${image}" width="0" height="0" alt="" referrerpolicy="strict-origin-when-cross-origin">`},
+    {section: 'JavaScript · Bootstrap', path: app, operation: 'create', placement: 'Conteúdo integral do arquivo.',
+      purpose: 'Carrega o Bootstrap publicado, que inicia o Core e consulta a política do servidor.', code: bootstrap},
+    {section: 'JavaScript · Fallback', path: events, operation: 'create', placement: 'Conteúdo integral do arquivo.',
+      purpose: 'Carrega o canal de observação independente do Core.', code: fallback},
+    {section: 'CSS · Canário', path: style, operation: 'create', placement: 'Conteúdo integral do arquivo.',
+      purpose: 'Envia o sinal passivo CSS e afeta apenas a imagem de observação.', code: css},
+  ];
+}
+
+function loader(url: string) {
+  return `(() => {
+  const script = document.createElement('script');
+  script.async = true;
+  script.src = ${JSON.stringify(url)};
+  document.head.appendChild(script);
+})();`;
+}
+
 export async function distributionAdmin(db:Pool,body:unknown,env=process.env) {
   if (!body || typeof body!=='object' || Array.isArray(body)) throw new TypeError('invalid distribution');
   const data=body as Record<string,unknown>;
@@ -252,7 +300,7 @@ async function readOrPublish(db: Pool, data: {project:string;page:string;action:
     const measured=controlled && controlled.status!=='NOT_VERIFIED' ? controlled.layers : undefined;
     return {contractVersion:1,state:distribution?'PUBLISHED':'NOT_PUBLISHED',distribution,publication,telemetryOrigins:eligible,
       telemetryEndpoints:items.map(({origin,state})=>({origin,state})),selectedTelemetryOrigin:data.roleOrigins?.TELEMETRY ?? selected ?? null,
-      verification:{ready:!issue,issue},history:history.rows,aliasActivity,snippets:distribution?distributionSnippets(distribution):null,
+      verification:{ready:!issue,issue},history:history.rows,aliasActivity,manualInstallation:distribution?manualInstallation(distribution):null,snippets:distribution?distributionSnippets(distribution):null,
       diagnostic:{status:controlled?.status??'NOT_VERIFIED',confidence:measured?'CONTROLLED_CURRENT_LOAD_ONLY':'UNAUTHENTICATED_CLAIM',
         controlledVerification:controlled??{status:'NOT_VERIFIED',reason:issue??'NO_CURRENT_VERIFICATION'},
         capabilities:{observation:'UNKNOWN',activeMitigation:'UNKNOWN'},correlation:'ALIAS_ROUTE_AND_DECLARED_CONTEXT_ONLY',
